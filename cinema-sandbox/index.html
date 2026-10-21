@@ -61,11 +61,45 @@
   'use strict';
 
   // ===================== 1. IndexedDB: 影片 / 进度 / 道具 =====================
+  //
+  // 🔴 2026-10-21: 这个库【必须自己声明到 v69】, 不能只到 v65。
+  //
+  // 【真事故】用户实测: 记忆页面板上明明白白摆着 3 集, 点「精炼前情提要」却说
+  //   "库里还没有攒下的单集剧情"。
+  // 根因是: 沙盒建的是【自己的】CinemaSandboxDB (跟宿主库的 GeminiChatDB 是两个),
+  //   而这个库只声明到 v65 —— cinemaSeriesRecap (v68) 和 cinemaEpMemories (v69)
+  //   两张表根本不存在, 全靠 cinema-storage.js 的 ensure*Table() 现场补建。
+  //   那个补建是 close() → version(69) → open() 三步, 任何一步不顺利(库正被占着 /
+  //   open 被拒)就会失败, 而失败结果被【永久缓存】——
+  //   于是那一页里所有的写入和读取全废, 用户只在几集之后点精炼时才发现。
+  //
+  // 【修法】在这里直接把版本顶到 v69。Dexie 会把各版本的 stores 合并,
+  //   升级是纯增量(老的三张表一张不少), 手机上已有的 v65 库下次打开自动升上来。
+  //   补建那条路(cinema-storage.js 的自愈)保留着当第二道防线, 但不再在关键路径上。
   var cdb = new Dexie('CinemaSandboxDB');
   cdb.version(65).stores({
     cinemaFilms: '&id, name, addedAt, size',
     cinemaBlobs: '&id',
     cinemaProgress: '&filmId, updatedAt'
+  });
+  // v66 人物立绘 / v68 短剧前情提要 / v69 逐条剧情记忆 —— 跟宿主库 init-db-schema.js 一致
+  //
+  // 🔴 2026-10-21: v66 (cinemaChars) 也必须在这里声明。
+  //   之前只有宿主库声明了它, 沙盒库没有 → 开房加载人物时必然走一次
+  //   ensureCharTable() 自愈 → 那条自愈里有一句 db.close(), 而 Dexie 的
+  //   db.close() 默认 disableAutoOpen: true —— 【把这个库的"自动重开"永久关掉了】。
+  //   iOS Safari 息屏/切后台会把 IndexedDB 连接回收掉, Dexie 不知道;
+  //   等用户下一次传人物图/影片时才暴露 → DatabaseClosedError:
+  //   Database has been closed, 而且【整页刷新之前全都存不进去】。
+  //   (用户 2026-10-21 实测截图: "存不下 / 影片没能存进本地数据库")
+  //
+  //   ⇒ 沙盒自己把表声明齐, 就永远不会走自愈, autoOpen 永远保持 true。
+  //   cinema-storage.js 那边也把 close() 改成了 close({disableAutoOpen:false}),
+  //   双保险 —— 万一还是要自愈, 也不会把库搞成永远开不起来。
+  cdb.version(69).stores({
+    cinemaChars: '&id, updatedAt',
+    cinemaSeriesRecap: '&key, updatedAt',
+    cinemaEpMemories: '&id, sessionKey, ep, updatedAt'
   });
 
   // ===================== 2. 和宿主对话 =====================
@@ -317,11 +351,17 @@
 </script>
 
 <!-- 协议层 + 桥接层 + 房间 + 存储 + 图片压缩 (和生产完全同一批文件) -->
-<script src="../modules/live-client.js"></script>
-<script src="../modules/cinema-storage.js"></script>
-<script src="../modules/cinema-img.js"></script>
-<script src="../modules/cinema-room.js"></script>
-<script src="../modules/cinema-live.js"></script>
+<!--
+  ⚠️ 2026-10-21: 这几个 <script> 原来【没有 ?v=】。
+  宿主 index.html 里每个模块都带 ?v=, 只有沙盒页漏了 —— 于是沙盒 iframe 拿到的
+  URL 跟浏览器 HTTP 缓存里的老副本一模一样, 改了模块也不一定立刻生效。
+  现在跟宿主对齐: 改模块时把这里的 ?v= 一起 bump。
+-->
+<script src="../modules/live-client.js?v=0.1.0"></script>
+<script src="../modules/cinema-storage.js?v=0.5.3"></script>
+<script src="../modules/cinema-img.js?v=0.1.0"></script>
+<script src="../modules/cinema-room.js?v=0.29.1"></script>
+<script src="../modules/cinema-live.js?v=1.9.6"></script>
 
 </body>
 </html>

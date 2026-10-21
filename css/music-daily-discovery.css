@@ -1,0 +1,239 @@
+/* ============================================================
+   music-daily-discovery.css — 「今日私选」(AI 每日荐歌) 样式
+   2026-10-21 新增
+   配色沿用 netease-music-app-pink.css 的粉红+嫩黄主题
+   (主色 #FFB6C1 / #FFC9D7, 辅色 #FFE4A0, 文字 #5a3d2e / #b06e30)
+   ============================================================ */
+
+/* ---------- 顶部 tab 栏塞了第 5 个 tab, 窄屏要能横向滚 ---------- */
+.nma-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.nma-tabs::-webkit-scrollbar {
+  display: none;
+}
+.nma-tabs .nma-tab {
+  flex: 1 0 auto;
+  min-width: 52px;
+  white-space: nowrap;
+}
+
+/* ---------- 头部 ---------- */
+.nmd-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+.nmd-head-main {
+  flex: 1;
+  min-width: 0;
+}
+.nmd-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #5a3d2e;
+}
+.nmd-sub {
+  font-size: 11px;
+  color: #b06e30;
+  opacity: 0.8;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+.nmd-head-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.nmd-btn {
+  border: none;
+  border-radius: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #b06e30;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 4px rgba(255, 182, 193, 0.2);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.nmd-btn:hover:not(:disabled) {
+  background: #fff;
+}
+.nmd-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.nmd-btn-primary {
+  background: linear-gradient(135deg, #FFB6C1, #FFC9D7);
+  color: #fff;
+}
+
+/* ---------- 生成失败时的「再试一次」 ---------- */
+.nmd-daily-retry {
+  display: block;
+  margin: 0 auto;
+}
+
+/* ---------- 加载中显示已用秒数 (让人知道它还活着) ---------- */
+#nmd-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+/* ---------- 角色说的一句话 ---------- */
+.nmd-note {
+  margin: 0 14px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #7a4a30;
+  background: linear-gradient(135deg, rgba(255, 228, 160, 0.55), rgba(255, 182, 193, 0.35));
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* ---------- 歌曲行 ---------- */
+.nmd-song {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  margin-bottom: 6px;
+  box-shadow: 0 1px 4px rgba(255, 182, 193, 0.1);
+}
+.nmd-song:hover {
+  background: #fff;
+}
+.nmd-idx {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b06e30;
+  opacity: 0.65;
+  padding-top: 14px;
+}
+.nmd-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #FFE4A0, #FFB6C1);
+  flex-shrink: 0;
+  object-fit: cover;
+}
+.nmd-info {
+  flex: 1;
+  min-width: 0;
+}
+.nmd-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #5a3d2e;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.3;
+}
+.nmd-name > :first-child,
+.nmd-name {
+  overflow-wrap: anywhere;
+}
+.nmd-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #FFB6C1, #FFC9D7);
+  border-radius: 8px;
+  padding: 1px 6px;
+  line-height: 1.5;
+}
+.nmd-artist {
+  font-size: 11px;
+  color: #b06e30;
+  opacity: 0.75;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nmd-reason {
+  font-size: 11.5px;
+  color: #8a6a55;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+/* ---------- 右侧操作 ---------- */
+.nmd-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.nmd-play {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #FFB6C1, #FFC9D7);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.nmd-play:hover {
+  transform: scale(1.08);
+}
+.nmd-fb-btn {
+  width: 26px;
+  height: 22px;
+  border-radius: 10px;
+  border: 1px solid rgba(176, 110, 48, 0.25);
+  background: rgba(255, 255, 255, 0.6);
+  color: #b06e30;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.nmd-fb-btn:hover {
+  background: #fff;
+}
+
+/* ---------- 反馈菜单 (跟理由互斥, 同一时间只开一个) ---------- */
+.nmd-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 8px 63px;
+}
+.nmd-chip {
+  border: 1px solid rgba(255, 182, 193, 0.6);
+  background: rgba(255, 255, 255, 0.9);
+  color: #b06e30;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.nmd-chip:hover {
+  background: linear-gradient(135deg, #FFB6C1, #FFC9D7);
+  color: #fff;
+  border-color: transparent;
+}

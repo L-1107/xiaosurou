@@ -55,6 +55,100 @@
   let live2dCallGestureInitial = null;     // 本次通话初始 { scale, x, y } (安全复位用)
   let live2dCallGestureDetach = null;      // 解绑函数 (由 attach 时生成)
 
+  // v0.5.1: 本次通话正在被 #video-call-screen 的 background-image 引用的 blob URL。
+  // 换背景时用它决定"什么时候可以安全 revoke 上一张" —— 见 applyVideoCallBackgroundDirective。
+  let videoCallStageBgUrl = null;
+
+  // ============================================================
+  // 通话崩溃诊断 (为「长通话挂断时 iPhone PWA 闪退」取证)
+  // ------------------------------------------------------------
+  // 为什么需要它: iPhone PWA 装到主屏后没有 console, 唯一能复盘的入口就是
+  // 下次打开时弹出的「崩溃恢复」弹窗 (init-crash-recovery.js 已经在检测)。
+  // 所以这里把关键指标一路写进 localStorage, 由那个弹窗读出来显示。
+  //
+  // 最值钱的一个字段是 stage —— 挂断流程被拆成若干步, 每推进一步就落一次盘。
+  // 万一崩在挂断途中, 下次打开能直接看出"死在哪一步", 而不是只知道"闪退了"。
+  //
+  // 代价: 只往 localStorage 写几个数字和短字符串, 不碰任何渲染/播放逻辑,
+  // 不进入任何热路径 (挂断阶段除外, 那正是我们要留证的)。
+  // ============================================================
+  const CALL_DIAG_KEY = 'mavis-call-diag-v1';
+  let callDiag = null;
+  let callDiagLastWrite = 0;
+
+  function callDiagFlush() {
+    if (!callDiag) return;
+    try {
+      localStorage.setItem(CALL_DIAG_KEY, JSON.stringify(callDiag));
+      callDiagLastWrite = Date.now();
+    } catch (e) { /* 隐私模式 / 配额满 — 诊断不是主功能, 静默 */ }
+  }
+
+  function callDiagReset(type) {
+    callDiag = {
+      type: type || 'video',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      stage: 'in-call',
+      aiTurns: 0,
+      historyLen: 0,
+      bubbles: 0,
+      domNodes: 0,
+      bgSwitches: 0,
+      webglLost: false,
+      events: []
+    };
+    callDiagNote('通话开始');
+    callDiagSample(true);
+  }
+
+  function callDiagNote(event) {
+    if (!callDiag) return;
+    const sec = Math.round((Date.now() - callDiag.startedAt) / 1000);
+    callDiag.events.push(sec + 's ' + event);
+    if (callDiag.events.length > 12) callDiag.events.shift();
+  }
+
+  /** 推进阶段。挂断分步一律走这里 —— 必须每次都落盘, 否则崩在途中就丢了最后一步。 */
+  function callDiagStage(stage) {
+    if (!callDiag) return;
+    callDiag.stage = stage;
+    callDiagNote(stage);
+    callDiagSample(true);
+    callDiagFlush();
+  }
+
+  /** 采样内存相关指标。热路径上按 2 秒节流, force=true 时立刻采。 */
+  function callDiagSample(force) {
+    if (!callDiag) return;
+    if (!force && Date.now() - callDiagLastWrite < 2000) return;
+    try {
+      // ⚠️ 必须按本次通话类型取对应的 state —— 语音通话时 videoCallState.callHistory
+      // 恒为空数组, 不分类型读会让语音通话的诊断永远显示"已对话 0 条", 等于白记。
+      const isVoice = callDiag.type === 'voice';
+      callDiag.aiTurns = isVoice ? voiceCallState.callHistory.length : videoCallAiTurnSeq;
+      callDiag.historyLen = isVoice
+        ? voiceCallState.callHistory.length
+        : videoCallState.callHistory.length;
+      const feed = document.getElementById(isVoice ? 'voice-call-main' : 'video-call-main');
+      callDiag.bubbles = feed ? feed.getElementsByTagName('*').length : 0;
+      callDiag.domNodes = document.getElementsByTagName('*').length;
+      callDiag.updatedAt = Date.now();
+    } catch (e) { /* DOM 可能随时不在 (切屏中), 跳过本次采样 */ }
+    callDiagFlush();
+  }
+
+  // WebGL context lost 是"GPU 侧先炸"最直接的信号, 以前只 console.warn,
+  // PWA 里根本看不到。这里顺手记一份, 崩溃弹窗里能读到。
+  document.addEventListener('webglcontextlost', function () {
+    if (!callDiag) return;
+    callDiag.webglLost = true;
+    callDiagNote('WebGL context LOST');
+    callDiagFlush();
+  }, true);
+
+
+
   // ============================================================
   // v0.2.0 Live2D 视频通话 - 挂载/卸载/fallback 辅助函数
   // 设计: 配了 live2dModelPath 就挂 Live2D, 失败回退静态图, 没配保持原样
@@ -166,6 +260,7 @@
         restoreVideoCallOriginalDisplay();
       } else {
         console.log('[Live2D] mount success');
+        if (callDiag) callDiagNote('Live2D 挂载完成');
         // P1.5 通话套用 active 背景
         // v0.4.3: 改用 per-chat 背景 (chat 专属 bg, fallback 全局)
         if (window.Live2DUI) {
@@ -516,6 +611,12 @@
     if (window.Live2DUI) {
       try { window.Live2DUI.applyBackgroundToCallScreen(''); } catch (e) {}
     }
+    // v0.5.1: 背景已经从 background-image 上摘掉了, 这张 blob URL 现在可以安全 revoke。
+    // 不 revoke 的话, 一通电话换过几次背景就漏几张 (每张 1~2MB), 泄漏到页面关闭。
+    if (videoCallStageBgUrl) {
+      try { URL.revokeObjectURL(videoCallStageBgUrl); } catch (e) { /* ignore */ }
+      videoCallStageBgUrl = null;
+    }
   }
 
   let videoCallMicStream = null;
@@ -599,6 +700,9 @@
     setVideoCallStatusText(reason ? '语音播放失败，已跳过本句，可以说话' : 'AI已说完，可以说话');
     logCallTtsRecoveryDiag('video', reason);
     console.log('[视频通话] Turn #' + turn.id + ' 完成 (' + (reason || 'ok') + '), 可以说话。');
+    // 诊断采样: 每轮结束记一次 (内部按 2 秒节流), 通话越久曲线越密
+    callDiagNote('第 ' + turn.id + ' 轮结束');
+    callDiagSample();
     // 消费暂存的录音 (不丢用户输入)
     if (videoCallPendingRecording && videoCallState.isActive) {
       const pending = videoCallPendingRecording;
@@ -1076,6 +1180,11 @@ let voiceCallStatusHoldUntil = 0;
 
       if (isVideoCallStageClear(rawName)) {
         window.Live2DUI.applyBackgroundToCallScreen('');
+        // v0.5.1: 背景已摘, 上一张 blob 可以释放了 (否则换过几次就漏几张)
+        if (videoCallStageBgUrl) {
+          try { URL.revokeObjectURL(videoCallStageBgUrl); } catch (e) { /* ignore */ }
+          videoCallStageBgUrl = null;
+        }
         console.log('[视频通话舞台] AI 清除背景');
         return true;
       }
@@ -1095,10 +1204,26 @@ let voiceCallStatusHoldUntil = 0;
       const bg = await window.db.live2d_backgrounds.get(hit.id);
       if (!bg || !bg.blob) return false;
 
-      // 沿用 live2d-ui.js openBgPicker 的做法: 直接 createObjectURL 给 CSS 用
-      // (不 revoke —— 背景正在被 background-image 引用)
+      // v0.5.1: 记下本次通话正在引用的背景 blob URL。
+      // 原实现每次换背景都 createObjectURL 却【从不 revoke】(注释里写的是
+      // "背景正在被 background-image 引用")—— 那是对的: 当前正在用的那张不能提前 revoke,
+      // revoke 了背景会当场消失。但换过 N 次背景之后, 前 N-1 张再也没人引用了,
+      // 却因为没 revoke 而一直占着 Blob (assets/live2d-call 里那些是 1.2~2.3MB 的 PNG),
+      // 通话越长、AI 换背景越频繁, 泄漏越多。
+      // 修法: 换新的时先让新图挂上去, 确认换上了再 revoke 上一张。
+      // 顺序是关键 —— 反过来 (先 revoke 再挂新的) 会出现背景图闪一下空白。
+      const previousUrl = videoCallStageBgUrl;
       const url = URL.createObjectURL(bg.blob);
       window.Live2DUI.applyBackgroundToCallScreen(url);
+      videoCallStageBgUrl = url;
+      if (previousUrl) {
+        try { URL.revokeObjectURL(previousUrl); } catch (e) { /* ignore */ }
+      }
+      if (callDiag) {
+        callDiag.bgSwitches = (callDiag.bgSwitches || 0) + 1;
+        callDiagNote('换舞台背景: ' + hit.name);
+        callDiagFlush();
+      }
       console.log('[视频通话舞台] AI 切换背景 →', hit.name);
       return true;
     } catch (e) {
@@ -1619,6 +1744,7 @@ let voiceCallStatusHoldUntil = 0;
     videoCallState.isAwaitingResponse = false;
     videoCallState.startTime = Date.now();
     videoCallState.callHistory = [];
+    callDiagReset('video');
 
     // v0.5.0 P26: 新通话开始, 旧 turn 状态机清零 (兜底: 防止异常路径漏掉 endVideoCall)
     videoCallActiveTurn = null;
@@ -2163,6 +2289,8 @@ let voiceCallStatusHoldUntil = 0;
 
     if (!videoCallState.isActive) return;
 
+    callDiagStage('hangup:start');
+
     // v0.5.0 P26: 挂断时强制收口 turn 状态机, 避免旧异步任务污染下一轮
     //   1) abort 当前 fetch (如果有) — fetch 接收到 abort 信号会抛 AbortError, 内层 catch
     //      + 外层 triggerAiInCallAction 兜底都会处理 (但已无 activeTurn, 不会再写状态)
@@ -2182,12 +2310,53 @@ let voiceCallStatusHoldUntil = 0;
     // v0.1.30 卸载 Live2D (释放 PIXI GL 资源)
     unmountLive2DForCall();
     stopTtsQueue();
+    // 诊断: WebGL 资源已放手 —— 这是挂断途中最可能崩的一步 (GPU destroy), 单独留个点
+    callDiagStage('hangup:live2d-released');
+
+    // v0.5.1: 清空通话气泡 DOM。
+    // 为什么: showScreen 只是切 .active class, 隐藏的屏幕 DOM 一颗都不释放。
+    // 这些气泡原本要等下次 startVideoCall 的 innerHTML='' 才被清, 也就是说挂断之后
+    // 它们会一直躺在 DOM 里; 而且挂断那一刻 openChat 正在全量重渲染聊天记录,
+    // 两边同时活在 DOM 中间 —— 通话越久气泡越多, 峰值越高。
+    // 通话界面在挂断后已不可见 (恢复按钮也一并藏了), 没有任何正常路径会再看它。
+    const callMainEl = document.getElementById('video-call-main');
+    if (callMainEl) callMainEl.innerHTML = '';
+
+    // v0.5.1: 硬件 / 音频资源提前释放。
+    // 这些原本排在两次 await (IndexedDB 落库) 之后 —— 也就是说整个落库期间
+    // 摄像头还在推流、麦克风还开着、AudioContext 还活着、WebGL 画布还占着显存,
+    // 而这正是"挂断闪退"要顶住的那段峰值窗口。先放资源再干活, 峰值能低一截,
+    // 对用户没有任何可见影响。
     document.getElementById('video-call-restore-btn').style.display = 'none';
+    clearInterval(callTimerInterval);
+    callTimerInterval = null;
+
+    videoCallAutoListenEnabled = false;
+    releaseVideoCallMicrophone();
+    // 沉默主动接话: 挂断了就彻底停掉, 不留孤儿定时器
+    clearVideoCallIdleNudgeTimer();
+
+    // 停止摄像头
+    if (typeof stopCamera === 'function') {
+      stopCamera();
+    }
+
+    // v0.5.0 P26: 通话结束时统一关闭 audioContext (整个通话期间复用同一个)
+    //   close() 是异步的但我们不 await — 同步发起关闭 + 清引用即可
+    //   浏览器会在 background 完成真实释放, 不会阻塞挂断流程
+    if (videoCallAudioContext && videoCallAudioContext.state !== 'closed') {
+      try { videoCallAudioContext.close(); } catch (e) { /* ignore */ }
+      videoCallAudioContext = null;
+    }
+    if (videoCallAudioSource) { videoCallAudioSource = null; }
+    if (videoCallAnalyser) { videoCallAnalyser = null; }
+    callDiagStage('hangup:hardware-released');
     const duration = Math.floor((Date.now() - videoCallState.startTime) / 1000);
     const durationText = `${Math.floor(duration / 60)}分${duration % 60}秒`;
     const endCallText = `通话结束，时长 ${durationText}`;
 
     const chat = state.chats[videoCallState.activeChatId];
+    let callTranscriptForAI = '';
     if (chat) {
 
       const participantsData = [];
@@ -2221,6 +2390,7 @@ let voiceCallStatusHoldUntil = 0;
         transcript: [...videoCallState.callHistory]
       };
       const newRecordId = await db.callRecords.add(callRecord);
+      callDiagStage('hangup:record-saved');
       console.log("通话记录已保存:", callRecord);
 
 
@@ -2240,51 +2410,34 @@ let voiceCallStatusHoldUntil = 0;
 
 
 
-      const callTranscriptForAI = videoCallState.callHistory.map(h => {
+      callTranscriptForAI = videoCallState.callHistory.map(h => {
         const sender = h.role === 'user' ? (chat.settings.myNickname || '我') : h.senderName;
         return `${sender}: ${h.content}`;
       }).join('\n');
 
 
 
-      summarizeCallTranscript(chat.id, callTranscriptForAI);
+      // ⚠️ 通话记忆总结不再在这里跑 (挪到本函数末尾"切回聊天界面"之后),
+      //   原位置跟 db.chats.put / openChat / triggerAiResponse 全挤在同一帧,
+      //   是挂断瞬间最大的一波并发。产物写进长期记忆, 晚几百毫秒没有任何区别。
 
 
-      const hiddenReactionInstruction = {
-        role: 'system',
-        content: `[系统指令：视频通话刚刚结束。请你以角色的口吻，向用户主动发送一两条消息，来自然地总结这次通话的要点、确认达成的约定，或者表达你的感受。]`,
-        timestamp: Date.now() + 1,
-        isHidden: true
-      };
-      chat.history.push(hiddenReactionInstruction);
+      // ⚠️ 这里【不再】往 chat.history 塞"通话结束请主动发一两句"的隐藏系统指令,
+      //   也不再在本函数末尾调 triggerAiResponse()。
+      //   原因: 用户说过 —— 只要用户说了话 AI 就必须回, 通话最后一句必然是 AI 说的;
+      //   挂断完马上再让 AI 主动补一句既没必要, 又是挂断瞬间最大的一笔开销
+      //   (一次完整 AI 请求 + 一次消息渲染, 全挤在切回聊天界面的同一帧)。
+      //   附带好处: 不会留下一条"请总结这次通话"的幽灵系统消息待在历史里,
+      //   等用户下次正常发消息时被 AI 读到并误触发。
 
 
       await db.chats.put(chat);
     }
 
 
-    clearInterval(callTimerInterval);
-    callTimerInterval = null;
-
-    videoCallAutoListenEnabled = false;
-    releaseVideoCallMicrophone();
-    // 沉默主动接话: 挂断了就彻底停掉, 不留孤儿定时器
-    clearVideoCallIdleNudgeTimer();
-
-    // 停止摄像头
-    if (typeof stopCamera === 'function') {
-      stopCamera();
-    }
-
-    // v0.5.0 P26: 通话结束时统一关闭 audioContext (整个通话期间复用同一个)
-    //   close() 是异步的但我们不 await — 同步发起关闭 + 清引用即可
-    //   浏览器会在 background 完成真实释放, 不会阻塞挂断流程
-    if (videoCallAudioContext && videoCallAudioContext.state !== 'closed') {
-      try { videoCallAudioContext.close(); } catch (e) { /* ignore */ }
-      videoCallAudioContext = null;
-    }
-    if (videoCallAudioSource) { videoCallAudioSource = null; }
-    if (videoCallAnalyser) { videoCallAnalyser = null; }
+    // v0.5.1: 硬件 / 音频资源的释放已提到本函数最前面 (落库之前) —
+    //   摄像头、麦克风、AudioContext、WebGL 画布不该在等 IndexedDB 的整段时间里
+    //   继续占着。这段原位置的代码已删除, 别再搬回来。
 
     videoCallState = {
       isActive: false,
@@ -2303,11 +2456,31 @@ let voiceCallStatusHoldUntil = 0;
       canUserSpeak: true
     };
 
-
+    // 切回聊天界面 —— await 它, 别和别的大活挤在同一帧。
+    // 原实现是 openChat(...) 和 triggerAiResponse() 一起 fire-and-forget:
+    // 一个在全量重渲染聊天记录, 另一个在发起一次完整 AI 请求并往同一块 DOM
+    // 追加消息, 两条异步链完全不串行, 全叠在挂断这一帧。
     if (chat) {
-      openChat(chat.id);
-      triggerAiResponse();
+      try {
+        await openChat(chat.id);
+      } catch (e) {
+        console.warn('[视频通话] 挂断后切回聊天界面失败:', e);
+      }
+      callDiagStage('hangup:back-to-chat');
+
+      // 记忆总结挪到界面稳定之后再跑 (原来是在落库途中就 fire-and-forget)。
+      // 它是 fire-and-forget, 必须自己接住 reject, 否则就是 unhandledrejection。
+      if (callTranscriptForAI) {
+        try {
+          Promise.resolve(summarizeCallTranscript(chat.id, callTranscriptForAI)).catch(err => {
+            console.warn('[视频通话] 通话总结失败 (不影响挂断):', err);
+          });
+        } catch (err) {
+          console.warn('[视频通话] 通话总结调用失败 (不影响挂断):', err);
+        }
+      }
     }
+    callDiagStage('hangup:done');
   }
 
 
@@ -3585,6 +3758,8 @@ ${linkedContents}
       isTtsPlaying: false
     });
     console.log('[语音通话] AI 多段 TTS 已全部播放完成，可以说话。');
+    callDiagNote('一轮对话结束');
+    callDiagSample();
     startVoiceCallAutoListening();
     // 沉默主动接话: 一轮对话结束 = 又一次"活动", 重新计时
     armVoiceCallIdleNudge();
@@ -3597,6 +3772,7 @@ ${linkedContents}
     voiceCallState.isActive = true;
     voiceCallState.isAwaitingResponse = false;
     voiceCallState.startTime = Date.now();
+    callDiagReset('voice');
     voiceCallState.callHistory = [];
     voiceCallState.isAiResponding = false;
     voiceCallState.isAiSpeaking = false;
@@ -3667,13 +3843,38 @@ ${linkedContents}
     setVoiceCallAudioUnlockBtnVisibility(true);
 
     if (!voiceCallState.isActive) return;
+
+    callDiagStage('hangup:start');
+
+    // v0.5.1: 硬件 / 音频资源提前释放 (原来排在两次 await 落库之后 ——
+    //   整个落库期间麦克风还开着、AudioContext 还活着, 而这正是挂断要顶的峰值窗口)。
+    //   先放资源再干活, 对用户没有任何可见影响。
     stopTtsQueue();
     document.getElementById('voice-call-restore-btn').style.display = 'none';
+    clearInterval(voiceCallTimerInterval);
+    voiceCallTimerInterval = null;
+
+    voiceCallAutoListenEnabled = false;
+    releaseVoiceCallMicrophone();
+    // 沉默主动接话: 挂断了就彻底停掉
+    clearVoiceCallIdleNudgeTimer();
+
+    // v0.5.1: 清空通话气泡 DOM (同 endVideoCall —— showScreen 只切 class 不清 DOM)
+    const voiceCallMainEl = document.getElementById('voice-call-main');
+    if (voiceCallMainEl) voiceCallMainEl.innerHTML = '';
+
+    // 注: 语音侧的 voiceCallAudioContext / voiceCallAnalyser 已由上面的
+    // releaseVoiceCallMicrophone() → cleanupVoiceCallAudioAnalysis() 负责 close+清引用,
+    // 这里不需要再重复一遍 (视频侧那个 ctx 是 P26 特意改成"整个通话复用"才需要显式关的)。
+
+    callDiagStage('hangup:hardware-released');
+
     const duration = Math.floor((Date.now() - voiceCallState.startTime) / 1000);
     const durationText = `${Math.floor(duration / 60)}分${duration % 60}秒`;
     const endCallText = `语音通话结束，时长 ${durationText}`;
 
     const chat = state.chats[voiceCallState.activeChatId];
+    let callTranscriptForAI = '';
     if (chat) {
       const participantsData = [];
       if (voiceCallState.isGroupCall) {
@@ -3720,31 +3921,14 @@ ${linkedContents}
       }
       chat.history.push(summaryMessage);
 
-      const callTranscriptForAI = voiceCallState.callHistory.map(h => {
+      callTranscriptForAI = voiceCallState.callHistory.map(h => {
         const sender = h.role === 'user' ? (chat.settings.myNickname || '我') : h.senderName;
         return `${sender}: ${h.content}`;
       }).join('\n');
 
-      summarizeCallTranscript(chat.id, callTranscriptForAI);
-
-      const hiddenReactionInstruction = {
-        role: 'system',
-        content: `[系统指令：语音通话刚刚结束。请你以角色的口吻，向用户主动发送一两条消息，来自然地总结这次通话的要点、确认达成的约定，或者表达你的感受。]`,
-        timestamp: Date.now() + 1,
-        isHidden: true
-      };
-      chat.history.push(hiddenReactionInstruction);
-
       await db.chats.put(chat);
+      callDiagStage('hangup:chat-saved');
     }
-
-    clearInterval(voiceCallTimerInterval);
-    voiceCallTimerInterval = null;
-
-    voiceCallAutoListenEnabled = false;
-    releaseVoiceCallMicrophone();
-    // 沉默主动接话: 挂断了就彻底停掉
-    clearVoiceCallIdleNudgeTimer();
 
     voiceCallState.isActive = false;
     voiceCallState.isAwaitingResponse = false;
@@ -3761,10 +3945,26 @@ ${linkedContents}
     voiceCallState.isTtsPlaying = false;
     voiceCallState.canUserSpeak = true;
 
+    // 切回聊天界面 —— await 它, 别和别的大活挤在同一帧 (同 endVideoCall)。
     if (chat) {
-      openChat(chat.id);
-      triggerAiResponse();
+      try {
+        await openChat(chat.id);
+      } catch (e) {
+        console.warn('[语音通话] 挂断后切回聊天界面失败:', e);
+      }
+      callDiagStage('hangup:back-to-chat');
+
+      if (callTranscriptForAI) {
+        try {
+          Promise.resolve(summarizeCallTranscript(chat.id, callTranscriptForAI)).catch(err => {
+            console.warn('[语音通话] 通话总结失败 (不影响挂断):', err);
+          });
+        } catch (err) {
+          console.warn('[语音通话] 通话总结调用失败 (不影响挂断):', err);
+        }
+      }
     }
+    callDiagStage('hangup:done');
   }
 
   function updateVoiceParticipantAvatars() {

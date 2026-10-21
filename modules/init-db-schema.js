@@ -254,4 +254,44 @@ db.version(68).stores({
   cinemaSeriesRecap: '&key, updatedAt'   // { key, title, text, lastEp, createdAt, updatedAt }
 });
 
+// 逐条剧情记忆 (db v69, 2026-10-19)
+//
+// 【为什么必须有这张表】以前每集记忆只活在内存, 退出时靠【一次长上下文调用】
+// 精炼完再写进长期记忆, 写完就清空。用户实测那次调用会把开头的三个字当整篇收走
+// (静默 2 秒就判说完, 而那个提示词塞了几千字, 模型首字延迟超过 2 秒),
+// 而"非空即成功"的判定照样放行 —— 那几集真白看。
+//
+// 改成: 每看完一集 / 每攒够 5 分钟, 当场写一行。退出时什么都不用做。
+// 用户自己点「导出到长期记忆」, 写进去才算账, 写失败行留着还能再点。
+//
+// id = sessionKey + '#' + ep (同集重播覆盖, 不堆两条)。
+//   短剧 sessionKey = 短剧文件夹名, ep = 集号
+//   长剧 sessionKey = 'film:' + chatId,  ep = 段落序号
+//
+// ⚠️ 加这张表必须同时 bump index.html 里 init-db-schema.js 的 ?v=,
+//    忘了手机上 Dexie 压根不建表 (v66 cinemaChars 踩过这个坑)。
+//    cinema-storage.js 的 ensureEpMemoryTable() 是第二道防线。
+db.version(69).stores({
+  cinemaEpMemories: '&id, sessionKey, ep, updatedAt'
+  // { id, sessionKey, kind, title, ep, text, at, updatedAt }
+});
+
+// 「今日私选」日推卡 + 用户反馈 (db v70, 2026-10-21)
+//
+// 【为什么按 chatId 存】教程是"单用户单一品味画像", 但 330 是多角色的 ——
+// 画像按角色(chatId)分开, 不同 AI 给同一个用户挑的歌可以完全不同。
+// 同一个角色每天一张卡, 所以 id = `${chatId}::${date}`。
+//
+// 【卡里不存音频 URL】网易云的 CDN 链接几分钟就过期, 存下来必然是死链。
+// 卡里只存 songId + 元数据, 真正播放时走 music-player.js 已有的
+// refreshNeteaseTrackUrl() 现取现用。
+//
+// ⚠️ 加这张表必须同时 bump index.html 里 init-db-schema.js 的 ?v=,
+//    忘了手机上 Dexie 压根不建表 (v66 cinemaChars / v69 cinemaEpMemories 踩过)。
+db.version(70).stores({
+  dailyDiscovery: '&id, chatId, date',                  // { id, chatId, date, title, subtitle, note, generatedAt, strategy, songs:[], seen }
+  dailyDiscoveryFeedback: '++id, chatId, songId, action, createdAt'
+  // { id, chatId, songId, artist, action, createdAt }
+});
+
 window.db = db;

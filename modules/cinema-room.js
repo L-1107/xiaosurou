@@ -53,7 +53,9 @@
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
     user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-    collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+    collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    // 2026-10-16: 「Gemini 剧情记忆」拆成独立页面的入口 (用户要求别再跟聊天框混在一起)
+    memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6a3 3 0 0 1 3 3v14a3 3 0 0 0-3-3H6"/><path d="M9 2a3 3 0 0 0-3 3v14a3 3 0 0 1 3-3h6"/></svg>'
   };
 
   const ROOM_HTML = [
@@ -73,10 +75,28 @@
     '      <div class="cinema-topbar-status" id="cinema-topbar-status"></div>',
     '    </div>',
     '    <div class="cinema-room-topbar-actions">',
-    '      <button class="cinema-room-icon-btn cinema-stop-btn" id="cinema-stop-btn" title="停止播放" aria-label="停止播放" hidden>',
-    CINEMA_ICON.stop, '<span>停止</span></button>',
+    // 🔴 2026-10-20 用户要求删掉顶栏的「停止」按钮。
+    //   原因: 播放时顶栏变成 6 个按钮, 最后一个被挤到下一排, 整个视频区被往下推。
+    //   顶栏 5 个按钮 (设置/记忆/聊天/片单/退出) 是一行放得下的, 少一个就回到原来那排。
+    //
+    //   为什么删得掉 (不是"暂停"的重复功能):
+    //   ① 停发帧/停计时这块, 播放器自带的暂停早就接上了 ——
+    //      cinema-room.js 的 video 'pause' 事件会调 CinemaLive.pauseFrames('video pause'),
+    //      它做的是: 停发帧 + markPaused 冻结播放时长 + 停 5 分钟摘要定时器。
+    //   ② 真正只有「停止」才做的, 是【彻底卸掉影片源】: revoke blob URL + destroyHls
+    //      + video.src 清空。这件事点片单里另一部片就会做(playFilm 会换 src),
+    //      想彻底不看了还有顶栏的「退出」—— 所以这个按钮不提供不可替代的能力。
+    //   ③ stopPlayback() 函数本身【保留】: 读不到影片文件时和删除正在播的那部时还在用它。
     '      <button class="cinema-room-icon-btn" id="cinema-settings-btn" title="设置" aria-label="打开设置">',
     CINEMA_ICON.gear, '<span>设置</span></button>',
+    // 🔴 2026-10-16 用户要求: 剧情记忆从聊天框里拆出来单独一页。
+    //   原来它是聊天面板顶部的一条折叠条 (cinema-live.js ensurePlotPanel 往那儿插),
+    //   结果"又要看剧情又要看聊天", 键盘一弹几乎看不见, 想改个总结都改不了。
+    //   现在改成顶栏按钮 → 独立底部上滑页, 跟设置/片单同一套手感。
+    //   ⚠️ 标签用两字「记忆」跟其他按钮齐平 (停止/设置/聊天/片单/退出 都是两字);
+    //      完整名字放在 title/aria-label 和页面标题上, 四字会把这一行挤到换行。
+    '      <button class="cinema-room-icon-btn" id="cinema-plot-btn" title="Gemini 剧情记忆" aria-label="打开 Gemini 剧情记忆">',
+    CINEMA_ICON.memory, '<span>记忆</span></button>',
     '      <button class="cinema-room-icon-btn" id="cinema-chat-toggle" title="聊天" aria-label="打开聊天面板">',
     CINEMA_ICON.chat, '<span>聊天</span></button>',
     '      <button class="cinema-room-icon-btn" id="cinema-drawer-toggle" title="片单" aria-label="打开片单">',
@@ -193,6 +213,19 @@
     '    <div class="cinema-episode-meta" id="cinema-episode-meta"></div>',
     '    <div class="cinema-episode-grid" id="cinema-episode-grid"></div>',
     '  </div>',
+    '  </div>',
+
+    // ---- Gemini 剧情记忆面板 (2026-10-16 从聊天框里拆出来) ----
+    // 用户原话: "又要显示剧情, 又要显示聊天记录, 想改点剧情总结, 键盘一弹看都不怎么看的见,
+    //            能不能上方设置那一排单独弄个按钮Gemini剧情记忆, 把这个剧情记忆单独拆个页面出来"
+    // 这里只放一个【空壳】: 标题 + 关闭。正文由 cinema-live.js 的 ensurePlotPanel()
+    // 把 #cinema-plot-panel 插进来 (原来插的是聊天面板)。
+    '  <div class="cinema-plot-sheet" id="cinema-plot-sheet">',
+    '    <div class="cinema-source-head">',
+    '      <span class="cinema-chat-head-title">Gemini 剧情记忆</span>',
+    '      <button class="cinema-chat-hbtn" id="cinema-plot-close" title="关闭" aria-label="关闭剧情记忆面板">',
+    CINEMA_ICON.close, '<span>关闭</span></button>',
+    '    </div>',
     '  </div>',
 
     // ---- 设置面板 (2026-10-04 新增) ----
@@ -316,7 +349,8 @@
       diagBox: document.getElementById('cinema-diag-box'),
       diagToggle: document.getElementById('cinema-diag-toggle'),
       closeBtn: document.getElementById('cinema-room-close'),
-      stopBtn: document.getElementById('cinema-stop-btn'),
+      // ⚠️ 2026-10-20: stopBtn 整个删掉了(顶栏按钮数别再往回加, 见 ROOM_HTML 里的说明)。
+      //   这里【不要】再加回来 —— 加回来顶栏就变 6 个, 会把视频区挤到下一排。
       chatToggle: document.getElementById('cinema-chat-toggle'),
       chatPanel: document.getElementById('cinema-chat-panel'),
       chatClose: document.getElementById('cinema-chat-close'),
@@ -329,6 +363,10 @@
       settingsBtn: document.getElementById('cinema-settings-btn'),
       settingsSheet: document.getElementById('cinema-settings-sheet'),
       settingsClose: document.getElementById('cinema-settings-close'),
+      // Gemini 剧情记忆独立页 (2026-10-16 从聊天面板里拆出来)
+      plotBtn: document.getElementById('cinema-plot-btn'),
+      plotSheet: document.getElementById('cinema-plot-sheet'),
+      plotClose: document.getElementById('cinema-plot-close'),
       charFileInput: document.getElementById('cinema-char-file-input'),
       charPrev: {
         left: document.getElementById('cinema-char-prev-left'),
@@ -623,7 +661,6 @@
   function bindEvents() {
     // addBtn / drawerAdd 的点击绑定在下面「片源」段 (走片源面板, 不是直接选文件)
     els.closeBtn.addEventListener('click', close);
-    els.stopBtn.addEventListener('click', function () { stopPlayback(); });
 
     // ---- 短剧库 (2026-10-07) ----
     if (els.seriesConnect) {
@@ -685,6 +722,11 @@
     // 2026-10-04: 原来聊天头部那个「密钥」按钮和 key-box 一起删了, 收进这里。
     els.settingsBtn.addEventListener('click', function () { setSettingsSheet(true); });
     els.settingsClose.addEventListener('click', function () { setSettingsSheet(false); });
+
+    // ---- Gemini 剧情记忆页 (2026-10-16) ----
+    // 原来是聊天面板顶部的一条常驻折叠条, 用户嫌它跟聊天记录挤在一起看不清, 拆成独立页。
+    els.plotBtn.addEventListener('click', function () { setPlotSheet(true); });
+    els.plotClose.addEventListener('click', function () { setPlotSheet(false); });
     els.keySave.addEventListener('click', saveApiKey);
     // 人物图: 事件委托 (两个 slot 结构一样, 不逐个绑)
     els.settingsSheet.addEventListener('click', function (e) {
@@ -1029,7 +1071,6 @@
     //   文本照旧写进去 (调试/测试还能读到), 但 hidden 不解除。
     els.nowPlaying.textContent = film.name;
     els.nowPlaying.hidden = true;
-    els.stopBtn.hidden = false;
     syncTopbarHeight();
     setDrawer(false);
 
@@ -1251,8 +1292,13 @@
 
   // --------------------------------------------------------------------------
   // 停止播放
-  // 只停片, 不退房间 —— 右上角 ✕ 才是退房间。两者分开是 2026-10-04 用户明确要求的。
-  // 进度会先落盘, 之后从片单点"播放"能接着看。
+  // ⚠️ 2026-10-20: 顶栏那个「停止」按钮已经删掉了(见 ROOM_HTML 里的说明) ——
+  //   播放时顶栏变 6 个按钮会把视频区挤到下一排。
+  //   这个函数【保留】, 因为还有两处内部逻辑要它:
+  //     ① playFilm(): 影片文件读不出来时, 先把播放器清干净再报错
+  //     ② deleteFilm(): 删掉正在播的那部, 不然 blob 一直挂在 video 上
+  //   它做的事跟以前一样: 停片, 不退房间 —— 右上角 ✕ 才是退房间。
+  //   进度会先落盘, 之后从片单点"播放"能接着看。
   //
   // ⚠️ 2026-10-07 修正: 这里原来调的是 onVideoSourceChanged() (那是"换片"的钩子),
   // 而那函数内部会 disable() 掉整个 Gemini Live + 清空 currentPlotSummary。
@@ -1276,7 +1322,6 @@
     pendingResumeTime = 0;
     els.idle.hidden = false;
     els.nowPlaying.textContent = '';
-    els.stopBtn.hidden = true;
     stopAmbient();
     Promise.resolve(refreshList()).catch(function () { /* 片单刷新失败不影响停止 */ });
   }
@@ -1584,7 +1629,6 @@
 
     applyVideoSrc(url);
     els.idle.hidden = true;
-    els.stopBtn.hidden = false;
     syncTopbarHeight();
     setDrawer(false);
 
@@ -1616,7 +1660,8 @@
     setTimeout(function () { syncTopbarHeight(); syncVisualViewport(); }, 320);
     if (chatOpen) {
       setDrawer(false);
-      // 剧情条常驻在聊天面板顶上, 打开时主动刷一次
+      // 2026-10-16: 剧情记忆已经拆成独立页面 (顶栏「记忆」按钮), 不再挂在聊天面板里,
+      //   所以这里不再需要顺手刷它 —— 顺手留着无害, 但别以为聊天面板靠它才有内容。
       if (global.CinemaLive) global.CinemaLive.renderPlotPanel();
 
       // 🔴 2026-10-06 修复: 原来这里是「没填 key 就直接把设置面板推出来」。
@@ -1661,6 +1706,33 @@
         '先在房间右上角「设置」里填 Gemini Live API Key，然后播放视频，Gemini 就会连进来陪你一起看。');
     } else {
       alert('先在设置里填 Gemini Live API Key 再聊天');
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Gemini 剧情记忆页 (2026-10-16 从聊天面板里拆出来)
+  // --------------------------------------------------------------------------
+  //
+  // 用户原话: "那个Gemini剧情记忆弄在聊天对话框上, 又要显示剧情, 又要显示聊天记录,
+  //          想改点剧情总结, 键盘一弹看都不怎么看的见, 能不能上方设置那一排单独弄个按钮
+  //          Gemini剧情记忆, 把这个剧情记忆单独拆个页面出来, 不要和观剧聊天吐槽框混在一起"
+  //
+  // 打开时把聊天面板收掉: 用户要的就是"别跟吐槽框挤在一起",
+  // 两个都开着的话还是那回事 (手机屏就那么大)。
+  function setPlotSheet(open) {
+    ensureDom();
+    const on = open !== false;
+    if (!els.plotSheet) return;
+    els.plotSheet.classList.toggle('open', on);
+    if (on) {
+      setChatPanel(false);
+      setDrawer(false);
+      closeSourceSheet();
+      // 内容由 cinema-live.js 渲染。必须【先开面板再渲染】:
+      // 反过来的话首次渲染出来的容器没被看见, 有些量高(如滚动位置)会不对。
+      if (global.CinemaLive) global.CinemaLive.renderPlotPanel();
+    } else {
+      keepViewportPinned();
     }
   }
 
@@ -2532,172 +2604,43 @@
     diagLogPush('道具已加载: ' + S.CHAR_SLOTS.map(function (s) {
       return s + '=' + (charUrls[s] ? '有' : '空');
     }).join(' '));
-    // 剧情条一进房就建好并常驻 (不必等用户先点开聊天面板)
+    // 剧情记忆页的正文容器一进房就建好 (不必等用户点开页面)。
+    // 2026-10-16 起它挂在 #cinema-plot-sheet 里, 不再挂聊天面板。
     if (global.CinemaLive) global.CinemaLive.renderPlotPanel();
   }
 
+
+  // ⚠️ 2026-10-19 删掉了 confirmLeaveWithMemory() 和 showLeaveFallback()。
+  //   前者是"退出时要问一句要不要现在生成", 后者是"生成失败后的兜底出口"。
+  //   两者都是为"退出时那次生成"服务的, 而生成环节已取消 → 再无触发条件。
+  //   留着反而会让人以为退出还有风险 (showLeaveFallback 那段注释记过一个真事故:
+  //   生成失败 → leavePromise 被缓存 → 再点退出走同一条已 reject 的结果 →
+  //   用户被永远关在房间里。生成环节消失后, 这个死结也一起消失了。)
+  //
+  // 同批删掉的还有 close() 里那句 appendCinemaSystemLine('⏳ 正在整理…'),
+  // 它是给生成流程配的提示, 退出不再有生成。
+
+
   /**
-   * 退出房间。
+   * 退出房间 —— 2026-10-19 简化成秒退, 2026-10-20 补回
    *
-   * 🔴 2026-10-10 改了退出策略 (用户实测两集白看后的决定):
-   *   旧: 退出 → 自动总结 → 写库 → 关房间 (不可逆单向道, 失败就全丢)
-   *   新: 退出 → 弹框问一句 → [现在生成] 手动生成+写库 / [直接退出] 存草稿走人
+   * 【为什么现在只剩三行】记忆已经当场落库(cinemaEpMemories), 退出时不需要做任何生成。
+   *   旧版 close() 会先弹框问"要不要现在生成记忆", 再等生成结果, 生成失败还弹兜底框 ——
+   *   那一整套都是给"退出时统一精炼"服务的, 而那个环节已经整个取消。
+   *   → 退出 = flushProgress(落盘播放进度) + finishClose(收尾, 里面会 forceLeave)。
    *
-   * 关键点: 无论走哪条, 【都不能让"还没存进去的记忆"跟着页面一起消失】。
-   *   直接退出这条路由 CinemaLive.hardLeave 存 localStorage 草稿兜底,
-   *   下次进影院自动恢复 —— 这正是用户要的"换个时间再来总结"。
+   * ⚠️ 2026-10-20 修一个真事故: 这个函数在 v4.20 重构里被误删了, 但两处引用都还在 ——
+   *   els.closeBtn.addEventListener('click', close) 和 global.CinemaRoom.close。
+   *   于是 close 落到了全局的 window.close, 点"退出"等于调浏览器的关窗口接口,
+   *   手机上对非脚本打开的标签页是【静默无效】的: 不报错、不动, 用户只看到"点了没反应"。
+   *   → 教训: 删函数前必须 grep 它在文件里的每一处引用, 光看"没人调了吧"会被全局同名函数接住。
    */
   async function close() {
     ensureDom();
-    flushProgress(true);
-    if (global.CinemaLive && global.CinemaLive.isEnabled()) {
-      // 有没存进去的记忆, 且已经还连着 Live → 问用户要不要现在生成
-      if (typeof global.CinemaLive.hasUnsavedMemory === 'function' && global.CinemaLive.hasUnsavedMemory()) {
-        const choice = await confirmLeaveWithMemory();
-        if (choice === 'generate') {
-          appendCinemaSystemLine('⏳ 正在整理这次观影记忆，请稍等……');
-          const r = await global.CinemaLive.generateFinalMemory({ quiet: true });
-          if (!r || r.saved !== true) {
-            // 生成失败: 【不能直接把人踢出去丢脸】, 弹框给一条"仍然退出"的出路。
-            // 单集记忆已经存草稿了, 走人也不会真丢。
-            await showLeaveFallback((r && r.error) || '未知原因');
-          }
-        }
-        // 'leave' → 直接往下走, finishClose 里 CinemaLive.forceLeave → hardLeave 存草稿
-      } else {
-        // 旧路径: 没有可总结内容时仍走原来的流程 (例如只剩聊天没剧情)
-        const r = await global.CinemaLive.onLeaveCinema();
-        if (r && r.saved === false && r.error) {
-          await showLeaveFallback(r.error);
-        }
-      }
-    }
+    flushProgress(true);   // 退出前把播放进度落盘, 不然这一集白看
     finishClose();
   }
 
-  function appendCinemaSystemLine(text) {
-    const box = document.getElementById('cinema-chat-messages');
-    if (!box) return;
-    const div = document.createElement('div');
-    // ⚠️ class 必须是 cinema-chat-sys —— 跟 cinema-live.js 的 appendSystemLine 同名,
-    //   写成别的就套不到那套样式, 提示会变成一坨没样式的裸文字。
-    div.className = 'cinema-chat-sys';
-    div.textContent = text;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
-  }
-
-  /**
-   * 「这次还有记忆没存」时的退出确认框。
-   * 返回 'generate' (现在生成) / 'leave' (直接退出, 存草稿)。
-   * 无论用户点哪个、还是超时, 都一定会 resolve —— 不能把关房间卡死。
-   */
-  function confirmLeaveWithMemory() {
-    return new Promise(function (resolve) {
-      let done = false;
-      const timers = [];
-      function settle(v) {
-        if (done) return;
-        done = true;
-        timers.forEach(function (t) { try { clearTimeout(t); } catch (e) { /* noop */ } });
-        closeAnyModal();
-        resolve(v);
-      }
-      if (global.showCustomConfirm) {
-        global.showCustomConfirm(
-          '这次观影记忆还没存进长期记忆',
-          '要现在生成吗？生成后你随时可以点顶部「退出」离开。' +
-            '<br><br>如果现在不方便（比如 API 抽风），也可以直接退出 —— ' +
-            '<b>你这次攒下的剧情记忆会存在本地，下次进影院自动恢复</b>，到时候再生成就行，不会丢。',
-          {
-            confirmText: '现在生成',
-            cancelText: '直接退出（先存着）',
-            confirmButtonClass: ''
-          }
-        ).then(function (ok) {
-          settle(ok ? 'generate' : 'leave');
-        }).catch(function () { settle('leave'); });
-      } else {
-        // 没有确认弹框能力 → 保守起见直接存草稿走人, 绝不自动触发一次可能失败的生成
-        settle('leave');
-      }
-      // 兜底: 弹框任何异常/用户无视, 25 秒后一律放人
-      timers.push(setTimeout(function () { settle('leave'); }, 25000));
-    });
-  }
-
-  /** 关掉可能还开着的自定义弹框 (showCustomAlert/Confirm/Choice 共用那一个宿主节点) */
-  function closeAnyModal() {
-    try {
-      var el = document.getElementById('custom-modal-overlay');
-      if (el) el.style.display = 'none';
-      var ch = document.getElementById('custom-chat-overlay');
-      if (ch) ch.style.display = 'none';
-    } catch (e) { /* noop */ }
-  }
-
-  /**
-   * 记忆没存上时的兜底出口: 弹框 + 倒计时 + 「仍然退出」。
-   * 返回的 Promise 一定会 resolve —— 无论用户点哪个按钮、等多久, 保证 close() 不卡死。
-   */
-  function showLeaveFallback(reason) {
-    return new Promise(function (resolve) {
-      var done = false;
-      var tick = null;
-      var hardStop = null;
-
-      function settle(val) {
-        if (done) return;
-        done = true;
-        try { if (tick) clearInterval(tick); } catch (e) { /* noop */ }
-        try { if (hardStop) clearTimeout(hardStop); } catch (e) { /* noop */ }
-        closeAnyModal();
-        resolve(val);
-      }
-
-      var left = 10;
-
-      // 用 showCustomConfirm —— 它才有【标题 + 正文 + 两个按钮】的签名。
-      // ⚠️ 别用 showChoiceModal: 那个是【分页选项列表】(title, options) 返回 Promise,
-      //    语义完全不同, 传三个参数进去等于没给正文 (2026-10-07 一度写错过)。
-      var modalShown = false;
-      if (global.showCustomConfirm) {
-        try {
-          modalShown = true;
-          global.showCustomConfirm(
-            '观影记忆没存上',
-            '没能把这次的观影记忆写进长期记忆：' + (reason || '未知原因') +
-              '<br><br>记忆没存上只是这一次看不到了，房间照常退出，不会把你关在里面。' +
-              '<br><b>' + left + ' 秒后会自动退出。</b>',
-            {
-              // ⚠️ 两个按钮现在【都会退出】。
-              //   原来第二个按钮叫「再试一次」, 听着像能重试, 其实做不到 ——
-              //   CinemaLive 的 leavePromise 是缓存的, 再点退出走的是同一条
-              //   已 reject 的结果, 于是永远出不去。按钮文案不能骗人。
-              confirmText: '仍然退出',
-              cancelText: '退出房间',
-              confirmButtonClass: 'btn-danger'
-            }
-          ).then(function (ok) {
-            settle(ok ? 'leave' : 'retry');
-          }).catch(function () { settle('retry'); });
-        } catch (e) {
-          try { global.alert('观影记忆没存上\n\n' + (reason || '') + '\n\n' + left + ' 秒后自动退出房间。'); } catch (e2) { /* noop */ }
-        }
-      } else {
-        try { global.alert('观影记忆没存上\n\n' + (reason || '') + '\n\n' + left + ' 秒后自动退出房间。'); } catch (e) { /* noop */ }
-      }
-
-      tick = setInterval(function () {
-        left--;
-        if (left <= 0) settle('timeout');
-      }, 1000);
-
-      // 兜底: 无论弹框怎么表现, 15 秒后一律放人
-      hardStop = setTimeout(function () { settle('timeout'); }, 15000);
-      void modalShown;
-    });
-  }
 
   /** 真正关房间 (从 close() 拆出来, 兜底路径也能调) */
   function finishClose() {
@@ -2752,36 +2695,19 @@
     isChatOpen: function () { return chatOpen; }
   };
 
-  // 入口按钮
-  function bindEntry() {
-    const btn = document.getElementById('open-cinema-room-btn');
-    if (btn && !btn.__cinemaBound) {
-      btn.__cinemaBound = true;
-      btn.addEventListener('click', function () { open(); });
-    }
-    hideLegacyEntry();
-    bindSandboxEntry();
-  }
-
-  // --------------------------------------------------------------------------
-  // 旧影院入口隐藏兜底 (2026-10-09)
+  // ------------------------------------------------------------------------
+  // 旧影院入口 (open-cinema-room-btn) 已于 2026-10-20 整个删掉。
   //
-  // 正式入口只剩沙盒 iframe 那一个 (点输入框不卡)。旧按钮要藏住, 但 CSS 那条
-  // `display:none !important` 会被角色的 customCss 盖掉 ——
-  // chat.settings.customCss 经 applyScopedCss() 注入 <style id="custom-bubble-style">,
-  // 只给 .message-bubble 加前缀, 别的选择器原样全页生效 (appearance-theme.js:440)。
+  // 【为什么删】它是"影院直接装在宿主页面里"那条老路 —— 同一个 cinema-room.js
+  //   装在三千多节点的宿主里, 点输入框主线程冻 4~5 秒; 装进 187 节点的
+  //   cinema-sandbox/index.html (iframe) 里就完全不卡。正式入口只剩沙盒那一个,
+  //   老按钮就没用了。原来是"只藏不删"(藏了三道), 现在连按钮带
+  //   hideLegacyEntry() 一起清掉, 免得留着看不见的死代码让人以为还能回退。
   //
-  // 【为什么还要 JS 再藏一次】inline !important 在 HTML 里已经够硬了, 这里是第三道:
-  //   - 万一以后有人把 HTML 里的 inline style 删了, 这里还兜着
-  //   - 覆盖按钮是由 customCss 造成的, customCss 随时可能被清掉重填, 每次绑定都重申一次
-  //
-  // 恢复旧入口: 删掉这里 + index.html 的 inline style + cinema-room.css 那条规则, 三处。
-  // --------------------------------------------------------------------------
-  function hideLegacyEntry() {
-    const btn = document.getElementById('open-cinema-room-btn');
-    if (!btn) return;
-    try { btn.style.setProperty('display', 'none', 'important'); } catch (e) { /* noop */ }
-  }
+  // ⚠️ open() 本身【必须留着】—— 沙盒页加载的是同一份 cinema-room.js,
+  //   它自己调 window.CinemaRoom.open() 开房 (cinema-sandbox/index.html:224)。
+  //   删的只是宿主页面里那个按钮和它的绑定, 不是房间本身。
+  // ------------------------------------------------------------------------
 
   // ------------------------------------------------------------------------
   // 🧪 影院沙盒验证入口 (2026-10-09, 临时)
@@ -2953,10 +2879,12 @@
     });
   }
 
+  // ⚠️ 2026-10-20: 原来这里调的是 bindEntry(), 它同时干三件事(绑旧影院按钮 /
+  //   藏旧影院按钮 / 绑沙盒入口)。旧影院入口已整个删掉, 这里直接绑沙盒入口。
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bindEntry);
+    document.addEventListener('DOMContentLoaded', bindSandboxEntry);
   } else {
-    bindEntry();
+    bindSandboxEntry();
   }
 
 })(window);

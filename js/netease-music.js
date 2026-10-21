@@ -599,6 +599,241 @@
     }
   }
 
+  // ============================================================
+  // 「今日私选」需要的扩展能力 (2026-10-21)
+  //
+  // 背景: netease-proxy.js 的 action 白名单里【本来就有】recommend/songs、
+  //   personalized、personalized/newsong、toplist、top/playlist、artist/songs,
+  //   但前端一个都没接。这里把它们接上 —— 教程「两阶段策展」的第一阶段
+  //   (程序先找真歌) 靠的就是这些端点。
+  //
+  // ⚠️ 下面所有方法一律 try/catch 吞掉错误返回空数组:
+  //    策展是"锦上添花", 任何一个源挂掉都不该让整张日推卡出不来。
+  // ============================================================
+
+  // 统一的歌曲结构映射 (网易云原始 song 对象 → 紧凑结构)
+  function mapSong(s) {
+    if (!s || s.id == null) return null;
+    const artists = Array.isArray(s.ar) ? s.ar.map((a) => ({ id: a.id, name: a.name })) : [];
+    return {
+      id: s.id,
+      name: s.name || '未知歌曲',
+      artist: artists.length ? artists.map((a) => a.name).join('/') : (s.artist || '未知歌手'),
+      artists,
+      album: s.al?.name || s.album || '',
+      albumId: s.al?.id ?? s.albumId,
+      cover: s.al?.picUrl || s.cover || '',
+      duration: s.dt ?? s.duration,
+      fee: s.fee,
+      publishTime: s.publishTime || 0,
+    };
+  }
+
+  /**
+   * 批量拿歌曲详情 (省请求 —— 一次 50 首只要一次网络往返)
+   * @param {Array<number|string>} ids
+   * @returns {Promise<Array<Object>>}
+   */
+  async function getSongDetailsBatch(ids) {
+    const list = (ids || []).filter((x) => x != null).slice(0, 200);
+    if (!list.length) return [];
+    try {
+      const r = await callNetease('song/detail', { ids: list });
+      const songs = r?.songs || [];
+      return songs.map(mapSong).filter(Boolean);
+    } catch (e) {
+      console.warn('[netease] getSongDetailsBatch failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 并发受限地跑一批异步任务 (失败不抛, 返回 {ok, value|error})。
+   * 手机上串行跑十几趟网络是"卡住不动"的头号原因 —— 宁可并行也别排着队等。
+   * @param {Array<() => Promise<any>>} tasks
+   * @param {number} limit 同时最多跑几个
+   */
+  async function runLimited(tasks, limit) {
+    const list = (tasks || []).filter(Boolean);
+    if (!list.length) return [];
+    const results = new Array(list.length);
+    let cursor = 0;
+    const workers = new Array(Math.max(1, Math.min(limit || 1, list.length))).fill(0).map(async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= list.length) return;
+        try {
+          results[index] = { ok: true, value: await list[index]() };
+        } catch (e) {
+          results[index] = { ok: false, error: e };
+        }
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
+   * 批量拿播放直链 —— 「先验证再智能」的关键一步。
+   * 只有返回了 url 的歌才算"真的能播"。
+   *
+   * ⚠️ /song/url/v1 的 id 参数理论上支持逗号分隔, 但万一上游不认,
+   *    批量结果会少歌 —— 所以这里做了兜底: 批量拿不到的, 逐首再试一次。
+   * @param {Array<number|string>} ids
+   * @param {string} level 音质
+   * @returns {Promise<Array<{id, url, level, size}>>} 只有能播的才在数组里
+   */
+  async function getSongUrlsBatch(ids, level = 'exhigh') {
+    const list = (ids || []).filter((x) => x != null).slice(0, 200);
+    if (!list.length) return [];
+
+    const playable = [];
+    const found = new Set();
+    // 【关键】分开记两件事:
+    //   returned = 上游【提到过】这个 id (不管有没有 url)
+    //   found    = 这个 id 【有可播 url】
+    // 上游返回了但 url 为 null = 这首歌本来就不可播 (没版权 / 非 VIP / 地区限制),
+    // 逐首再问一遍也是白问 —— 只有"上游压根没提到这个 id"才值得单发一次。
+    // ⚠️ 之前没分这两种, 导致每批 15 次串行重试, 手机上能卡好几分钟。
+    const returned = new Set();
+    try {
+      const r = await callNetease('song/url', { ids: list, level });
+      const data = Array.isArray(r?.data) ? r.data : [];
+      data.forEach((item) => {
+        if (!item || item.id == null) return;
+        const key = String(item.id);
+        returned.add(key);
+        if (item.url) {
+          playable.push({
+            id: item.id,
+            url: String(item.url).replace(/^http:\/\//i, 'https://'),
+            level: item.level || level,
+            size: item.size,
+          });
+          found.add(key);
+        }
+      });
+    } catch (e) {
+      console.warn('[netease] getSongUrlsBatch (batch) failed:', e);
+    }
+
+    // 兜底: 只对【上游压根没提到】的 id 单发一次, 最多补 8 首 (免得请求爆炸)
+    // ⚠️ 单发必须并行 —— 串行 8 次最坏能拖 80 秒, 手机上就是"转圈转不出结果"。
+    const missing = list
+      .map((id) => String(id))
+      .filter((id) => !returned.has(id))
+      .slice(0, 8);
+    const singles = await runLimited(
+      missing.map((id) => () => getSongUrl(id, level)),
+      4
+    );
+    singles.forEach((r) => {
+      if (r && r.ok && r.value && r.value.url) playable.push(r.value);
+    });
+    return playable;
+  }
+
+  /**
+   * 每日推荐 (需要登录态)
+   * @returns {Promise<Array<Object>>}
+   */
+  async function recommendSongs() {
+    try {
+      const r = await callNetease('recommend/songs', {});
+      const list = r?.data?.dailySongs || r?.dailySongs || [];
+      return list.map(mapSong).filter(Boolean);
+    } catch (e) {
+      console.warn('[netease] recommendSongs failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 推荐新音乐 —— 用户大概率没听过, 是"惊喜"的主要来源
+   * @returns {Promise<Array<Object>>}
+   */
+  async function personalizedNewsong() {
+    try {
+      const r = await callNetease('personalized/newsong', {});
+      const list = r?.result?.personalized || r?.personalized || [];
+      return list.map(mapSong).filter(Boolean);
+    } catch (e) {
+      console.warn('[netease] personalizedNewsong failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 推荐歌单 (只取歌单本身, 歌曲由调用方自己去 playlistTracks 拿)
+   * @returns {Promise<Array<{id, name, playCount, coverImgUrl}>>}
+   */
+  async function personalizedPlaylists(limit = 30) {
+    try {
+      const r = await callNetease('personalized', { limit });
+      const list = r?.result?.playlist || r?.playlist || [];
+      return list.map((p) => ({
+        id: p.id,
+        name: p.name,
+        playCount: p.playCount || 0,
+        trackCount: p.trackCount || 0,
+        coverImgUrl: p.coverImgUrl || '',
+      })).filter((p) => p.id != null);
+    } catch (e) {
+      console.warn('[netease] personalizedPlaylists failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 排行榜列表
+   * @returns {Promise<Array<{id, name}>>}
+   */
+  async function toplist() {
+    try {
+      const r = await callNetease('toplist', {});
+      const list = r?.list || r?.result?.list || [];
+      return list.map((t) => ({ id: t.id, name: t.name, coverImgUrl: t.coverImgUrl || '' }))
+        .filter((t) => t.id != null);
+    } catch (e) {
+      console.warn('[netease] toplist failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 排行榜里的歌
+   * @param {number} id 榜单 ID
+   * @returns {Promise<Array<Object>>}
+   */
+  async function topPlaylistTracks(id) {
+    if (id == null) return [];
+    try {
+      const r = await callNetease('top/playlist', { id });
+      const list = r?.tracks || r?.playlist || [];
+      return list.map(mapSong).filter(Boolean);
+    } catch (e) {
+      console.warn('[netease] topPlaylistTracks failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 某个歌手的歌 —— 从画像歌手往外扩的主要手段
+   * @param {number} artistId
+   * @returns {Promise<Array<Object>>}
+   */
+  async function artistSongs(artistId, limit = 50, offset = 0) {
+    if (artistId == null) return [];
+    try {
+      const r = await callNetease('artist/songs', { id: artistId, limit, offset });
+      const list = r?.songs || r?.hotSongs || r?.result?.songs || [];
+      return list.map(mapSong).filter(Boolean);
+    } catch (e) {
+      console.warn('[netease] artistSongs failed:', e);
+      return [];
+    }
+  }
+
   // ====== 暴露到 window ======
   global.NeteaseMusic = {
     // 状态
@@ -629,6 +864,15 @@
     likelist,
     userCloud,
     userSubcount,
+    // 「今日私选」扩展 (2026-10-21)
+    getSongDetailsBatch,
+    getSongUrlsBatch,
+    recommendSongs,
+    personalizedNewsong,
+    personalizedPlaylists,
+    toplist,
+    topPlaylistTracks,
+    artistSongs,
     // 常量
     PROXY_URL,
     SOURCE_TAG: 'netease_real',

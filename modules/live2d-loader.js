@@ -140,6 +140,29 @@
       canvas._live2dApp = app;
       canvas._live2dModel = model;
 
+      // ── v0.5.1 竞态自检: 挂断发生在挂载途中 ──────────────────────
+      // 挂载全程是异步的 (等 IDB 读模型 → 逐个建 blob URL → fetch moc3/纹理
+      // → 再等 5 帧让 internal model setup 完), 这中间用户随时可能挂断。
+      // 而 video-voice-call.js 的 unmountLive2DForCall 是这么写的:
+      //     disposeLive2D(canvas);  // ← _live2dApp 还没建, 这里直接 return false
+      //     canvas.remove();         // ← canvas 被摘出 DOM
+      // 也就是说挂断发生在【上面这两行之前】时, 那时确实还没建任何东西, 无可释放;
+      // 但【走到这里之后】建出来的 PIXI + WebGL context + 全部纹理就永远没人回收了 ——
+      // canvas 已经不在文档里, getElementById 再也找不到它。
+      // 结果: 一次"接通后几秒内挂断"就泄漏一整套 GPU 资源, 直到页面关闭。
+      // 修法: 建完立刻自检一次。已被摘走 = 已经挂断, 当场自我销毁。
+      // 代价: 仅在"挂断发生于挂载途中"这一种情况下执行, 正常通话永远走不到这一行。
+      // (管理页 live2d-manager.js 的 canvas 一直在 DOM 里, 同样不受影响。)
+      if (typeof canvas.isConnected === 'boolean' && canvas.isConnected === false) {
+        console.warn('[Live2D] 挂载途中通话已挂断 (canvas 已脱离 DOM), 丢弃本次挂载并释放 GPU 资源');
+        try { app.destroy(false, { children: true, texture: true }); } catch (e) { /* ignore */ }
+        canvas._live2dApp = null;
+        canvas._live2dModel = null;
+        canvas._live2dInitialParams = null;
+        // 返回失败 → mountLive2DFromIDB 会走失败分支, 自动 revoke 这一批 blob URL
+        return { success: false, error: new Error('挂断发生在模型加载途中, 已取消挂载') };
+      }
+
       // v0.3.6: 挂载完成时拍一次「参数基线」快照, 给"↺ 默认 / 恢复默认"用。
       // 为什么必须在【挂载时】拍 (而不是打开管理面板时):
       //   这是模型刚加载完、任何表情都还没应用过的纯净状态, 相当于"模型出厂表情"。

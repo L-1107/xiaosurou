@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="css/image-nai.css?v=0.0.36">
   <link rel="stylesheet" href="css/memory.css?v=0.0.36">
   <link rel="stylesheet" href="css/music-player.css?v=0.0.37">
-  <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.49">
+  <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.50">
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.68">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
@@ -160,16 +160,18 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="js/music-voice-sample.js?v=0.0.79" defer></script>
   <script src="js/ai-songs-store.js?v=0.0.79" defer></script>
   <script src="js/role-voice-sample-ui.js?v=0.0.80" defer></script>
-  <script src="js/netease-music.js?v=0.0.39" defer></script>
-  <script src="js/netease-music-app.js?v=0.0.42" defer></script>
+  <script src="js/netease-music.js?v=0.0.41" defer></script>
+  <script src="js/netease-music-app.js?v=0.0.44" defer></script>
+  <!-- 【新增 0.0.43】「今日私选」AI 每日荐歌引擎（画像→候选→验可播→LLM策展→缓存→反馈） -->
+  <script src="js/music-daily-discovery.js?v=0.0.2" defer></script>
   <script src="js/custom-music-cover.js?v=0.0.37" defer></script>
   <script src="modules/qzone.js?v=0.0.36" defer></script>
   <script src="modules/sticker-manager.js?v=0.0.36" defer></script>
   <script src="modules/memory-summary.js?v=0.0.41" defer></script>
-  <script src="modules/live2d-loader.js?v=0.3.6" defer></script>
+  <script src="modules/live2d-loader.js?v=0.3.7" defer></script>
   <!-- v0.5.0 P12/P13: 视频通话 AI 说话口型 + 元音嘴型 (独立模块, 无外部依赖; 必须在 tts-audio.js 之前加载) -->
   <script src="modules/call-lip-sync.js?v=0.0.2" defer></script>
-  <script src="modules/video-voice-call.js?v=0.0.77" defer></script>
+  <script src="modules/video-voice-call.js?v=0.0.81" defer></script>
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
   <script src="modules/nai-imagen.js?v=0.0.36" defer></script>
   <script src="modules/backup-import-export.js?v=0.0.38" defer></script>
@@ -225,7 +227,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 第八层：初始化（必须在所有模块之后） -->
   <!-- 数据定义（无依赖） -->
   <script src="modules/init-avatar-frames.js?v=0.0.36" defer></script>
-  <script src="modules/init-db-schema.js?v=0.0.40" defer></script>
+  <script src="modules/init-db-schema.js?v=0.0.42" defer></script>
   <script src="modules/live2d-config.js?v=0.0.1" defer></script>
   <script src="modules/live2d-uploader.js?v=0.0.1" defer></script>
   <script src="modules/live2d-storage.js?v=0.0.1" defer></script>
@@ -242,7 +244,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 数据保护（依赖 db） -->
   <script src="modules/init-data-protection.js?v=0.0.36" defer></script>
   <!-- 崩溃恢复（依赖 data-protection） -->
-  <script src="modules/init-crash-recovery.js?v=0.0.36" defer></script>
+  <script src="modules/init-crash-recovery.js?v=0.0.37" defer></script>
   <!-- PIN/城市（依赖 DOM） -->
   <script src="modules/init-pin-city.js?v=0.0.36" defer></script>
   <!-- 事件绑定和功能（依赖 state, db） -->
@@ -253,15 +255,15 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
        旧「一起看电影」已于 2026-10-07 整体删除(代码+入口), 只保留本模块。
        Gemini 协议层仍是 live-client.js (与旧观影共用过, 现为影院独占)。
        顺序要求: cinema-storage.js 必须在前 —— cinema-room.js 在加载时就捕获了 window.CinemaStorage 引用。 -->
-  <script src="modules/cinema-storage.js?v=0.4.0" defer></script>
+  <script src="modules/cinema-storage.js?v=0.5.3" defer></script>
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.25.5" defer></script>
-  <link rel="stylesheet" href="modules/cinema-room.css?v=0.35.2">
+  <script src="modules/cinema-room.js?v=0.29.1" defer></script>
+  <link rel="stylesheet" href="modules/cinema-room.css?v=0.38.1">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
-  <script src="modules/cinema-live.js?v=1.5.0" defer></script>
+  <script src="modules/cinema-live.js?v=1.9.6" defer></script>
   <!-- 主入口（最后加载，调用 init） -->
   <script src="modules/init-and-state.js?v=0.0.83" defer></script>
   <!-- 第九层：DOMContentLoaded 外部的独立模块 -->
@@ -283,6 +285,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <link rel="stylesheet" href="css/music-player-theme-blue.css?v=0.0.38">
   <!-- 【新增 0.0.37】网易云音乐 App · 粉红+嫩黄主题 -->
   <link rel="stylesheet" href="css/netease-music-app-pink.css?v=0.0.38">
+  <!-- 【新增 0.0.43】「今日私选」AI 每日荐歌样式 (必须排在上面 pink 之后, 它要覆盖 .nma-tabs) -->
+  <link rel="stylesheet" href="css/music-daily-discovery.css?v=0.0.2">
   <!-- v0.4.2 视频通话准备页 (Live2D) 独立 CSS, 从 style.css 末尾迁移 -->
   <link rel="stylesheet" href="css/live2d-call-prep.css?v=0.0.2">
   <!-- v0.5.0 Live2D 模型管理页 CSS -->
@@ -3697,13 +3701,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             <div class="text">被引用的消息内容...</div>
           </div> <span id="cancel-reply-btn">×</span>
         </div>
-        <div id="chat-input-actions-top"> <button id="open-cinema-room-btn" class="chat-action-icon-btn action-button" title="Cinema Room" style="display: none !important">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
-        <path d="M7 4v16M17 4v16"></path>
-        <path d="M2 9h5M2 15h5M17 9h5M17 15h5"></path>
-    </svg>
-</button> <button id="open-cinema-sandbox-btn" class="chat-action-icon-btn action-button" title="影院·沙盒(临时验证)" style="border:1px solid #ffcf9c;box-shadow:0 0 0 1px rgba(255,207,156,.25)">
+        <div id="chat-input-actions-top"> <button id="open-cinema-sandbox-btn" class="chat-action-icon-btn action-button" title="影院·沙盒(临时验证)" style="border:1px solid #ffcf9c;box-shadow:0 0 0 1px rgba(255,207,156,.25)">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffcf9c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
     <path d="M2 9h5M2 15h5M17 9h5M17 15h5"></path>

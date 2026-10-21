@@ -26,6 +26,10 @@
     subcount: null,         // 统计
     user: null,             // 用户信息
     loading: false,
+    // 「今日私选」(2026-10-21)
+    dailyCard: null,        // 当前展示的日推卡
+    dailyLoading: false,    // 生成中 (防重复点)
+    dailyChatId: null,      // 这张卡属于哪个角色
   };
 
   // ====== 入口 ======
@@ -85,6 +89,7 @@
         <div class="nma-tabs">
           <button class="nma-tab active" data-view="profile">我的</button>
           <button class="nma-tab" data-view="search">搜索</button>
+          <button class="nma-tab" data-view="daily">今日私选</button>
           <button class="nma-tab" data-view="player">播放</button>
           <button class="nma-tab" data-view="settings">设置</button>
           <span class="nma-close" id="nma-close-btn">×</span>
@@ -144,6 +149,22 @@
             <button id="nma-search-btn" class="nma-search-btn">搜索</button>
           </div>
           <div class="nma-list" id="nma-search-results"></div>
+        </div>
+
+        <!-- 今日私选 view (2026-10-21 新增: AI 每日荐歌) -->
+        <div class="nma-view nma-view-daily" data-view="daily">
+          <div class="nmd-head">
+            <div class="nmd-head-main">
+              <div class="nmd-title" id="nmd-title">今日私选</div>
+              <div class="nmd-sub" id="nmd-sub"></div>
+            </div>
+            <div class="nmd-head-actions">
+              <button class="nmd-btn" id="nmd-refresh-btn" type="button">换一批</button>
+              <button class="nmd-btn nmd-btn-primary" id="nmd-playall-btn" type="button">播放全部</button>
+            </div>
+          </div>
+          <div class="nmd-note" id="nmd-note" style="display:none;"></div>
+          <div class="nma-list" id="nmd-list"></div>
         </div>
 
         <!-- 播放 view -->
@@ -257,6 +278,16 @@
       importPlaylistBtn.addEventListener('click', importCurrentPlaylistToPlayer);
     }
 
+    // 「今日私选」: 换一批 / 播放全部 (2026-10-21)
+    const dailyRefreshBtn = overlay.querySelector('#nmd-refresh-btn');
+    if (dailyRefreshBtn) {
+      dailyRefreshBtn.addEventListener('click', () => loadDailyDiscovery(true));
+    }
+    const dailyPlayAllBtn = overlay.querySelector('#nmd-playall-btn');
+    if (dailyPlayAllBtn) {
+      dailyPlayAllBtn.addEventListener('click', () => playAllDailySongs());
+    }
+
     // 设置按钮
     const reloginBtn = overlay.querySelector('#nma-relogin-btn');
     if (reloginBtn) {
@@ -294,6 +325,8 @@
     } else if (view === 'search') {
       const input = overlay.querySelector('#nma-search-input');
       if (input) setTimeout(() => input.focus(), 100);
+    } else if (view === 'daily') {
+      loadDailyDiscovery(false);
     } else if (view === 'settings') {
       renderSettings();
     }
@@ -714,6 +747,322 @@
 
   function renderLikedList() {} // 占位
   function renderCloudList() {}  // 占位
+
+  // ============================================================
+  // 「今日私选」(2026-10-21) —— AI 每日荐歌
+  //
+  // 【一条播放链路原则】这里不造第二个播放器:
+  //   - 点单曲   → 复用 playSingleSong() → playTemporaryNeteaseTrack()
+  //   - 播放全部 → 复用「导入一起听」那套: 建一个专属歌单 + 塞进 musicState.playlist
+  //     然后走 playSong()。这样「下一首」按钮、歌词、进度条全是现成的。
+  // ============================================================
+
+  const DAILY_PLAYLIST_ID = 'daily_discovery';
+
+  function resolveDailyChatId() {
+    if (global.MusicDailyDiscovery && typeof global.MusicDailyDiscovery.resolveChatId === 'function') {
+      return global.MusicDailyDiscovery.resolveChatId();
+    }
+    const st = global.state;
+    if (!st) return null;
+    if (st.activeChatId && st.chats && st.chats[st.activeChatId]) return st.activeChatId;
+    if (st.chats) {
+      const ids = Object.keys(st.chats);
+      if (ids.length === 1) return ids[0];
+    }
+    return null;
+  }
+
+  /** 最近一张非空的日推卡 —— 刷新失败时兜底 (教程 Ch18) */
+  async function findLatestDailyCard(chatId) {
+    const dbi = global.db;
+    if (!dbi || !dbi.dailyDiscovery) return null;
+    try {
+      const cards = await dbi.dailyDiscovery.where('chatId').equals(chatId).toArray();
+      cards.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      return cards.find((c) => c.songs && c.songs.length) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function loadDailyDiscovery(refresh) {
+    const overlay = document.getElementById('netease-music-app-overlay');
+    if (!overlay) return;
+    const listEl = overlay.querySelector('#nmd-list');
+    const MD = global.MusicDailyDiscovery;
+    if (!MD) {
+      if (listEl) listEl.innerHTML = '<div class="nma-empty"><div class="nma-empty-text">今日私选模块没加载</div></div>';
+      return;
+    }
+    if (state.dailyLoading) return;
+    state.dailyLoading = true;
+
+    const chatId = resolveDailyChatId();
+    if (!chatId) {
+      state.dailyLoading = false;
+      if (listEl) listEl.innerHTML = '<div class="nma-empty"><div class="nma-empty-text">没找到角色, 先开个聊天再来</div></div>';
+      return;
+    }
+    state.dailyChatId = chatId;
+
+    const refreshBtn = overlay.querySelector('#nmd-refresh-btn');
+    const playAllBtn = overlay.querySelector('#nmd-playall-btn');
+    if (refreshBtn) refreshBtn.disabled = true;
+    if (playAllBtn) playAllBtn.disabled = true;
+
+    // 【别让用户干等】秒数在跑, 说明它还活着; 超时会自己变成一行报错 + 重试按钮
+    const startedAt = Date.now();
+    const baseText = refresh ? '正在重新挑歌, 稍等一下...' : '正在挑今天的歌...';
+    let tickTimer = null;
+    if (listEl) {
+      listEl.innerHTML = `<div class="nma-loading-text">${baseText} <span id="nmd-elapsed">0</span>s</div>`;
+      const elapsedEl = () => overlay.querySelector('#nmd-elapsed');
+      tickTimer = setInterval(() => {
+        const el = elapsedEl();
+        if (!el || !el.isConnected) { clearInterval(tickTimer); tickTimer = null; return; }
+        el.textContent = String(Math.floor((Date.now() - startedAt) / 1000));
+      }, 1000);
+    }
+
+    try {
+      const card = await MD.ensureTodayCard(chatId, { refresh: !!refresh });
+      state.dailyCard = card;
+      renderDailyDiscovery();
+    } catch (e) {
+      console.error('[NMA] loadDailyDiscovery failed:', e);
+      const fallback = await findLatestDailyCard(chatId);
+      if (fallback) {
+        state.dailyCard = fallback;
+        renderDailyDiscovery('今天没生成出来, 先看最近一批');
+      } else {
+        const msg = (e && e.message) || String(e);
+        renderDailyDiscovery(null, '生成失败: ' + msg);
+        if (listEl) {
+          const retry = document.createElement('button');
+          retry.className = 'nmd-btn nmd-daily-retry';
+          retry.type = 'button';
+          retry.textContent = '再试一次';
+          retry.addEventListener('click', () => { loadDailyDiscovery(true); });
+          listEl.appendChild(retry);
+        }
+      }
+    } finally {
+      if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+      state.dailyLoading = false;
+      if (refreshBtn) refreshBtn.disabled = false;
+      if (playAllBtn) playAllBtn.disabled = false;
+    }
+  }
+
+  function renderDailyDiscovery(warning, errorText) {
+    const overlay = document.getElementById('netease-music-app-overlay');
+    if (!overlay) return;
+    const listEl = overlay.querySelector('#nmd-list');
+    const titleEl = overlay.querySelector('#nmd-title');
+    const subEl = overlay.querySelector('#nmd-sub');
+    const noteEl = overlay.querySelector('#nmd-note');
+    const playAllBtn = overlay.querySelector('#nmd-playall-btn');
+    const card = state.dailyCard;
+
+    if (!card) {
+      if (titleEl) titleEl.textContent = '今日私选';
+      if (subEl) subEl.textContent = errorText || '';
+      if (noteEl) noteEl.style.display = 'none';
+      if (playAllBtn) playAllBtn.style.display = 'none';
+      if (listEl) {
+        listEl.innerHTML = `<div class="nma-empty"><div class="nma-empty-text">${escapeHtml(errorText || '今天还没挑好')}</div></div>`;
+      }
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = `今日私选 · ${card.date}`;
+    if (subEl) subEl.textContent = warning ? warning : (card.subtitle || '');
+    if (noteEl) {
+      if (card.note) { noteEl.textContent = card.note; noteEl.style.display = ''; }
+      else noteEl.style.display = 'none';
+    }
+    if (playAllBtn) playAllBtn.style.display = '';
+
+    if (!listEl) return;
+    if (!card.songs || !card.songs.length) {
+      listEl.innerHTML = '<div class="nma-empty"><div class="nma-empty-text">今天没挑到歌</div></div>';
+      return;
+    }
+
+    listEl.innerHTML = card.songs.map((s, i) => `
+      <div class="nmd-song" data-song-id="${escapeHtml(s.id)}">
+        <div class="nmd-idx">${i + 1}</div>
+        ${s.cover
+          ? `<img class="nmd-cover" src="${escapeHtml(s.cover)}" loading="lazy" decoding="async" alt="" />`
+          : '<div class="nmd-cover"></div>'}
+        <div class="nmd-info">
+          <div class="nmd-name">${escapeHtml(s.name)}<span class="nmd-tag">${escapeHtml(s.tag || '旁白')}</span></div>
+          <div class="nmd-artist">${escapeHtml(s.artist)}${s.album ? ' · ' + escapeHtml(s.album) : ''}</div>
+          <div class="nmd-reason">${escapeHtml(s.reason || '')}</div>
+        </div>
+        <div class="nmd-actions">
+          <button class="nmd-play" data-play-id="${escapeHtml(s.id)}" type="button">▶</button>
+          <button class="nmd-fb-btn" data-fb-id="${escapeHtml(s.id)}" type="button" title="反馈">⋯</button>
+        </div>
+      </div>
+      <div class="nmd-feedback" data-fb-row="${escapeHtml(s.id)}" style="display:none;"></div>
+    `).join('');
+
+    listEl.querySelectorAll('.nmd-play').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        playDailySong(btn.dataset.playId);
+      });
+    });
+
+    listEl.querySelectorAll('.nmd-fb-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleDailyFeedback(btn.dataset.fbId);
+      });
+    });
+  }
+
+  function findDailySong(songId) {
+    const card = state.dailyCard;
+    if (!card || !card.songs) return null;
+    return card.songs.find((s) => String(s.id) === String(songId)) || null;
+  }
+
+  /** 播放单曲 —— 复用已有的单曲播放链路 */
+  async function playDailySong(songId) {
+    const song = findDailySong(songId);
+    if (!song) {
+      showNmaToast('找不到这首歌', 'error');
+      return;
+    }
+    await playSingleSong(song.id);
+  }
+
+  /** 反馈菜单 —— 展开一排小 chip, 同一时间只开一个 (移动端不挤) */
+  function toggleDailyFeedback(songId) {
+    const overlay = document.getElementById('netease-music-app-overlay');
+    if (!overlay) return;
+    const rows = overlay.querySelectorAll('.nmd-feedback');
+    let row = null;
+    rows.forEach((r) => { if (r.dataset.fbRow === String(songId)) row = r; });
+    if (!row) return;
+
+    const wasOpen = row.style.display !== 'none';
+    rows.forEach((r) => { r.style.display = 'none'; });
+    if (wasOpen) return;
+
+    const MD = global.MusicDailyDiscovery;
+    const labels = MD && typeof MD.feedbackLabels === 'function' ? MD.feedbackLabels() : {};
+    const actions = ['like', 'heard', 'more_like_this', 'less_like_this', 'dislike'];
+    row.innerHTML = actions
+      .map((a) => `<button class="nmd-chip" data-fb-action="${a}" type="button">${escapeHtml(labels[a] || a)}</button>`)
+      .join('');
+    row.style.display = '';
+
+    row.querySelectorAll('.nmd-chip').forEach((chip) => {
+      chip.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const action = chip.dataset.fbAction;
+        const song = findDailySong(songId);
+        let ok = false;
+        try {
+          ok = await MD.submitFeedback(state.dailyChatId, songId, action, song ? song.artist : '');
+        } catch (e) {
+          console.error('[NMA] submitFeedback failed:', e);
+        }
+        if (ok) {
+          showNmaToast(`记下了: ${labels[action] || action} —— 下次会照着来`);
+          row.style.display = 'none';
+        } else {
+          showNmaToast('反馈没记上', 'error');
+        }
+      });
+    });
+  }
+
+  /** 播放全部 —— 建一个专属歌单塞进队列, 然后走现成的 playSong */
+  async function playAllDailySongs() {
+    const overlay = document.getElementById('netease-music-app-overlay');
+    const card = state.dailyCard;
+    if (!card || !card.songs || !card.songs.length) {
+      showNmaToast('今天还没有歌', 'error');
+      return;
+    }
+    const musicState = global.musicState;
+    if (!musicState || typeof global.playSong !== 'function') {
+      showNmaToast('一起听播放器还没准备好', 'error');
+      return;
+    }
+
+    const btn = overlay ? overlay.querySelector('#nmd-playall-btn') : null;
+    const oldText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '准备中...'; }
+
+    try {
+      // 1. 准备一个固定 id 的歌单 (每天覆盖, 不会越攒越多)
+      if (!Array.isArray(musicState.playlists)) musicState.playlists = [];
+      let pl = musicState.playlists.find((p) => p.id === DAILY_PLAYLIST_ID);
+      if (!pl) {
+        pl = { id: DAILY_PLAYLIST_ID, name: '今日私选', createdAt: Date.now(), source: 'daily_discovery' };
+        musicState.playlists.push(pl);
+      } else {
+        pl.name = '今日私选';
+      }
+      musicState.activePlaylistId = DAILY_PLAYLIST_ID;
+
+      // 2. 把上一批今日私选的条目清掉
+      if (!Array.isArray(musicState.playlist)) musicState.playlist = [];
+      musicState.playlist = musicState.playlist.filter((t) => (t.playlistId || 'default') !== DAILY_PLAYLIST_ID);
+
+      // 3. 塞今天的歌
+      //    ⚠️ 这里【故意不用】addOrUpdateMusicTrack —— 它按 songId 全局去重,
+      //    已经在别的歌单里的歌会被"合并"回原歌单, 导致今日私选歌单里少歌。
+      const firstIndex = musicState.playlist.length;
+      card.songs.forEach((song) => {
+        const track = buildNeteasePlayerTrack(song, DAILY_PLAYLIST_ID);
+        if (track) musicState.playlist.push(track);
+      });
+
+      if (typeof global.saveGlobalPlaylist === 'function') await global.saveGlobalPlaylist();
+      if (typeof global.updatePlaylistUI === 'function') global.updatePlaylistUI();
+
+      // 4. 确保一起听会话是开着的 (播放器要绑当前聊天)
+      const chatId = state.dailyChatId || resolveDailyChatId();
+
+      // v60 拆表之后, chat.history 只在"消息窗口加载过"的聊天上才是数组
+      // (而且 push 被 message-store 包过, 会自动写 messages 表)。
+      // 窗口没加载过的聊天上它是 undefined → playSong 里的
+      // addMusicActionSystemMessage 一 push 就抛, 歌根本放不出来。
+      // 这里先让 messageStore 把窗口挂上, 保证播放链路不断。
+      if (chatId && global.messageStore && typeof global.messageStore.loadRecentMessages === 'function') {
+        try {
+          await global.messageStore.loadRecentMessages(chatId, 50);
+        } catch (e) {
+          console.warn('[NMA] loadRecentMessages failed:', e);
+        }
+      }
+
+      if (chatId && (!musicState.isActive || musicState.activeChatId !== chatId)) {
+        if (typeof global.startListenTogetherSession === 'function') {
+          global.startListenTogetherSession(chatId, false);
+        }
+      }
+
+      // 5. 打开全屏播放器并开播
+      const playerOverlay = document.getElementById('music-player-overlay');
+      if (playerOverlay) playerOverlay.classList.add('visible');
+      await global.playSong(firstIndex);
+
+      showNmaToast(`开始播放今天这 ${card.songs.length} 首`);
+    } catch (e) {
+      console.error('[NMA] playAllDailySongs failed:', e);
+      showNmaToast('播放全部失败: ' + (e.message || e), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = oldText || '播放全部'; }
+    }
+  }
 
   // ====== 搜索 ======
   // 【2026-07-04 防卡死】doSearch 加状态管理 + 串行执行（防止用户狂点搜索按钮触发并发 fetch）

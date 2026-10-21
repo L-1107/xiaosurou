@@ -138,6 +138,7 @@ body.cinema-room-active {
 }
 .cinema-room.kb-open .cinema-source-sheet,
 .cinema-room.kb-open .cinema-settings-sheet,
+.cinema-room.kb-open .cinema-plot-sheet,
 .cinema-room.kb-open .cinema-episode-sheet {
   background: #160f0c;
 }
@@ -173,6 +174,7 @@ body.cinema-room-active {
 }
 .cinema-room.perf-low .cinema-source-sheet,
 .cinema-room.perf-low .cinema-settings-sheet,
+.cinema-room.perf-low .cinema-plot-sheet,
 .cinema-room.perf-low .cinema-episode-sheet {
   background: #160f0c;
 }
@@ -193,35 +195,10 @@ body.cinema-room-active {
 .cinema-room-drawer:not(.open),
 .cinema-source-sheet:not(.open),
 .cinema-settings-sheet:not(.open),
+.cinema-plot-sheet:not(.open),
 .cinema-episode-sheet:not(.open) {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-}
-
-/* --------------------------------------------------------------------------
-   隐藏旧影院入口 (2026-10-09, 2026-10-09 再加一道)
-
-   同一个 cinema-room.js, 装在 3,552 节点的宿主里 → 点输入框主线程冻 4~5 秒;
-   装在 187 节点的 cinema-sandbox/index.html(iframe)里 → 完全不卡。
-   所以正式入口只剩沙盒那一个。
-
-   ⚠️ 这里只【隐藏】不删按钮, 随时把 display 去掉就能恢复。
-      模块文件一行没动 —— 两条入口用的是同一份代码。
-
-   ⚠️⚠️ 这条 CSS 规则【不够】, index.html 里还额外写了 inline
-      style="display: none !important"。原因 (2026-10-09 实测踩到):
-      角色的 chat.settings.customCss 会被 applyScopedCss() 原样注入
-      <style id="custom-bubble-style">, 而它只给 .message-bubble 加
-      #chat-messages 前缀, 其余选择器【原样全页生效】。
-      某次给某个角色修影院时写进去的 CSS 就一直压着这条规则,
-      导致同一个 PWA 里「只有那个角色」显示两个影院入口, 换个角色就正常。
-
-      优先级: inline + !important > stylesheet 里的 !important。
-      所以 inline 那道谁都盖不过 —— customCss / globalCss 都白搭。
-      恢复办法: 把 index.html 里那个 style="display: none !important" 删掉。
-   -------------------------------------------------------------------------- */
-#open-cinema-room-btn {
-  display: none !important;
 }
 
 /* 不支持 webp 的老 WebView 用 jpg 兜底 */
@@ -637,16 +614,6 @@ body.cinema-room-active {
 
 .cinema-room-icon-btn:active span {
   transform: scale(.96);
-}
-
-.cinema-stop-btn {
-  color: #ffcbb8;
-  border-color: rgba(214, 130, 106, .42);
-  background: rgba(74, 34, 28, .62);
-}
-
-.cinema-stop-btn[hidden] {
-  display: none;
 }
 
 .cinema-chat-hbtn {
@@ -1410,25 +1377,50 @@ body.cinema-room-active {
 }
 
 /* --------------------------------------------------------------------------
-   剧情记忆面板 (由 cinema-live.js 创建并挂进聊天面板内部)
-   原来是 position:absolute + bottom:12px 挂在房间底部, 正好压住聊天输入框
-   (2026-10-04 用户反馈)。现在改成聊天面板里的一条可展开区域:
-     收起 = 一行标题, 不占地方; 展开 = 吃掉最多 45% 高度, 消息列表自动让位。
+   Gemini 剧情记忆页 (2026-10-16 从聊天面板里拆出来)
+
+   用户原话: "又要显示剧情, 又要显示聊天记录, 想改点剧情总结, 键盘一弹看都不怎么
+   看的见…把这个剧情记忆单独拆个页面出来, 不要和观剧聊天吐槽框混在一起"
+
+   原来是聊天面板顶部一条折叠条 (收起=一行标题, 展开=吃 45% 高度, 消息列表让位),
+   手机屏上跟聊天记录互相挤, 一弹键盘正文基本看不见。
+   现在改成: 顶栏「记忆」按钮 → 底部上滑独立页 (跟设置/片单同一套手感)。
    -------------------------------------------------------------------------- */
 
+.cinema-plot-sheet {
+  position: absolute;
+  z-index: 99995;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  color: #f0e3d4;
+  background: rgba(22, 15, 12, .97);
+  border-top: 1px solid rgba(216, 168, 116, .26);
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -14px 44px rgba(0, 0, 0, .7);
+  transform: translateY(100%);
+  transition: transform .28s cubic-bezier(.22, .61, .36, 1);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+}
+
+.cinema-plot-sheet.open {
+  transform: translateY(0);
+}
+
+/* 正文容器: cinema-live.js 把 #cinema-plot-panel 插在这个 head 后面 */
 .cinema-plot-panel {
   position: relative;
-  flex: 0 0 auto;
-  max-height: 45%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   color: #e8dccd;
   font-size: 12px;
   line-height: 1.6;
-  background: rgba(0, 0, 0, .26);
-  border-top: 1px solid rgba(216, 168, 116, .18);
-  border-bottom: 1px solid rgba(216, 168, 116, .18);
-  cursor: pointer;
+  cursor: default;
 }
 
 .cinema-plot-panel[style*="display: none"] {
@@ -1439,7 +1431,7 @@ body.cinema-room-active {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 2px 14px 6px;
   font-weight: 700;
   color: #f0dcc4;
 }
@@ -1451,12 +1443,17 @@ body.cinema-room-active {
 }
 
 .cinema-plot-body {
-  padding: 0 10px 10px;
-  max-height: 54vh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  cursor: default;
+  padding: 0 14px 10px;
 }
+
+/* --------------------------------------------------------------------------
+   旧样式说明 (已作废, 留着免得下次有人照着改回去):
+     · max-height: 45% / max-height: 54vh 是"聊天面板里那条折叠条"的尺寸,
+       现在整页自己滚, 正文不该再限高 (限了就白占地方还多一层滚动条)。
+     · cursor: pointer + 点空白处折叠是折叠条时代的交互, 现在点空白不该有副作用。
+     · 半透明黑底 + 上下描边是它在聊天面板里做"区分隔条"用的,
+       现在独立页有自己的底色, 这层画蛇添足。
+   -------------------------------------------------------------------------- */
 
 .cinema-plot-label {
   margin: 8px 0 4px;
@@ -1570,12 +1567,14 @@ body.cinema-room-active {
 }
 
 /* --------------------------------------------------------------------------
-   「生成观影记忆」按钮区 (2026-10-10)
+   「导出到长期记忆」按钮区
 
-   退出流程改成手动生成后, 这个按钮成了整条链路的入口 ——
-   用户看完戏点一下就能把这次的记忆写进长期记忆, 不用赌退出那一次成功。
-   所以它要比旁边的「编辑」按钮更显眼, 而且【禁用态必须看得出是禁用】,
-   否则「没内容可生成」和「点不动」在手机上很难分辨。
+   2026-10-10 起这里是「生成观影记忆」, 2026-10-19 换成了「导出到长期记忆」。
+   类名 .cinema-plot-finalize 沿用没改 —— 它的语义没变(都是那条唯一的主操作按钮),
+   换类名只会多出一堆要跟着改的选择器, 对渲染没有任何好处。
+
+   退出精炼取消后, 中间产物就是攒着的那些条目, 所以这个按钮的语义变成
+   "把它们搬进长期记忆": 写成功才清账, 失败一行都不删, 用户可以再点。
    -------------------------------------------------------------------------- */
 
 .cinema-plot-finalize {

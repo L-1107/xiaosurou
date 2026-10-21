@@ -166,17 +166,276 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.32 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.32</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li><strong>长剧也能「精炼前情提要」了</strong> —— 以前只有短剧有这个按钮，长剧那边只有一句"上次看到哪"。现在长剧的记忆页多了一块<strong>「整部剧情提要」</strong>，攒下几段之后点一下「📖 精炼剧情提要」，就能把看过的段落压成一份完整的剧情提要。</li>
+          <li>这份提要<strong>下次进影院会自动带上</strong> —— 模型一进来就知道这部电影前面讲了什么，而不只是"上次看到哪"。原来的「上次看到哪」照旧，两者各管各的、互不覆盖。</li>
+          <li>删也分开了：长剧那块现在有<strong>「删除进度」和「删除提要」</strong>两个按钮，删一个不会连坐把另一个也删掉。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">调整</div>
+        <ul class="item-list">
+          <li><strong>短剧攒够 10 集才自动整理提要，改成 5 集</strong> —— 你说"10集才自动总结久了点，5集精炼差不多"。手动那个「精炼前情提要」按钮还是随时能点，攒一集就能压。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.31 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.31</span>
+        <span class="version-date">2026-10-21</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」一直报"WebSocket 连接错误"，点了无数次都连不上</strong> —— 你在记忆页点精炼，顶部飘一句看不懂的英文错误。</li>
+          <li>根因是<strong>同一把 API Key 同时只允许一条 Gemini Live 连接</strong>：看剧那条一直挂着占着位置，精炼要另外单开一条去问模型，刚握手就被服务端拒了（浏览器只给一句"WebSocket 连接错误"，看不到真实原因）。</li>
+          <li>修法：<strong>精炼的时候先把看剧那条断开腾位置</strong>，精炼完自动连回来（对话能接着聊，不用退房间重进）；这段时间也不许它偷偷自己重连。失败还会<strong>自动再试一次</strong>，报错也翻译成人话了。</li>
+          <li>另外补上一种以前漏掉的情况：<strong>看剧那条正在连接中</strong>的时候点精炼，也会先把它停掉 —— 这种情况以前同样连不上。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.30 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.30</span>
+        <span class="version-date">2026-10-21</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「今日私选」一直卡在"正在挑今天的歌"没动静</strong> —— 你昨天打开发现的, 选歌进度一直转, 歌单就是不出来。</li>
+          <li>根因是<strong>三处"等网络"的地方</strong>: ① 找候选歌的时候, 8 个搜索、3 个歌单、5 位歌手是一个一个排队等的, 手机上慢一点就拖成好几分钟; ② AI 那趟请求在"用主代理"这条路上<strong>漏了超时设置</strong>, 网络一挂就永远不返回 (同一个函数在项目别处都传了, 只有这一处漏); ③ 批量验音源的兜底逻辑写错了 —— 网易云明明回了"这首歌没版权", 程序却当成"没回", 于是又一轮轮单独去问, 越问越慢。</li>
+          <li>修法: 找歌、验音源全部改成<strong>同时开跑</strong>; 补上 AI 请求的超时; 兜底只对"上游压根没提过的歌"才单独再问, 而且也是同时问。</li>
+          <li>另外加了个<strong>兜底上限</strong>: 整轮挑歌最多等 90 秒, 到点一定给你一个明确的提示 + 一个「再试一次」按钮, <strong>不会再无限转圈</strong>。挑歌的时候还会显示已经等了几秒, 你能看出它是在动还是真卡死了。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.29 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.29</span>
+        <span class="version-date">2026-10-21</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li><strong>「今日私选」—— AI 每天给你挑一首歌单</strong>。「一起听歌」那个 App 里多了一个「今日私选」页签, 打开就是今天给你挑的歌: 歌名、歌手、一句推荐理由、一个小标签, 底下能点「播放全部」整张听, 也能一首一首点。</li>
+          <li><strong>打开 App 就会提醒你</strong>。每天第一次打开时它自己把歌挑好, 然后弹一条通知 + 应用内提示, 点通知直接跳到「今日私选」。同一天只生成一次, 不会反复消耗接口。</li>
+          <li><strong>专门不推你红心里的歌</strong>。你自己加进红心的那些, 一首都不会出现在日推里 —— 你说听腻了, 所以它只往外找。红心只用来"判断方向", 不用来"选歌"。</li>
+          <li><strong>每首都能给反馈</strong>: 喜欢 / 听过了 / 多推这种 / 少推这种 / 不喜欢。这五个不是摆设 —— 点了真的会改变明天的推荐: 「多推这种」的歌手下次优先, 「少推这种」降权, 「不喜欢」这位歌手的歌直接不出现。</li>
+          <li><strong>AI 只负责排序和写理由, 不负责编歌</strong>。所有歌都是程序先从网易云真找出来、再逐个验过"真的能播"才进候选池; AI 只能在这个名单里挑, 编出来的歌名和 ID 一律丢掉。它还会用你角色的语气写推荐理由, 所以不同 AI 挑出来的味道不一样。</li>
+          <li><strong>不会给你一张空卡</strong>。AI 那边超时或抽风时, 程序会自己按口味排序兜底出一张 —— 顶多理由写得机械一点, 歌还是真的能播。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li>网易云那层接了几个原来白名单里就有、但前端一个都没用的接口（每日推荐、推荐新音乐、推荐歌单、排行榜、歌手的歌), 还加了<strong>批量</strong>查歌曲详情和批量验音源 —— 以前一首一首地拉, 现在一次一批。</li>
+          <li>「一起听歌」的歌单栏里会多出一个「今日私选」。点「播放全部」就是把今天这批歌塞进播放器队列, 跟平时导歌单一模一样, <strong>不影响你自己整理的歌单</strong>。</li>
+          <li>新增两张本地表存日推卡和反馈记录, 不上传、不外传, 全在本机。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.28 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.28</span>
+        <span class="version-date">2026-10-21</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>图片传不上去</strong>（你昨天搞装修遇到的，弹"存不下 / 影片没能存进本地数据库：DatabaseClosedError Database has been closed"）—— 人物图、影片、道具<strong>全都传不了</strong>，整页刷新之前什么都存不进去。</li>
+          <li>根因不复杂：有个"数据库里少一张表就现场补建"的兜底逻辑，它要先把库<strong>关掉</strong>再重新打开。而现在一开房就有<strong>三处</strong>兜底同时在跑（人物表 / 前情提要表 / 单集剧情表），后一个把前一个正在进行的"重新打开"给<strong>取消了</strong>。库就卡在一个半死不活的状态里，之后任何写入都报"库已关闭"。</li>
+          <li><strong>为什么昨天才炸</strong>：单集剧情那张表是前天才加的，加之前只有一处兜底，撞不起来；加完变成三处，一开房就必踩。</li>
+          <li>修法是两层：<strong>① 小页面把三张表都自己声明齐</strong>，这样根本不会走那条兜底；<strong>② 兜底本身也修</strong> —— 关门时不再"永久关闭自动重开"，三处兜底改成排队，一个一个来，不再互相踩。</li>
+          <li>这个坑我<strong>在本地完整复现过</strong>：旧写法跑一遍，报错跟你截图上一模一样；新写法跑一遍，三处兜底全部正常、库状态健康、传图传片全部成功。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.27 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.27</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」说库里没有攒下的单集剧情</strong>（你实测：明明看了三集，记忆摆那了，点精炼却报"库里还没有攒下的单集剧情"）—— 根因是<strong>面板和精炼读的不是同一个地方</strong>：面板上那几集读的是<strong>内存</strong>，精炼读的是<strong>数据库</strong>。两边只要有一边没写成，就会出现"面板上有、库里没有"。</li>
+          <li>那"没写成"是怎么发生的？<strong>落库失败是悄无声息的</strong>——以前只往控制台写一行日志，手机上根本看不见；而且那个建表的自愈逻辑<strong>失败一次就把失败结果永久记住了</strong>，那一页里之后所有写入和读取全部作废。现在失败原因<strong>直接写在记忆页上</strong>（"第几集没存进库 + 什么原因"），失败也不再被永久记住，下次还能重试。</li>
+          <li>还有一处：<strong>草稿恢复出来的几集只进了内存、没进库</strong>。页面刷新后从草稿里捡回来，记忆页上看得见，库里却是空的。现在捡回来就当场补写进库。</li>
+          <li>顺带把<strong>精炼的取材改成"库 ∪ 内存"</strong>：库里没有而这次看到的，一律算进素材，并把缺的顺手补写进库。也就是说<strong>只要面板上看得见，精炼就一定跑得起来</strong>，不会再出现"明明有却说没有"。</li>
+          <li>最底下那层也补了：<strong>小页面自己建的数据库</strong>以前只声明到第 65 版，后面两张新表全靠运行时临时补建（补建失败就全废）。现在<strong>直接声明到第 69 版</strong>，手机上已有的库下次打开自动升上来，不用再赌那一次临时补建。</li>
+          <li>另外，小页面加载那几个模块时<strong>漏了版本号</strong>，可能一直吃浏览器缓存里的旧副本。现在跟主页面一样都带上版本号了。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.26 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.26</span>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li><strong>旧影院入口彻底删掉</strong>（之前只是藏起来）—— 那个"影院"按钮以前是<strong>藏</strong>在旧聊天页面上的，三道锁：HTML 里一道 <code>display:none !important</code>、样式表里一道、JS 每次绑定再藏一道。但按钮和它的点击绑定<strong>都还在</strong>，看着像没了、其实一直留着。现在连按钮带绑定一起清干净了。</li>
+          <li>删它的原因：它走的是"影院直接装在这个页面里"那条老路 —— 同一个影院代码装在三千多个节点的页面里，点输入框会卡四五秒；装进那个干净的独立小页面里就一点不卡。<strong>现在正式入口只剩小页面那一个</strong>，老按钮没用了。</li>
+          <li>顺带说明：<strong>影院本身一点没动</strong> —— 房间、剧情记忆、精炼前情提要，全是原来那套，只是入口换了个地方。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.25 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.25</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」点了没动静</strong>（真根因，跟上一版说的不是一回事）—— 用户实测："我怎么点精炼前情还是没动静"。根因在<strong>反馈画不出来</strong>：进度和结果要靠重绘记忆页那一栏才能看见，而重绘被两个老标志卡着（<code>watchSession.closed</code> 和 <code>S._leaving</code>）。这两个标志<strong>只有退出房间时才置真，只有重新连上 Gemini 时才复位</strong>——而"看完剧 → 退出 → 重进影院 → 点精炼"是正常流程，这条路上没人复位它们，于是每一条反馈都画不出来；而"没填 key / 库里没素材 / 正在精炼"那几条提前返回的分支，连最后一次重绘都没有，等于一片死寂。</li>
+          <li>这里最气人的地方是：<strong>精炼其实跑完了</strong>（模型调了、提要也存进库里了），只是界面不刷新，所以看着像没动静。现在改判"房间还在不在页面上"，退出后重进照样能立刻看到反馈。</li>
+          <li>另外，<strong>重绘失败不许再把精炼本身带崩</strong>——以前重绘一抛异常，后面所有步骤都不执行，表现出来又是"点了没动静"。现在重绘的异常被单独兜住。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li>精炼中的提示改成"<strong>通常十几秒，最多一分钟</strong>"，免得等得心里没底。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.24 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.24</span>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li><strong>撤回「独立页通话（新）」这个入口</strong> —— 视频通话准备页上多出来的那个按钮整个撤掉了，回到只有老入口（准备页 → 视频接通）的状态。</li>
+          <li>撤掉的原因是<strong>实测下来它没解决问题</strong>：独立页跑了不到三分钟照样烫得不行。整份宿主页面都已经隔离出去了还是烫 —— 这就说明<strong>发热根本不在页面的 DOM 上</strong>（之前把其它 97 个屏、544 个弹窗全从 DOM 里摘掉也照样烫），真凶是 Live2D 渲染（3 倍分辨率 + 抗锯齿 + 60 帧满帧）、摄像头解码、麦克风识别这三样，跟页面结构没关系。</li>
+          <li>顺带说明一下：<strong>视频通话本身一点没动</strong> —— 通话模块的代码一行都没改，摄像头、麦克风、Live2D 角色、挂断落库、挂断闪退的修复都还是原来那套，只是不再有那个独立页入口而已。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.23 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.23</span>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」改成单独调一次观影模型</strong> —— 用户原话："精炼发去聊天框干嘛？精炼的是前情提要，要留在记忆页里的，而且需要单独调一次观影模型哦，一般都是看完剧没连接的时候精炼"。原来精炼是借<strong>正在连着的</strong>那个会话去问的，所以"看完剧、Gemini 已经断开"这个最常见的时机反而点不动。现在按下去会<strong>临时开一次观影模型的一次性会话</strong>：同一个模型、同一套人设、同一把密钥，只喂这一条任务指令，拿到提要立刻断开（不留野连接）。</li>
+          <li>提要的指令开头统一成 <strong>【【后台任务】】</strong> —— 观影模型的人设里就认这个前缀（遇到就只输出正文，不寒暄、不提问、不加评论）。所以手动精炼和后台自动合并出来的提要，语气是一致的，也不会跑题去聊剧情。</li>
+          <li>精炼的进度和结果<strong>只留在记忆页</strong>，不再往聊天框发一条了（聊天框开着的时候没人看那一条）。</li>
+          <li>失败时把<strong>真实原因</strong>写出来（比如"WebSocket 连接错误"、"模型没回话"），不用自己猜是哪一步断了；旧提要照旧保持不变，可以再点一次。</li>
+          <li>按钮旁边的提示也改了：不再写"Gemini 没连上，精炼不了"（现在照样能精炼），改成"<strong>会单独调一次观影模型来写 —— 看完剧、Gemini 断开了照样能精炼</strong>"。只有真的没填 API Key 才会提示去填。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.22 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.22</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」按钮</strong>（剧情记忆页 · 短剧那一栏）—— 以前前情提要要攒够 10 集才在后台自动整理一份，所以看完 4 集就退出的话，这部剧在观影模型眼里还是零认知，它只能瞎猜（用户原话"我刚才看了四集，因为没有前期提要，观影模型就搁那打胡乱说"）。现在随时能自己点一下，把看过的几集压成一份提要，下次进影院自动带上。</li>
+          <li>精炼<strong>不删单集剧情</strong> —— 提要只是"给模型看的压缩版"，库里那份逐集记录原样保留，导出也还是从库里那份走。两件事互相独立。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「精炼前情提要」点了没动静</strong> —— 进度和结果原来全发到<strong>聊天框</strong>里，而记忆页开着的时候聊天框是收着的，等于把反馈发到了用户看不见的地方；按钮还会在某些情况下变灰，灰了就是点了真没反应。现在进度和结果直接显示在记忆页那一栏（按钮下面），按钮只在真在精炼时才灰 —— 点了一定有反馈。没连上 Gemini 时按钮旁边也会直接写明，不用点了才知道。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li>导出区加了一句顺序提醒：<strong>先精炼、再导出</strong>。因为导出成功会把库里的各集剧情清账删掉，删了就没素材给精炼用了。面板上两个按钮的先后就是按这个排的。</li>
+          <li>精炼只写一份新提要，<strong>旧提要保留到新提要写成功为止</strong>；模型要是只写出三个字（以前退出时那次精炼就是这么被截断的），当没生成，旧提要原封不动，提示可以再点一次。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.21 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.21</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>顶栏「退出」点了没反应</strong> —— 用户实测：导出剧情记忆后想退出回聊天界面，点顶栏「退出」一点动静都没有，而且<strong>也不报任何错</strong>。根因：v4.20 重构时把 <code>close()</code> 这个函数误删了，但两处引用还在（按钮的 click 绑定和 <code>CinemaRoom.close</code> 的导出），于是 <code>close</code> 这个名字落到了浏览器的全局 <code>window.close</code> 上 —— 点下去等于去调浏览器的关窗口接口，手机上对非脚本打开的标签页是静默无效的。因为全局同名函数一直都在，整个模块加载时也不抛错，所以特别难发现。现在补回来了：退出 = 落盘播放进度 + 收尾关房间，秒退。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li><strong>顶栏的「停止」按钮删掉了</strong> —— 播放视频时顶栏会变成 6 个按钮，最后一个被挤到下一排，整个视频区都被往下推。删掉之后顶栏固定 5 个（设置 / 记忆 / 聊天 / 片单 / 退出），一行放得下。功能上不吃亏：<strong>停发帧和停计时，播放器自带的暂停早就接上了</strong>（暂停时 Gemini 那边自动停发帧、冻结播放时长、停掉 5 分钟摘要定时器）；而「彻底把这一部卸下来」这件事，点片单里另一部就会做，想彻底不看了还有顶栏的「退出」。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.20 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.20</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li>剧情记忆改成<strong>每集当场落库</strong> —— 新增 Dexie 表 <code>cinemaEpMemories</code>（db v69）。短剧每看完一集、长剧每看够 5 分钟，就当场写一行进去。页面一关、闪退、息屏都不影响，以前那种"整场只有退出那一刻才落盘"的窗口没有了。</li>
+          <li>剧情记忆页新增<strong>「导出到长期记忆」</strong>按钮 —— 把攒着的这些条目写进长期记忆，写成功才清账；写失败一行都不删，可以再点。按批切成多条（每条 2000 字以内），一条上万字会把后面的检索和精炼都拖垮。</li>
+          <li>长剧每 5 分钟那一次改成<strong>一次出两份</strong>：一份「剧情进度」（滚动覆盖式，越滚越短，只喂回模型让下一段接得上），一份「本段剧情」（纯增量，只讲这一段新发生了什么，累积落库）。影片播完时会补记最后那不到 5 分钟的一段。</li>
+          <li>长剧也有跨场记忆了 —— 滚动进度会存下来，下次进影院自动带上（以前长剧退出就没有下一次了）。短剧的跨场提要改成每攒够 10 集在后台压一次，而且<strong>一条单集记忆都不删</strong>（旧的 20 集合并逻辑会把没合进去的全丢掉）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>退出时的精炼总结整个取消</strong>（用户实测：看 5 集短剧，每集剧情都总结得好好的，退出时那次精炼被截断成只剩三个字，而"非空即成功"的判定照样放行 —— 三个字写进长期记忆、标记成功、清掉那 5 条单集记忆，那几集真白看）。根因是那一次调用是整场唯一一次长上下文调用：提示词里塞着总纲 + 各集记忆 + 阶段摘要 + 最多 200 条聊天记录（约 100KB），模型首字延迟轻松超过"静默 2 秒就算说完"的判据，于是收走的就是开头那几个字。短剧单集总结的提示词小得多，所以很少中招 —— 这跟"每集都总结得好好的"的观察完全一致。现在退出不做任何生成，秒退。</li>
+          <li><strong>加了内容下限判据（80 字）</strong> —— 以前所有总结路径的判据都只有"非空"这一道门槛，截断成三个字也照样当成功落库。截断过的内容比没有更糟：没有 → 用户知道没记下来、会重试；截断的三个字 → 用户以为记下来了、不会再试。</li>
+          <li>导出后的跨场提要不再丢单集记忆；手动改过的条目会回写存储，导出时用的是你改过的内容。</li>
+          <li>localStorage 草稿保留（当双保险），但恢复时按集号去重 —— 库里那份会先进来，草稿再来一遍原本会变成"同集两条"。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">变化</div>
+        <ul class="item-list">
+          <li>退出房间不再弹框问"要不要现在生成观影记忆"，点一下直接走（数据已经落库，不需要拦）。相关两个弹框和它们的"防止把人关在房间里出不去"的兜底逻辑一起删掉了。</li>
+          <li>剧情记忆页里原来的「最终观影记忆」区块和「生成观影记忆」按钮换成了「导出到长期记忆」。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.19 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.19</span>
-        <span class="version-date">最新版本</span>
       </div>
 
       <div class="section">
         <div class="section-title new">新增</div>
         <ul class="item-list">
           <li>短剧「前情提要」— 之前短剧的单集剧情记忆和总纲全都只在内存里, 退出精炼成功后一律清空, 所以下次进影院时模型对这部剧是【零认知】(user 原话"我有时候时间比较零碎, 看个四集就会退出去…下次再进去看的时候, 观影模型就没了这个剧的前情提要, 然后他总结中间剧情的时候就会有点懵逼")。而且这不是只有下次有问题 —— 审计时发现总纲从来只喂给"20 集合并"和"退出精炼"两个后台任务, 整场观影期间模型压根没拿到过它。现在每部剧在 Dexie v68 新表 cinemaSeriesRecap 里存一份跨场底稿: 退出时跟观影记忆【同一次调用】一起生成 (客观剧情提要, 开头带【已看到第 N 集】, 限 1800 字), 进片时作为一个静默后台回合喂回模型 —— 走 sendUserText 这条通道, 绝不塞进系统提示词 (v4.13 刚因为往那儿塞长期记忆治好了"接话降智/雷霆语言")。剧情记忆面板里能看到这份提要, 也能手动删除 (user 明确要"最终由用户手动删除")。</li>
+          <li>新增通话诊断 (为排查挂断闪退) — 把挂断流程拆成若干步 (刚点挂断 / 释放画布后 / 关摄像头麦克风后 / 记录写库后 / 聊天写库后 / 切回界面后 / 全部完成), 每推进一步就落一次盘。万一崩在挂断途中, 下次打开时那个「崩溃恢复」提示会直接告诉你卡在哪一步, 而不是只知道"闪退了"。顺带记录是否发生过 WebGL 显存耗尽。iPhone PWA 装到主屏后没有 console, 这是唯一的复盘入口。只记数字和阶段名, 不含聊天内容。</li>
+        </ul>
+      </div>
+
+      <div class="section">
+        <div class="section-title optimize">优化</div>
+        <ul class="item-list">
+          <li>「Gemini 剧情记忆」从聊天框里拆成独立页面 — user 原话"那个Gemini剧情记忆弄在聊天对话框上, 又要显示剧情, 又要显示聊天记录, 想改点剧情总结, 键盘一弹看都不怎么看的见, 能不能上方设置那一排单独弄个按钮Gemini剧情记忆, 把这个剧情记忆单独拆个页面出来, 不要和观剧聊天吐槽框混在一起"。原来它是聊天面板顶部的一条折叠条(收起一行标题, 展开吃 45% 高度、聊天记录自动让位), 手机屏上两边互相挤, 一弹键盘正文基本看不见。现在: 顶栏加「记忆」按钮(紧挨设置, title 写全「Gemini 剧情记忆」)→ 底部上滑的独立页, 跟设置/片单同一套手感, 打开时自动收起聊天面板; 页面自带的「关闭」按钮退出。折叠条那套(点标题展开/收起、点空白处折叠)整个删掉, 进来永远是展开的完整正文。按钮标签用两字跟其他按钮齐平(停止/设置/聊天/片单/退出 都是两字), 四字会把这一行挤到换行。</li>
         </ul>
       </div>
 
@@ -185,6 +444,9 @@
         <ul class="item-list">
           <li>修复换短剧会把上一部剧的记忆混进新剧的前情提要 — 退出总结失败会存草稿, 下次进影院自动恢复, 而恢复之后如果用户选的是【另一部剧】, setSeries 只换了剧名却没清上一部剧攒下的单集记忆和总纲, 于是新剧攒记忆时混进旧剧剧情, 退出时那份被污染的提要会【永久写进新剧的那一行】。前情提要是按剧存的, 污染一旦写进去就固定下来了, 比以前更难察觉。修法: setSeries 里按 seriesKey 是否真的变了来判换剧 (⚠️ 每播一集都会调一次 setSeries, 按"调了没调"清会把连播的第一集记忆清空), 清之前先 saveDraft() 保住旧剧记忆, 不让那几集白看。</li>
           <li>修复前情提要的正文可能混进长期记忆 — 一次调用出两份后如果把整段直接存进长期记忆, 用户下次聊天会读到一整段剧情提要, 跟生活记忆混在一起。改为按【前情提要】标记拆开; 拆不出来(格式跑偏)就整段当观影记忆, 行为退回本次改动前, 绝不因为格式跑偏而丢掉真正的观影记忆。</li>
+          <li>修复短剧前情提要【只有第一次会生成, 之后就再也不更新】(user 实测: "第一次总结了前情提要…后面再怎么进进出出的看, 前情提要都不再总结了, 我都看到60集了还在44")。症状是观影记忆照常存、前情提要永远停在第一次那版, 且界面完全看不出哪里坏了 —— 因为写前情提要的函数在收到空内容时【第一行就返回】, 一条都没写, 也没任何提示。真凶: 第一版拆解只认死字符串 `【前情提要】` 且假定它一定在观影记忆后面。首次退出时指令里没有旧提要, 模型老实按格式输出所以正常; 从第二次起旧提要进了指令, 模型排版就变了(可能写成 `**前情提要**`、`前情提要：`, 也可能把两段写反), 拆解一律失败。修法分三层: ①拆解认得几种标题写法, 两段写反也能拆, 且标题必须独占一行才算(免得记忆正文里随口一句"我们上次说的前情提要…"被当成标题、把观影记忆拦腰砍断); ②拆分失败时补一次【只写前情提要】的专门调用(主路还是"一次调用出两份", 只在主路没产出时才多花一次, 宁可多花一次也不能让功能静悄悄停摆); ③失败时补了日志, 下次再犯控制台会直接写明原因。</li>
+          <li>修复 Gemini Live【连了断了连, 最后彻底连不上】+【看完一集没总结起, 重看一遍还是没有】(user 实测: "整死连不上模型, 连了断断了连…以前也有这个现象, 回看过去的剧集就连不上")。三个缺陷叠在一起: ①<b>重连的"成功"判断是假的</b> —— `live-client.js` 的 `connect()` 在 socket `onopen` 就 resolve, 而且 resolve 的是【客户端实例】不是布尔值; 而 `cinema-live.js` 写的是 `reconnect().then(ok =&gt; { if (ok) 报成功 })`, `ok` 永远为真 → 每次重连都报"✅ 重连成功, 上下文已恢复"并重启帧循环, 哪怕 setupComplete 根本没来、服务端下一秒就关掉了。外面看日志全绿, 实际是死连接。改为必须等 `isReady()` 真为真才算成功, 等不到就按失败继续退避重试。②<b>链子只修了一半</b> —— 那个 `.then` 没有 else 分支; 而且 `enable()` 发现旧存档点续不上时会清掉 handle 然后 `resolve(false)`, 但调用方 `autoConnect` 根本不看返回值, 于是"把废 handle 清干净"做完了却【没有任何人再发起下一次连接】。现在两个失败分支都会主动排重连。③<b>断线时在途的摘要请求没人管</b>, 会赖到它自己 45s 超时: 期间 `requestEpisodeSummary` 第一行就 return → 后面每一集都不再总结(user 原话"重看一遍还是没有"); 更糟的是 `handleModelText` 会把模型吐的每一个字都收进那个僵尸 buffer, 一个字都不进气泡 → 看着像"连上了但不理我"。现在断线这一刻就立刻作废它。附带修了一处隐蔽的: 清存档点时只删了 localStorage, 客户端对象里的 `_resumeHandle` 还留着, 下次重连照样拿同一个废 handle 去续 —— 现在两处一起清。</li>
+          <li>修复通话挂断瞬间闪退 + 两处资源泄漏 — 挂断流程整个重排: 摄像头/麦克风/AudioContext/WebGL 的释放【提前到两次落库 await 之前】(原来整个落库期间它们还活着, 而那正是闪退要顶的峰值窗口); 挂断时清空通话气泡 DOM (切屏只是切 class, 那些气泡原本要等下次开会话才清, 挂断那刻又撞上聊天记录全量重渲染, 两边同时活在 DOM 里); 切回聊天界面改成 await, 不再和 AI 主动回话一起 fire-and-forget 叠在同一帧; 通话记忆总结挪到界面稳定之后再跑 (产物写长期记忆, 晚几百毫秒无差别)。两处泄漏: ①通话舞台每换一次背景都 createObjectURL 却从不 revoke (换 N 次漏 N-1 张, 每张一两 MB), 改为挂上新图后再释放上一张 (顺序不能反, 反了背景闪白); ②Live2D 挂载途中挂断 → 刚建出来的 PIXI/WebGL/纹理永远没人回收 (canvas 已脱离 DOM 找不回来), 现在挂载完成时自检 isConnected, 已挂断就当场销毁。另外顺手去掉挂断后那条"请主动发一两句"的隐藏系统指令 + 主动回话 —— 最后一句必然是 AI 说的, 再补一句没必要, 还会留一条幽灵系统消息在历史里等下次被误触发。</li>
         </ul>
       </div>
     </div>

@@ -2950,8 +2950,22 @@
        左右保持 5.102%/4.659% 不变, 因为左右是装饰条不是开口。 */
     inset: 10% 4.659% 12% 5.102%;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
-    backdrop-filter: blur(14px) saturate(140%);
+    /* 🔴 v0.5.1 临时关闭 (2026-10-19, 排查「通话久了发烫 + 挂断闪退」)
+       原因: backdrop-filter 的语义是"把我背后那层实时采样下来做模糊"。
+       这里背后不是静态图 —— 是整块全屏、每秒刷 60 帧的 Live2D WebGL 画布。
+       也就是说每一帧都要: 重新采样画布这块区域 → 在 dpr=3 上做 14px 模糊 + 饱和度。
+       这在 iPhone 上是出了名的重, 表现特征恰好是"持续发热、但不卡顿"。
+       本文件 481 行的状态胶囊早就有同样的注释("不加 backdrop-filter, 会拖累
+       Live2D canvas 渲染"), 只是花环这块更大的漏改了。
+
+       代价: 花环开口里的玻璃会变成一块纯半透明渐变, 没有模糊感, 观感略平。
+       测法: 局域网 node _reports/lan-server.cjs (8890),
+             iPhone 开 http://<电脑IP>:8890/index.html, 通话挂满 10 分钟。
+             不发烫 = 就是它, 保留关闭; 还发烫 = 元凶另有其人, 把下面两行恢复回去。
+
+       ⚠️ 别删这段注释, 结论出来后要么保留关闭、要么整段恢复原样。 */
+    /* -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%); */
     pointer-events: none;
     z-index: 1;
 }
