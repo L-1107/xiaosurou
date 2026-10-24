@@ -558,7 +558,7 @@
 
       const response = isGemini ?
         await fetch(geminiConfig.url, geminiConfig.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1263,7 +1263,7 @@ ${internalMonologueBuilder}
 
       const response = isGemini ?
         await fetch(geminiConfig.url, geminiConfig.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1354,7 +1354,7 @@ ${internalMonologueBuilder}
 
       const response = isGemini ?
         await fetch(geminiConfig.url, geminiConfig.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1559,7 +1559,7 @@ ${internalMonologueBuilder}
 
       const response = isGemini ?
         await fetch(geminiConfig.url, geminiConfig.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1719,7 +1719,7 @@ ${werewolfGameState.discussionLog.map(d => `${d.speaker}: ${d.content}`).join('\
 
       const response = isGemini ?
         await fetch(geminiConfig.url, geminiConfig.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

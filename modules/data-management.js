@@ -263,7 +263,6 @@ async function cleanupRedundantData() {
         funds: '基金',
         auctions: '拍卖',
         inventory: '背包',
-        emails: '邮件'
       };
 
       // 统计各表数据
@@ -3339,7 +3338,7 @@ async function cleanupRedundantData() {
 
           const response = isGemini
             ? await fetch(geminiConfig.url, geminiConfig.data)
-            : await fetch(`${proxyUrl}/v1/chat/completions`, {
+            : await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                 body: JSON.stringify({

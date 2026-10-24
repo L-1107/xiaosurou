@@ -1,0 +1,605 @@
+/* ============================================================
+ * 宠物屋 · Cove 灵宠屋（前端移植版）样式
+ * 暖色绘本风，跟 room-light.webp / cat-sprites-light.webp 的画风配套。
+ * ============================================================ */
+
+#pet-nest-screen {
+  background: linear-gradient(180deg, #f7f0e1 0%, #f1e6d2 100%);
+  color: #4c3828;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#pet-nest-screen .pn-header {
+  position: relative;        /* 返回键绝对定位，标题保持居中 */
+  text-align: center;
+  padding: 18px 16px 10px;
+  flex: 0 0 auto;
+}
+
+#pet-nest-screen .pn-back-btn {
+  position: absolute;
+  left: 10px;
+  top: 12px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(122, 98, 62, .28);
+  border-radius: 999px;
+  background: rgba(250, 244, 230, .82);
+  color: #6b5638;
+  cursor: pointer;
+  padding: 0;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2;
+}
+
+#pet-nest-screen .pn-back-btn:hover {
+  background: #efe8d4;
+}
+
+#pet-nest-screen .pn-back-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+#pet-nest-screen .pn-eyebrow {
+  font-size: 11px;
+  letter-spacing: .22em;
+  color: #8e785f;
+  margin: 0 0 6px;
+}
+
+#pet-nest-screen .pn-title {
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: .16em;
+  margin: 0 0 6px;
+}
+
+#pet-nest-screen .pn-subtitle {
+  font-size: 14px;
+  color: #89775f;
+  margin: 0;
+}
+
+#pet-nest-screen .pn-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px 12px;
+  flex: 0 0 auto;
+}
+
+#pet-nest-screen .pn-pantry {
+  font-size: 14px;
+  color: #5a4f3d;
+}
+
+#pet-nest-screen .pn-pantry strong {
+  font-weight: 400;
+  font-size: 22px;
+  margin: 0 4px;
+  font-variant-numeric: oldstyle-nums;
+}
+
+#pet-nest-screen .pn-toolbar-actions {
+  display: flex;
+  gap: 16px;
+}
+
+#pet-nest-screen .pn-toolbar-actions button {
+  border: 0;
+  background: none;
+  padding: 8px 0;
+  font-size: 14px;
+  color: #6b5638;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+#pet-nest-screen .pn-scene {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  aspect-ratio: 2 / 3;
+  flex: 0 0 auto;          /* 别被 flex 压扁，否则房间图会留黑边 */
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(88, 62, 32, .16);
+  background: #efe6d2;
+}
+
+#pet-nest-screen .pn-room-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ============================================================
+   小窝顶部提示条：可以孵化了 / 破壳了还没画像
+   ============================================================ */
+#pet-nest-screen .pn-hint-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 10px;
+  padding: 9px 12px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 236, 198, .95), rgba(255, 220, 168, .9));
+  border: 1px solid rgba(214, 164, 92, .45);
+  box-shadow: 0 4px 14px rgba(150, 104, 44, .16);
+  color: #6b4f26;
+  font-size: 13px;
+  line-height: 1.45;
+}
+#pet-nest-screen .pn-hint-bar[hidden] { display: none; }
+#pet-nest-screen .pn-hint-icon { font-size: 17px; flex: 0 0 auto; }
+#pet-nest-screen .pn-hint-text { flex: 1 1 auto; }
+#pet-nest-screen .pn-hint-go {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  background: #c98a3c;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#pet-nest-screen .pn-hint-go:hover { background: #b5772e; }
+
+/* 还没画像的宠物，头上挂个小金点 */
+#pet-nest-screen .pn-pet-dot {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  margin-left: 16px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffcf7a;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .75), 0 0 9px rgba(255, 178, 60, .95);
+  pointer-events: none;
+  animation: pn-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes pn-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: .6; }
+}
+
+/* 「换个模样」在该画的时候高亮一下 */
+#pet-nest-screen .pn-btn-glow {
+  box-shadow: 0 0 0 2px rgba(255, 196, 110, .85), 0 4px 12px rgba(226, 152, 58, .4);
+  animation: pn-btn-glow 1.8s ease-in-out infinite;
+}
+@keyframes pn-btn-glow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 196, 110, .55), 0 4px 12px rgba(226, 152, 58, .25); }
+  50% { box-shadow: 0 0 0 3px rgba(255, 196, 110, .95), 0 4px 16px rgba(226, 152, 58, .5); }
+}
+
+/* 事件流里系统自己记的那几条 */
+#pet-nest-screen .pn-event-system {
+  color: #a1702c;
+  font-weight: 600;
+}
+
+#pet-nest-screen .pn-pets {
+  position: absolute;
+  inset: 0;
+}
+
+#pet-nest-screen .pn-pet {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 21%;
+  max-width: 128px;
+  text-align: center;
+  cursor: pointer;
+}
+
+#pet-nest-screen .pn-pet:hover {
+  background: transparent;
+  transform: translate(-50%, -50%) scale(1.04);
+}
+
+#pet-nest-screen .pn-sprite {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  background-size: 300% 200%;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  filter: drop-shadow(0 3px 2px rgba(108, 75, 38, .1));
+  animation: pn-breathe 4s ease-in-out infinite;
+}
+
+#pet-nest-screen .pn-sprite-empty {
+  font-size: 38px;
+  padding-top: 18px;
+  color: #b39c78;
+}
+
+/* ============================================================
+   6 格姿势真循环播
+   【为什么不用 steps(2)】background-position-x 的三格是 0% / 50% / 100%,
+   steps(2) 只会停在 0% 和 50%, 第三格一闪而过 —— 所以改成显式关键帧 + step-end。
+   【为什么不吃性能】step-end 只在换帧那一瞬间改值重绘, 不是每帧都重绘。
+   一轮 = 6 格 × 0.6s = 3.6s; x 走 3 格(1.8s), y 走 2 行(3.6s), 两者始终同相。
+   ============================================================ */
+@keyframes pn-frame-x {
+  0%      { background-position-x: 0%; }
+  33.33%  { background-position-x: 50%; }
+  66.66%  { background-position-x: 100%; }
+  100%    { background-position-x: 100%; }
+}
+@keyframes pn-frame-y {
+  0%      { background-position-y: 0%; }
+  50%     { background-position-y: 100%; }
+  100%    { background-position-y: 100%; }
+}
+#pet-nest-screen .pn-sprite-anim {
+  animation:
+    pn-breathe 4s ease-in-out infinite,
+    pn-frame-x 1.8s step-end infinite,
+    pn-frame-y 3.6s step-end infinite;
+}
+
+/* 孵出来了：金辉一闪一闪 */
+@keyframes pn-hatch-glow {
+  0%, 100% { filter: drop-shadow(0 3px 2px rgba(108, 75, 38, .1)) drop-shadow(0 0 0 rgba(255, 205, 120, 0)); }
+  50%      { filter: drop-shadow(0 3px 2px rgba(108, 75, 38, .1)) drop-shadow(0 0 10px rgba(255, 205, 120, .85)); }
+}
+/* 羽化成神兽：更亮的一圈金光 */
+@keyframes pn-divine-glow {
+  0%, 100% { filter: drop-shadow(0 4px 3px rgba(120, 70, 20, .2)) drop-shadow(0 0 6px rgba(255, 190, 80, .6)); }
+  50%      { filter: drop-shadow(0 4px 3px rgba(120, 70, 20, .2)) drop-shadow(0 0 18px rgba(255, 214, 120, .95)) drop-shadow(0 0 32px rgba(255, 170, 60, .45)); }
+}
+#pet-nest-screen .pn-pet-hatched { animation: pn-hatch-glow 2.6s ease-in-out infinite; }
+#pet-nest-screen .pn-pet-divine  { animation: pn-divine-glow 2.2s ease-in-out infinite; }
+#pn-desktop-pet-sprite.pn-sprite-hatched {
+  animation: pn-breathe 4s ease-in-out infinite, pn-hatch-glow 2.6s ease-in-out infinite;
+}
+#pn-desktop-pet-sprite.pn-sprite-divine {
+  animation: pn-breathe 4s ease-in-out infinite, pn-divine-glow 2.2s ease-in-out infinite;
+}
+
+@keyframes pn-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.02); }
+}
+
+#pet-nest-screen .pn-pet-label {
+  display: inline-block;
+  font-size: 12px;
+  background: rgba(247, 238, 223, .78);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: #5a4f3d;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
+/* 品种/形态另起一行（小字），别让「小翠 · 金刚鹦鹉」挤在一行里折行 */
+#pet-nest-screen .pn-pet-sub {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.25;
+  color: #8a7554;
+  letter-spacing: .2px;
+}
+#pet-nest-screen .pn-pet-sub.pn-pet-sub-divine {
+  color: #b07a22;
+  font-weight: 600;
+}
+
+#pet-nest-screen .pn-empty {
+  position: absolute;
+  top: 53%;
+  left: 15%;
+  right: 15%;
+  text-align: center;
+  font-size: 16px;
+  line-height: 2;
+  color: #77634b;
+  margin: 0;
+}
+
+#pet-nest-screen .pn-below {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 16px 16px 40px;
+  flex: 0 0 auto;
+}
+
+#pet-nest-screen .pn-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+#pet-nest-screen .pn-below h2 {
+  font-size: 18px;
+  font-weight: 400;
+  margin: 18px 0 6px;
+}
+
+#pet-nest-screen .pn-quiet {
+  font-size: 13px;
+  color: #89775f;
+  line-height: 1.7;
+  margin: 4px 0;
+}
+
+#pet-nest-screen .pn-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 18px;
+}
+
+#pet-nest-screen .pn-roster button,
+#pet-nest-screen .pn-btn {
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid rgba(122, 98, 62, .3);
+  border-radius: 999px;
+  background: #efe8d4;
+  color: #5a4f3d;
+  padding: 8px 18px;
+  cursor: pointer;
+}
+
+#pet-nest-screen .pn-roster button:hover,
+#pet-nest-screen .pn-btn:hover {
+  background: #e8dfc8;
+}
+
+#pet-nest-screen .pn-btn-primary {
+  background: #4c4438;
+  color: #f6efdf;
+  border-color: #4c4438;
+}
+
+#pet-nest-screen .pn-btn-primary:hover {
+  background: #63584a;
+}
+
+#pet-nest-screen .pn-events {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+
+#pet-nest-screen .pn-events li {
+  font-size: 14px;
+  line-height: 1.9;
+  color: #5a4f3d;
+}
+
+/* ---------- 弹窗 ---------- */
+
+#pet-nest-screen dialog,
+dialog.pn-dialog {
+  border: 0;
+  border-radius: 8px;
+  padding: 22px;
+  background: #faf4e6;
+  color: #4c3828;
+  box-shadow: 0 20px 55px rgba(57, 38, 20, .24);
+  max-width: min(440px, 92vw);
+  width: 100%;
+}
+
+#pet-nest-screen dialog::backdrop {
+  background: rgba(48, 34, 18, .38);
+}
+
+#pn-care-dialog h2,
+#pn-adopt-dialog h2,
+#pn-album-dialog h2 {
+  font-size: 20px;
+  font-weight: 400;
+  margin: 0 0 8px;
+}
+
+#pn-care-dialog label,
+#pn-adopt-dialog label {
+  display: block;
+  font-size: 14px;
+  color: #5a4f3d;
+  margin: 12px 0;
+}
+
+#pn-care-dialog input,
+#pn-adopt-dialog input,
+#pn-adopt-dialog select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font: inherit;
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid rgba(122, 98, 62, .35);
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #4c3828;
+  box-sizing: border-box;
+}
+
+#pn-care-dialog .pn-actions,
+#pn-adopt-dialog .pn-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+#pn-album-dialog {
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+#pn-album-list {
+  margin-top: 12px;
+}
+
+.pn-album-card {
+  border-top: 1px solid #d7c9b3;
+  padding: 12px 0;
+}
+
+.pn-album-card h3 {
+  font-size: 16px;
+  font-weight: 400;
+  margin: 0 0 8px;
+}
+
+.pn-album-row {
+  padding: 6px 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #5a4f3d;
+}
+
+.pn-album-row.is-current strong {
+  color: #8a5a2b;
+}
+
+.pn-album-row p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #6b5a43;
+}
+
+/* ============================================================
+ * 桌宠挂件（可拖动，常驻聊天界面）
+ * ============================================================ */
+
+#pn-desktop-pet {
+  position: fixed;
+  right: 14px;
+  bottom: 92px;
+  width: 78px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+
+#pn-desktop-pet.is-dragging {
+  cursor: grabbing;
+  opacity: .92;
+}
+
+#pn-desktop-pet[hidden] {
+  display: none !important;
+}
+
+#pn-desktop-pet-sprite {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  background-size: 300% 200%;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  filter: drop-shadow(0 4px 6px rgba(80, 56, 26, .28));
+  animation: pn-breathe 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+#pn-desktop-pet-name {
+  font-size: 11px;
+  color: #6b5638;
+  background: rgba(250, 244, 230, .88);
+  border-radius: 999px;
+  padding: 2px 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+#pn-desktop-pet-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
+  background: #fffdf8;
+  border: 1px solid rgba(122, 98, 62, .28);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #5a4f3d;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(88, 62, 32, .16);
+  pointer-events: none;
+}
+
+#pn-desktop-pet-bubble[hidden] {
+  display: none !important;
+}
+
+#pn-desktop-pet-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  background: #faf4e6;
+  border: 1px solid rgba(122, 98, 62, .3);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(88, 62, 32, .22);
+  padding: 6px;
+  min-width: 132px;
+  z-index: 901;
+}
+
+#pn-desktop-pet-menu[hidden] {
+  display: none !important;
+}
+
+#pn-desktop-pet-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: #5a4f3d;
+  cursor: pointer;
+}
+
+#pn-desktop-pet-menu button:hover {
+  background: #efe8d4;
+}
+
+@media (max-width: 480px) {
+  #pet-nest-screen .pn-scene { border-radius: 0; }
+  #pn-desktop-pet { width: 66px; bottom: 110px; }
+}

@@ -44,10 +44,31 @@ async function saveStickerVisionCache(stickerUrl, description) {
  */
 async function callVisionAPI(imageUrl) {
   // 优先使用识图API，未配置则回退到主API
-  const hasVisionApi = state.apiConfig.visionProxyUrl && state.apiConfig.visionApiKey && state.apiConfig.visionModel;
-  const proxyUrl = hasVisionApi ? state.apiConfig.visionProxyUrl : state.apiConfig.proxyUrl;
-  const apiKey = hasVisionApi ? state.apiConfig.visionApiKey : state.apiConfig.apiKey;
-  const model = hasVisionApi ? state.apiConfig.visionModel : state.apiConfig.model;
+  // ⚠️ 必须实时读 API 预设 —— 站点预设启用后, "识图专用 API"如果自己配了预设,
+  //    它的静态字段会被【清空】(只留预设引用) → 这里会误判成"没配识图 API"而回退到主 API。
+  //    vision 槽位用 inheritMain:false —— 保持原语义: "识图自己配了才用识图的"。
+  let visionResolved = null;
+  let mainResolved = null;
+  if (typeof window.resolveApiSlotConfig === 'function') {
+    try {
+      visionResolved = await window.resolveApiSlotConfig('vision', { inheritMain: false });
+      mainResolved = await window.resolveApiSlotConfig('main');
+    } catch (e) {
+      console.warn('[表情包识图] 解析 API 预设失败, 回落到 state.apiConfig:', (e && e.message) || e);
+    }
+  }
+
+  const visionStatic = state.apiConfig.visionProxyUrl && state.apiConfig.visionApiKey && state.apiConfig.visionModel;
+  const hasVisionApi = (visionResolved && visionResolved.proxyUrl && visionResolved.apiKey) || visionStatic;
+  const proxyUrl = hasVisionApi
+    ? ((visionResolved && visionResolved.proxyUrl) || state.apiConfig.visionProxyUrl)
+    : ((mainResolved && mainResolved.proxyUrl) || state.apiConfig.proxyUrl);
+  const apiKey = hasVisionApi
+    ? ((visionResolved && visionResolved.apiKey) || state.apiConfig.visionApiKey)
+    : ((mainResolved && mainResolved.apiKey) || state.apiConfig.apiKey);
+  const model = hasVisionApi
+    ? ((visionResolved && visionResolved.model) || state.apiConfig.visionModel || '')
+    : ((mainResolved && mainResolved.model) || state.apiConfig.model || '');
 
   if (!proxyUrl || !apiKey || !model) {
     throw new Error("API未配置或配置不完整");

@@ -1546,7 +1546,7 @@ async function executeVectorExtraction(chat, messages, updateTimestamp = false) 
     const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '请开始提取。' }]);
     response = await fetch(geminiConfig.url, geminiConfig.data);
   } else {
-    const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+    const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
     response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
@@ -2155,7 +2155,8 @@ async function convertLongTermMemoryToStructured(chatId) {
 
         const response = isGemini
           ? await fetch(geminiConfig.url, geminiConfig.data)
-          : await fetch(`${proxyUrl}/v1/chat/completions`, {
+          // 站点地址自带 /v1, 只补 /chat/completions (再补一次 /v1 → /v1/v1 → 404)
+          : await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
               body: JSON.stringify({
@@ -2295,7 +2296,7 @@ async function triggerStructuredMemorySummary(chatId, forceUpdate = false) {
     let isGemini = proxyUrl.includes('generativelanguage');
     let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, [{ role: 'user', content: '请提取结构化记忆。' }]);
 
-    const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+    const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
     const response = isGemini
       ? await fetch(geminiConfig.url, geminiConfig.data)
       : await fetch(apiUrl, {
@@ -2633,7 +2634,8 @@ async function executeStructuredSummary(chat, messages, updateTimestamp = false)
 
   const response = isGemini
     ? await fetch(geminiConfig.url, geminiConfig.data)
-    : await fetch(`${proxyUrl}/v1/chat/completions`, {
+    // 站点地址自带 /v1, 只补 /chat/completions (再补一次 /v1 → /v1/v1 → 404)
+    : await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify({
@@ -2983,7 +2985,11 @@ ${transcriptText}
 
     const response = isGemini ?
       await fetch(geminiConfig.url, geminiConfig.data) :
-      await fetch(`${proxyUrl}/v1/chat/completions`, {
+      // 站点地址(API 预设)自己就带 /v1, 这里只补 /chat/completions。
+      // 再补一次 /v1 会变成 /v1/v1/chat/completions, 中转网关直接回 404 "Invalid URL"。
+      // (2026-10-22 用户实测: 语音/视频通话挂断后的记忆总结就是这么坏的;
+      //  换谷歌直连能通, 因为那条分支走的是 geminiConfig.url, 根本不拼 /v1。)
+      await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3431,7 +3437,7 @@ ${memoryContent}`;
       content: "请开始整合。"
     }]);
 
-    const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+    const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
     const response = isGemini ?
       await fetch(geminiConfig.url, geminiConfig.data) :
       await fetch(apiUrl, {
@@ -3720,7 +3726,7 @@ ${formattedHistory}
       role: 'user',
       content: "请开始总结。"
     }]);
-    const response = isGemini ? await fetch(geminiConfig.url, geminiConfig.data) : await fetch(__useSecondary ? `${proxyUrl.replace(/\/+$/, '')}/chat/completions` : `${proxyUrl}/v1/chat/completions`, {
+    const response = isGemini ? await fetch(geminiConfig.url, geminiConfig.data) : await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

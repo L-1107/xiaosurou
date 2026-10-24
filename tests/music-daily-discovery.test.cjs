@@ -219,6 +219,16 @@ function makeFakeTimers() {
         try { p.fn(); } catch (e) { /* 忽略 */ }
       });
     },
+    // 只跑【毫秒数正好等于】maxMs 的那几个 —— 用来精确点一个定时器,
+    // 不把旁边的(比如启动用的 6 秒定时器)一起点了, 免得冒出无关的日志噪音
+    flushExact(ms) {
+      const due = pending.filter((p) => p.ms === ms);
+      due.forEach((p) => {
+        const i = pending.indexOf(p);
+        if (i >= 0) pending.splice(i, 1);
+        try { p.fn(); } catch (e) { /* 忽略 */ }
+      });
+    },
     count() { return pending.length; },
   };
 }
@@ -278,9 +288,25 @@ function makeSandbox(opts) {
     }, options.state || {}),
     showToast: (msg, type) => { toasts.push({ msg, type }); },
     isMainApiProxyEnabled: () => true,
+    // 站点预设解析器 —— 引擎现在必须走它拿 API 配置 (见 ⑬ 号用例)。
+    // 默认给 null, 引擎就回落到 state.apiConfig (老行为, 现有用例不受影响)。
+    resolveApiSlotConfig: options.resolveApiSlotConfig || null,
     fetchViaOpenAICompatibleProxy: async (req) => {
       llmRequests.push(req);
       if (options.llmError) throw new Error(options.llmError);
+      if (options.llmHang) {
+        // 模拟"请求挂住" —— 跟浏览器 fetch 一样, 被 abort 时要真的抛 AbortError
+        return new Promise((_, reject) => {
+          const sig = req && req.signal;
+          if (!sig) return;                       // 没有 signal → 永远挂着 (跟真浏览器一样)
+          const abortErr = () => {
+            const e = new DOMException('signal is aborted without reason', 'AbortError');
+            return e;
+          };
+          if (sig.aborted) { reject(abortErr()); return; }
+          sig.addEventListener('abort', () => reject(abortErr()));
+        });
+      }
       // llmResponses: 数组形式 = 第一次给第 0 个, 第二次给第 1 个, 之后都用最后一个
       let content = options.llmResponse;
       if (Array.isArray(options.llmResponses)) {
@@ -659,13 +685,247 @@ async function main() {
       // 让它跑起来, 把超时的定时器注册上
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setImmediate(r));
-      timers.flush(90000);
+      // ⚠️ 别把总预算写死 —— 引擎改过 CFG.totalTimeoutMs (90s → 150s),
+      //    这里要跟着引擎走, 否则定时器到点不响 → 整个测试静默卡死 → node 直接退出 0,
+      //    看起来"测试通过", 实际后半段根本没跑。
+      timers.flush(sandbox.MusicDailyDiscovery.CFG.totalTimeoutMs);
 
       let err = null;
       try { await p; } catch (e) { err = e; }
       check('生成卡住时会超时报错 (不会无限等)',
         !!err && /超时/.test(String(err.message || err)),
         err ? String(err.message || err) : '没报错 —— 又能无限等了');
+    }
+  }
+
+  // ------------------------------------------------------------
+  section('⑬ 推荐理由不许千篇一律 (2026-10-22 用户实测)');
+  {
+    // 【背景】用户实测: 「今日私选」里每首歌的推荐理由一模一样
+    //   ("来自 X，跟你最近在听的是同一个方向。"), 一点推荐味都没有。
+    //   真凶: 引擎读的是 state.apiConfig.proxyUrl/apiKey, 而站点预设启用后
+    //   这两个字段会被【清空】(只留预设引用) → LLM 压根没被调用
+    //   → 整轮走确定性兜底 → 兜底理由是写死的一句模板 → 每首都一样。
+    const netease2 = makeNetease({
+      recommend: [{ id: '800', name: '歌甲', artist: '甲', artists: [{ id: 1, name: '甲' }], album: '', cover: '', duration: 1 }],
+      searchResults: [{ id: '900', name: '歌乙', artist: '乙', artists: [{ id: 2, name: '乙' }], album: '', cover: '', duration: 1 }],
+    });
+
+    // ---- ① 站点预设模式下, 仍然要能调到 LLM ----
+    {
+      const { sandbox, llmRequests } = makeSandbox({
+        netease: netease2,
+        // 站点预设模式的真实现象: state.apiConfig 里的地址/密钥被清空了
+        state: { apiConfig: { proxyUrl: '', apiKey: '', model: 'test-model' } },
+        resolveApiSlotConfig: async (slot) => ({
+          slot, proxyUrl: 'https://api.example/v1', apiKey: 'sk-test', model: 'test-model',
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      check('站点预设模式下仍然调到了 LLM (不是直接兜底)', llmRequests.length > 0,
+        'LLM 请求数=' + llmRequests.length);
+      check('理由来自模型而不是兜底模板',
+        (card.songs || []).some((s) => /模型给的理由/.test(s.reason || '')),
+        (card.songs || []).map((s) => s.reason).join(' | '));
+    }
+
+    // ---- ② 模型偷懒, 所有理由写成同一句 → 要被换掉 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease2,
+        llmResponse: JSON.stringify({
+          note: '今天想给你点安静的',
+          songs: [
+            { id: '800', reason: '都很好听', tag: '稳准' },
+            { id: '900', reason: '都很好听', tag: '小冒险' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const reasons = (card.songs || []).map((s) => s.reason);
+      check('模型给的推荐理由全都一样时会被换掉', new Set(reasons).size > 1,
+        reasons.join(' | '));
+    }
+
+    // ---- ③ LLM 挂掉 → 确定性兜底的理由也不能千篇一律 ----
+    {
+      const { sandbox } = makeSandbox({ netease: netease2, llmError: 'network down' });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const reasons = (card.songs || []).map((s) => s.reason);
+      // ⚠️ 比"句式"不比整句 —— 兜底模板里带着歌手名, 整句永远不同,
+      //   但用户看到的是"除了歌手名其它一模一样"。所以把歌手名抠掉再比。
+      const patterns = (card.songs || []).map((s) => String(s.reason || '').split(s.artist).join('*'));
+      check('LLM 挂掉时兜底理由也不再千篇一律 (抠掉歌手名后仍要不同)', new Set(patterns).size > 1,
+        reasons.join(' | '));
+    }
+
+    // ---- ④ 兜底时卡片上必须写明"这次 AI 没接上" (别让用户误以为是 AI 写的) ----
+    {
+      const { sandbox } = makeSandbox({ netease: netease2, llmError: 'network down' });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      check('兜底时卡片上写明了 AI 没接上', /AI 没接上/.test(card.note || ''), card.note || '(空)');
+      check('兜底时不再谎称 AI 排过序',
+        card.strategy && card.strategy.llmRanked === false,
+        'llmRanked=' + (card.strategy && card.strategy.llmRanked));
+    }
+
+    // ---- ⑤ AI 正常时, 卡片上就是模型自己的开场白, 不带兜底提示 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease2,
+        llmResponse: JSON.stringify({
+          note: '今天想给你点安静的',
+          songs: [
+            { id: '800', reason: '雨声开头，像下雨天的地铁站', tag: '小冒险' },
+            { id: '900', reason: '副歌很亮，适合刚睡醒', tag: '稳准' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      check('AI 正常时卡片上不出现兜底提示',
+        !/AI 没接上/.test(card.note || '') && /今天想给你点安静的/.test(card.note || ''),
+        card.note || '(空)');
+      check('AI 正常时 llmRanked 为真',
+        card.strategy && card.strategy.llmRanked === true,
+        'llmRanked=' + (card.strategy && card.strategy.llmRanked));
+    }
+  }
+
+  // ------------------------------------------------------------
+  section('⑭ 三条失败路径的修复 (2026-10-23)');
+  {
+    // 【背景】同一个症状(走进兜底)有三条路, 上一轮只让"原因可见", 没让它们少发生:
+    //   ① 配置读不到 —— 预设解析成功但 model 为空时, 整份配置被自己丢掉 → 回落空的 state.apiConfig
+    //   ② 30 秒超时 —— 提示词 ~3500 token + 输出 400 token, 手机/免费额度上必然超
+    //   ③ 模型输出 id 对不上 → 全被丢掉 → 等于没策展成
+    const netease3 = makeNetease({
+      recommend: [{ id: '800', name: '歌甲', artist: '甲', artists: [{ id: 1, name: '甲' }], album: '', cover: '', duration: 1 }],
+      searchResults: [{ id: '900', name: '歌乙', artist: '乙', artists: [{ id: 2, name: '乙' }], album: '', cover: '', duration: 1 }],
+    });
+
+    // ---- ① 配置: 预设解析成功但 model 为空 → 仍然要调得通 ----
+    {
+      const { sandbox, llmRequests } = makeSandbox({
+        netease: netease3,
+        state: { apiConfig: { proxyUrl: '', apiKey: '', model: 'test-model' } },
+        resolveApiSlotConfig: async (slot) => ({
+          slot, proxyUrl: 'https://api.example/v1', apiKey: 'sk-test', model: '',
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      check('预设解析成功但 model 为空时, 仍然调到了 LLM (不是直接兜底)', llmRequests.length > 0,
+        'LLM 请求数=' + llmRequests.length);
+      check('模型名从 state.apiConfig 兜住了, 没被自己丢掉',
+        card.strategy && card.strategy.llmRanked === true,
+        'llmRanked=' + (card.strategy && card.strategy.llmRanked));
+    }
+
+    // ---- ② 模型用 songId / song_id 字段 → 照样认得出来 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease3,
+        llmResponse: JSON.stringify({
+          note: '开场',
+          songs: [
+            { songId: '800', reason: '甲的慢歌', tag: '稳准' },
+            { song_id: 900, reason: '乙的快歌', tag: '小冒险' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const ids = idsOf(card);
+      check('模型用 songId / song_id 字段也能认出来', ids.includes('800') && ids.includes('900'), ids.join(','));
+    }
+
+    // ---- ③ 模型给的 id 带 .0 / 前后有空格 → 照样认得出来 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease3,
+        llmResponse: JSON.stringify({
+          note: '开场',
+          songs: [
+            { id: '800.0', reason: '甲的慢歌', tag: '稳准' },
+            { id: ' 900 ', reason: '乙的快歌', tag: '小冒险' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const ids = idsOf(card);
+      check('模型给的 id 是 "800.0" / 带空格时也能认出来', ids.includes('800') && ids.includes('900'), ids.join(','));
+    }
+
+    // ---- ④ id 抄错了但歌名对 → 按歌名救回来 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease3,
+        llmResponse: JSON.stringify({
+          note: '开场',
+          songs: [
+            { id: 999999, name: '歌甲', reason: '甲的慢歌', tag: '稳准' },
+            { id: 888888, name: '歌乙', reason: '乙的快歌', tag: '小冒险' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const ids = idsOf(card);
+      check('id 抄错了但歌名对 → 按歌名救回来', ids.includes('800') && ids.includes('900'), ids.join(','));
+      check('救回来的歌还是 AI 给的理由',
+        (card.songs || []).some((s) => /甲的慢歌/.test(s.reason || '')),
+        (card.songs || []).map((s) => s.reason).join(' | '));
+      check('诊断里记着是靠歌名救回来的',
+        !!(card.strategy && card.strategy.llmDiag) && card.strategy.llmDiag.matchedByName >= 1,
+        JSON.stringify(card.strategy && card.strategy.llmDiag));
+    }
+
+    // ---- ⑤ 只给歌名没给 id → 认得出来 ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease3,
+        llmResponse: JSON.stringify({
+          note: '开场',
+          songs: [{ name: '歌甲', reason: '甲的慢歌', tag: '稳准' }],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      check('模型只给歌名没给 id 时也能认出来', idsOf(card).includes('800'), idsOf(card).join(','));
+    }
+
+    // ---- ⑥ id 和歌名都对不上 → 照样丢掉 (放宽不能变成放水) ----
+    {
+      const { sandbox } = makeSandbox({
+        netease: netease3,
+        llmResponse: JSON.stringify({
+          note: '开场',
+          songs: [
+            { id: 999999, name: '模型自己编的歌', reason: '编的', tag: '稳准' },
+            { id: 888888, name: '另一首编的', reason: '编的', tag: '小冒险' },
+          ],
+        }),
+      });
+      const card = await sandbox.MusicDailyDiscovery.generate('chat-1');
+      const ids = idsOf(card);
+      check('id 和歌名都对不上的歌还是被丢掉了 (没混进候选以外的歌)',
+        !ids.includes('999999') && !ids.includes('888888') && ids.every((i) => i === '800' || i === '900'),
+        ids.join(','));
+      check('一首都没对上时, 卡片上写明了原因',
+        /没对上/.test(card.note || ''), card.note || '(空)');
+    }
+
+    // ---- ⑦ 超时 → 照样出兜底卡, 并写明真实秒数 ----
+    {
+      const timers = makeFakeTimers();
+      const { sandbox } = makeSandbox({ netease: netease3, timers, llmHang: true });
+      const p = sandbox.MusicDailyDiscovery.generate('chat-1');
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      // 只点 LLM 那个超时定时器 —— 别把启动定时器一起点了 (会多跑一轮 generate, 冒出无关日志)
+      timers.flushExact(sandbox.MusicDailyDiscovery.CFG.llmTimeoutMs);
+      const card = await p;
+      const secs = Math.round(sandbox.MusicDailyDiscovery.CFG.llmTimeoutMs / 1000);
+      check('AI 请求超时后照样出卡 (走兜底, 不是整轮报错)', (card.songs || []).length > 0,
+        'songs=' + (card.songs || []).length);
+      check('超时时卡片上写明真实秒数',
+        /超时/.test(card.note || '') && new RegExp(secs + ' 秒').test(card.note || ''),
+        card.note || '(空)');
     }
   }
 

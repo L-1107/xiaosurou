@@ -166,11 +166,168 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.39 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.39</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li><strong>「宠物屋」上线了</strong> —— 聊天界面右下角会有一只可以拖着走的小宠物，点它有菜单，能进它的小窝。里面可以领养、喂食、陪玩、摸摸，看它一点点长大。</li>
+          <li>小窝里的宠物<strong>不是贴图，是活的</strong>：饿了会冒气泡催你，饱了会顶到上限不让你再喂，成长值和相处天数一起决定它什么时候长大。</li>
+          <li>多了一种新成员：<strong>鹦鹉</strong>。它从蛋里出来，<strong>破壳的时候才定下品种</strong>（金太阳、太阳锥尾、牡丹、虎皮、金刚、青金刚、吸蜜、白化玄凤 —— 全是艳色的）；花纹看你们怎么相处，越亲越好看；养大了能<strong>羽化成神兽</strong>（朱雀 / 青鸾 / 雪羽鹓鶵 / 金辉鸾凤），<strong>羽化之后血脉不变</strong>，还是原来那只。</li>
+          <li>它<strong>会提醒你去给它画一张专属模样</strong>：破壳、长大、羽化都会当场喊你一声，小窝顶部有提示条，宠物头顶冒一个金色的点，点一下就能给它画。<strong>但生图不会自动触发</strong> —— 那是要花钱的，只有你自己点了才会画。</li>
+          <li>聊天里的角色也知道它存在：它会主动提你的宠物、主动想喂它，而且<strong>性格跟你在别处聊的是同一个</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title change">移除</div>
+        <ul class="item-list">
+          <li><strong>「邮箱」整个下线了</strong> —— 界面、写信那段逻辑、备份导出、图标槽位全删干净了，你的数据库里那个邮箱表也<strong>真的删掉了</strong>（不是只藏起来）。顺手把邮箱留下的样式也清了 481 行。</li>
+          <li>老备份里如果还有邮箱字段，导入时会被自动跳过，<strong>不会报错</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>桌宠之前点不动</strong> —— 你的原话是「点蛋弹出的隐藏和进小屋都没用」「难道电脑点击不行要触摸」。真因不是要触摸：<strong>浏览器按下时会自动把指针锁在按下元素上</strong>，而代码没认出「按的是菜单里的按钮」，于是 click 被抢走，按钮的回调压根没跑。<strong>鼠标和触摸都不行</strong>，现在都修好了。</li>
+          <li><strong>还有「进去没有桌宠」</strong> —— 桌宠的显示逻辑装得太晚，你点进聊天页的时候它还没准备好。现在进聊天页<strong>一秒内就出来</strong>，还会盯着当前在哪个界面自动收起。</li>
+          <li>桌宠被弹窗挡住的时候<strong>会自己让位藏起来</strong>，关掉弹窗自己回来 —— 不会再出现「看着在那儿、点却没反应」的情况。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.38 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.38</span>
+        <span class="version-date">2026-10-23</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>影院聊天换成「外面主聊天的那套」了</strong> —— 以前陪你看剧是 <strong>Gemini Live</strong> 一个模型同时干两件事：既要看视频画面，又要回话。用户原话：<strong>「又要看视频又要回话实在太蠢了，性格也和外面聊天的不适配」</strong>。</li>
+          <li>真凶有两层：<strong>Live 3.8 只会用声音回答</strong>（官方不支持直接输出文字，它先生成一段音频，再转写成字给你看，音频直接丢掉）；而且它用的是<strong>影院自己手写的一套提示词</strong>，<strong>压根没接主聊天那套提示词预设</strong> —— 所以「性格跟外面不适配」不是错觉，是代码就这么写的。</li>
+          <li>改法：<strong>Live 只保留「看画面 + 写剧情记忆」这一件事，陪聊改走主聊天的主 API</strong>。现在影院里的它，跟外面聊天框里的它<strong>是同一个人</strong>：人设、长期记忆、你们之前的聊天记录，全都带着。</li>
+          <li>按你点的清单，影院上下文里装的是：<strong>人设 ✅ 长期记忆 ✅ 外面聊天框的正常上文 ✅ 影院攒下的全部剧情记忆（摘要 + 单集剧情）✅ 世界书 ❌（你说不要，就没带）</strong>。</li>
+          <li>另外主聊天那套提示词里有一大段「输出 JSON 数组」的指令（发表情、发图片、转账那些），<strong>影院里一条也执行不了，所以整段剥掉了</strong> —— 现在影院里它回的是<strong>普通聊天文字</strong>，跟你在外面聊天看到的一模一样。</li>
+          <li><strong>「看长剧想实时聊一下」这个也解决了</strong>：新增一条<strong>「此刻画面」</strong>通道 —— 观影模型每隔几十秒写一句「此刻屏幕上是谁在干什么」，覆盖式地存一条（不是攒一串，攒多了只会互相矛盾）。主聊天那边虽然看不见画面，但知道「刚刚发生了什么」。</li>
+          <li><strong>影院里说的话会记进主聊天历史</strong> —— 你的原话是「影院的会话就是要主聊天知道啊，不存在污染」。所以在影院聊的，出门接着聊能接上茬；看完导出的剧情记忆也会进长期记忆。</li>
+          <li>顺手补了一点：<strong>Live 没连上也不挡聊天了</strong> —— 以前「Gemini 还没就绪」会直接不让你在影院说话，现在陪聊不依赖 Live，只有「看不到此刻画面」这一项受影响。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.37 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.37</span>
+        <span class="version-date">2026-10-23</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>短剧「选集面板」最后几排点不到、也拉不动</strong> —— 一部 148 集的剧，面板只显示到 73–96 集，第 97 集起就被手机底部那条横条盖住了，往上滑也滑不动。</li>
+          <li>真凶<strong>不是样式，是面板的位置摆错了</strong>：「选集面板」被写进了「添加影片面板」<strong>里面</strong>。添加影片面板关掉的时候是整块滑出屏幕去的，选集面板作为它的孩子，就<strong>跟着一起被拖出了屏幕</strong>（实测整个面板底边掉到屏幕外 319px），最后几排的按钮永远不在你能看到的地方。</li>
+          <li>改法：把「选集面板」挪回<strong>影院房间的直属子元素</strong>。这样它的底边就是贴着房间底（＝屏幕底），集数在面板<strong>自己内部</strong>往上滚，148 集能一屏一屏翻到底，最后一集也点得到。</li>
+          <li>顺手补了个<strong>回归测试</strong>（<code>tests/cinema-episode-sheet.test.cjs</code>），以后谁再把这个面板塞回别的面板里，测试会直接报错，不会等到手机上才发现。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.36 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.36</span>
+        <span class="version-date">2026-10-23</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>全项目不再自动补 /v1 了</strong> —— 你在 API 预设里填的站点地址<strong>本来就带 /v1</strong>，程序只要在后面补一个 <code>/chat/completions</code> 就够了。以前还有些地方会多补一次 <code>/v1</code>，地址就变成了 <code>/v1/v1/chat/completions</code>，中转网关直接回 404「Invalid URL」—— 就是前几天「通话记忆总结」报的那个毛病，一个模子。</li>
+          <li>这次把<strong>剩下 22 处</strong>全统一了：<strong>狼人杀</strong>（讨论发言）、<strong>群聊</strong>（后台活动 / 主动消息）、<strong>拍卖</strong>（出新品）、<strong>头像库</strong>、<strong>真心话大冒险</strong>（AI 出题 / 作答 / 观战评论）、<strong>AI 绘图</strong>、<strong>世界书</strong>、<strong>记忆提取</strong>、<strong>AI 好友申请</strong>、<strong>角色生成</strong>、<strong>绿水续写 / 作者追更</strong>，还有 3 处「看情况补不补 /v1」的写法也一并收成了一种。</li>
+          <li>顺带把<strong>主聊天那三个分支</strong>（群聊旁白的直连、主动决策、推进模式）也统一了 —— 它们跟主聊天主体本来就不一样，现在完全一致。</li>
+          <li><strong>以后所有 AI 功能的地址是同一种写法了</strong>（连地址结尾多个斜杠的情况也一起处理），以后再加新功能照着抄就行，不会再出现「主聊天好好的、别的功能却 404」的怪事。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.35 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.35</span>
+        <span class="version-date">2026-10-23</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>换 API 预设之后，其它功能还在用旧地址</strong> —— 悬浮球里换一个站点预设，主聊天立刻就换过去了，但<strong>专注计时、角色生成、表情包识图、情侣空间日记这些还在用换之前的地址</strong>，最坑的是会变成「旧地址 + 新模型」的错配。</li>
+          <li>真凶：站点预设模式下，数据库里<strong>只存「用了哪个预设」，不再存地址和密钥</strong>。程序启动时会读一次预设、把地址填回内存里，所以平时看着都好好的 —— 但那是<strong>启动时拍的那张快照</strong>。换了预设以后只有「引用」变了，快照还是旧的，几十处读它的功能就全在用旧地址。</li>
+          <li>修法：<strong>换预设 / 改预设之后，立刻把地址刷新一遍</strong>。设置页换槽位预设、悬浮球换主 API 预设、保存 API 设置、预设库里改了或删了预设 —— 五个入口全接上了。以后换完预设，所有功能立刻一起换过去。</li>
+          <li>另外<strong>有几处本来就一直是坏的</strong>，这次一并修了（它们读的是数据库里那一行，而那一行在预设模式下本来就是空的）：<strong>角色生成</strong>（预设模式下必然弹「请先配置 API」）、<strong>专注计时</strong>、<strong>绿水续写 / 作者追更</strong>（弹「API配置不完整」）、<strong>表情包识图</strong>（识图专用 API 配了预设的话，它会误以为你没配、偷偷回退到主 API）。</li>
+          <li><strong>情侣空间那一整套</strong>（日记、相册、树、清单、时光轴、信件…… 一共 41 处调用）也改成实时读「情侣空间专用 API」，配了专用站点的现在会真的用上。</li>
+          <li>顺手还修了两处小毛病：<strong>专注计时那个地址无条件多拼了一次 /v1</strong>（你的站点地址本来就带 /v1，再补一次就变成 /v1/v1/…，网关直接回 404，就是前几天记忆总结那个毛病）—— 现在跟主聊天一个写法，<strong>只补 /chat/completions</strong>；<strong>悬浮球「保存当前配置为预设」以前会存下一个空预设</strong>（预设模式下地址是空的），现在存的是真正在用的那套。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.34 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.34</span>
+        <span class="version-date">2026-10-23</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「今日私选」会让 AI 掉链子的三个地方，这次一起修了</strong> —— 上一版只是让「AI 没接上」这件事<strong>看得见</strong>，但那三个地方本身还在。这版是<strong>让它们少发生</strong>。</li>
+          <li><strong>① 地址明明读到了，程序却自己把它扔了</strong> —— 以前是「预设读成功、但模型名那一栏是空的」就把整份配置丢掉，回落到那个本来就空的输入框，等于白读一次。现在改成：<strong>地址和密钥有效就用，模型名单独去别处兜</strong>，不会再自己把已经拿到手的东西丢掉。</li>
+          <li><strong>② 30 秒超时，对手机和免费额度来说太紧了</strong> —— 以前一次要问 AI <strong>100 首候选</strong>、再让它写出 20 首带理由的话，光「读」就要十几秒，「写」又要二三十秒，必定超。现在<strong>候选砍到 60 首</strong>（挑 20 首绰绰有余）、<strong>超时放宽到 45 秒</strong>，整轮的总预算也<strong>从 90 秒放宽到 150 秒</strong>。</li>
+          <li>整轮预算这条特别关键：以前<strong>最坏情况会顶到总预算 → 整轮直接报错、一张卡都没有</strong>，那比「退而求其次出一张卡」糟得多。现在<strong>剩下的时间不够再问一次 AI 时就不问了</strong>，直接出兜底卡，保证你总能拿到卡。</li>
+          <li><strong>③ AI 给的歌曲对不上，整轮就白跑了</strong> —— 以前歌曲 id 有一个对不上就被丢掉，对不上就等于没策展成。现在改成<strong>三层匹配</strong>：id 对得上就用；id 没对得上就<strong>按歌名去认</strong>（AI 抄错 id 是常事，歌名对得上照样算它选对了）；两样都对不上才丢 —— <strong>放宽归放宽，白名单外编出来的歌还是进不来</strong>。</li>
+          <li>顺带认得下 AI 各种奇怪写法：<strong>字段叫 songId / song_id 也认，id 写成「186016.0」或者前后带空格也认</strong>。</li>
+          <li><strong>以后再出问题，猜都不用猜了</strong> —— 这张卡里会记一份对账表（AI 给了几条、认上几条、靠歌名救回几条、丢了几条），卡片上写「这次 AI 没接上」的时候，原因和细节都在里面。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.33 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.33</span>
+        <span class="version-date">2026-10-22</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>语音通话结束后总结记忆，一直报「404 - Invalid URL」</strong> —— 弹窗写的是 <code>API 请求失败: 404 - Invalid URL (POST /v1/v1/chat/completions)</code>，通话记录一个字都没总结出来。换谷歌直连就正常，OpenAI 那个站点死活不行。</li>
+          <li>真凶是<strong>地址里多拼了一个 /v1</strong>：你在 API 预设里填的站点地址本来就自带 /v1，程序又在后面拼了一次，于是变成 /v1/v1/chat/completions，中转网关当然认不出这条路由。现在改成<strong>只补 /chat/completions，绝不再自动补 /v1</strong>。</li>
+          <li><strong>视频通话那条路一起修好了</strong> —— 语音通话、视频通话、通话记录里手动点「总结」这三处走的是同一个函数，改一处三处都活。</li>
+          <li><strong>结构化记忆的两个按钮也一起修了</strong> —— 「把长期记忆转成结构化记忆」和结构化记忆里的「新消息总结 / 范围总结」也是同一个毛病（地址自带 /v1 又被拼了一次）。它俩以前<strong>把报错吞了</strong>：一个只弹"可能原因：Token 数量过多 / AI 返回格式不符合"，一个弹"总结失败：API 错误:"后面还是空的 —— 所以一直没人发现它们其实是坏的，看着都像"记忆太多转不动"。</li>
+          <li><strong>整个记忆模块的接口地址现在跟主聊天完全统一了</strong> —— 全项目的老规矩是「<strong>站点地址你自己填全（含 /v1），程序只补 /chat/completions，绝不自动补 /v1</strong>」，主聊天一直就是这么做的。但记忆模块里有 4 处还留着"看情况补 /v1"的老写法，其中「记忆」页那个「总结」按钮的主站分支拼的是 /v1，跟主聊天对不上。现在<strong>记忆模块 7 处调用全部统一成主聊天那一写法</strong>，一个字不差，以后再也不会出现"主聊天好好的、总结却 404"的怪事。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>视频通话结束后，通话记录里看不见你自己说的话</strong> —— 用户那几条显示成 <code>[object Object],[object Object]</code>，AI 那几条却好好的，语音通话也完全正常。</li>
+          <li>真凶：视频通话开了「我的画面 / 实时摄像头」（或上传了本地视频）时，你那句话存进记录时<strong>存成了"图片+文字"的多模态格式</strong>（那是给模型看的），而通话记录和记忆总结都是把它当文字读的，于是全变成了 [object Object]。</li>
+          <li>修法：<strong>记录里永远存纯文字</strong>，多模态那一坨只留在发模型的那一刻；同时<strong>以前存坏的老记录现在也能正常显示了</strong>（不用删重打）。画面功能一点没受影响 —— AI 该看到的画面还是看得到。</li>
+          <li>另外顺手修了两处：<strong>存进数据库的通话记录不再塞一堆 base64 图片</strong>（以前一张几十 KB，攒几轮就把库撑大了）；<strong>记忆总结里 AI 那几行以前全顶着 "undefined:"</strong>，现在正常显示成「对方名字：说话内容」这样（用的是这个角色自己的名字，不是写死的）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「今日私选」每首歌的推荐理由都一模一样</strong> —— 整张卡的理由全是「来自 XX，跟你最近在听的是同一个方向。」，看着像批量生成的，一点推荐味都没有。</li>
+          <li>真凶有点离谱：<strong>AI 压根就没被叫起来</strong>。这个功能读的是「API 设置」里手填的地址和密钥，可你用的是 API 预设，那两个框在预设模式下是空的 → 程序直接放弃，整轮改走"AI 挂了也要出卡"的兜底逻辑，而兜底的理由是写死的一句模板 —— 所以每首都是那句话。</li>
+          <li>修法：<strong>改成跟主聊天一样去读 API 预设</strong>，AI 现在真的会被叫起来，每首歌的理由是它按你的口味现写的；<strong>兜底那几句也改成轮换说法</strong>，万一哪天 AI 真挂了，卡片也不会再像复制粘贴；另外加了一道检查，模型要是偷懒把十几首写成同一句理由，会被换掉。</li>
+          <li>提示词也加了一条规矩：<strong>每首的理由必须针对这一首本身</strong>（它的歌手、情绪、适合什么时候听），不许把同一句模板套在多首歌上。</li>
+          <li><strong>而且现在不会再"假装是 AI 写的"了</strong> —— 万一 AI 没接上（超时、接口报错、或者它给的结果没通过校验），卡片上会<strong>直接写明原因</strong>：「这次 AI 没接上（XX），下面是按你的口味兜底挑的，理由不是 AI 写的 —— 点「换一批」可以再试一次」。以前它一声不吭地换成模板，你只能干瞪眼。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.32 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.32</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-10-22</span>
       </div>
       <div class="section">
         <div class="section-title new">新增</div>

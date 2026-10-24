@@ -68,7 +68,7 @@
 
       const response = isGemini ?
         await fetch(config.url, config.data) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
           body: JSON.stringify({ model: model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: '生成一件拍品' }], temperature: 1.0 })

@@ -786,28 +786,52 @@ async function callFocusCompanion() {
  */
 async function callFocusAPI(prompt) {
   try {
-    // 从 IndexedDB 获取 API 配置
-    if (!window.db) {
-      throw new Error('数据库未初始化');
+    // ⚠️ 必须实时读 API 预设 —— 站点预设启用后, IndexedDB 里那行的 proxyUrl/apiKey
+    //    会被【清空】(只留预设引用), 直接读它拿到的是空串 → 专注计时直接报"请先在设置中配置 API"。
+    //    读 db 那一行是【救不回来的】: 库里本来就只存预设引用。
+    let proxyUrl = '';
+    let apiKey = '';
+    let model = '';
+
+    if (typeof window.resolveApiSlotConfig === 'function') {
+      try {
+        const resolved = await window.resolveApiSlotConfig('main');
+        if (resolved) {
+          proxyUrl = resolved.proxyUrl || '';
+          apiKey = resolved.apiKey || '';
+          model = resolved.model || '';
+        }
+      } catch (e) {
+        console.warn('[callFocusAPI] 解析 API 预设失败, 回落到 IndexedDB:', (e && e.message) || e);
+      }
     }
-    
-    const apiConfig = await window.db.apiConfig.get('main');
-    
-    if (!apiConfig) {
-      throw new Error('请先在设置中配置 API');
+
+    if (!proxyUrl || !apiKey || !model) {
+      // 回落: 从 IndexedDB 读 (没配预设的老用户走这里)
+      if (!window.db) {
+        throw new Error('数据库未初始化');
+      }
+      const apiConfig = await window.db.apiConfig.get('main');
+      if (!apiConfig) {
+        throw new Error('请先在设置中配置 API');
+      }
+      proxyUrl = proxyUrl || apiConfig.proxyUrl || '';
+      apiKey = apiKey || apiConfig.apiKey || '';
+      model = model || apiConfig.model || '';
     }
-    
-    const proxyUrl = apiConfig.proxyUrl;
-    const apiKey = apiConfig.apiKey;
-    const model = apiConfig.model;
-    
+
     if (!proxyUrl || !apiKey || !model) {
       throw new Error('请先在设置中配置 API');
     }
-    
+
     console.log('[callFocusAPI] 使用配置:', { proxyUrl, model });
-    
-    const response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+
+    // ⚠️ 站点地址是用户自己在 API 预设里填全的, 【本来就带 /v1】,
+    //    所以这里【只补 /chat/completions】—— 再补一次 /v1 会变成
+    //    /v1/v1/chat/completions, 中转网关直接回 404 "Invalid URL"。
+    //    (跟主聊天 modules/ai-response.js 的 mainChatCompletionsUrl 一个写法)
+    const apiUrl = `${String(proxyUrl).replace(/\/+$/, '')}/chat/completions`;
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

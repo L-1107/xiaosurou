@@ -47,6 +47,28 @@
   let voiceCallTimerInterval = null;
   let videoCallAiTurnSeq = 0;
 
+  /**
+   * 把 callHistory / 通话记录里一条的 content 取出【纯文字】。
+   *
+   * ⚠️ 为什么需要这个 (2026-10-22 用户实测):
+   *   视频通话开了「我的画面 / 实时摄像头」(或上传了本地视频)时, 用户那条会存成
+   *   多模态数组 [{type:'text'},{type:'image_url'}] —— 那是给模型看的, 不是文字记录。
+   *   任何"当文字用"的地方 (通话记录弹窗 / 记忆总结 / 重新生成重绘气泡) 直接 String() 它,
+   *   就会变成 "[object Object],[object Object]" —— 于是【用户自己说的话在通话记录里
+   *   就看不见了】。AI 那几条是纯字符串, 所以坏掉的只有用户那几条, 看着特别怪。
+   */
+  function callHistoryContentToText(content) {
+    if (Array.isArray(content)) {
+      return content
+        .filter(part => part && (part.type === 'text' || typeof part.text === 'string'))
+        .map(part => (typeof part.text === 'string' ? part.text : ''))
+        .join('\n')
+        .trim();
+    }
+    if (content == null) return '';
+    return typeof content === 'string' ? content : String(content);
+  }
+
   // 正式视频通话页 Live2D 手势交互状态 (单指拖拽 + 双指捏合)
   // 边界跟 live2d-manager.js 保持一致 (ZOOM_STEP=1.15, MIN=0.1, MAX=8.0)
   // 通话挂断时清理, 不写回 setVideoCallAppearance
@@ -2387,7 +2409,15 @@ let voiceCallStatusHoldUntil = 0;
         timestamp: Date.now(),
         duration: duration,
         participants: participantsData,
-        transcript: [...videoCallState.callHistory]
+        // 通话记录是【文字记录】: 只留文字。
+        // 多模态帧 (base64 图片) 不进 IndexedDB —— 一张几十 KB, 攒几轮就把库撑大了。
+        transcript: videoCallState.callHistory.map(h => ({
+          role: h.role,
+          content: callHistoryContentToText(h.content),
+          timestamp: h.timestamp,
+          ...(h.senderName ? { senderName: h.senderName } : {})
+        })),
+        callType: 'video'
       };
       const newRecordId = await db.callRecords.add(callRecord);
       callDiagStage('hangup:record-saved');
@@ -2411,8 +2441,13 @@ let voiceCallStatusHoldUntil = 0;
 
 
       callTranscriptForAI = videoCallState.callHistory.map(h => {
-        const sender = h.role === 'user' ? (chat.settings.myNickname || '我') : h.senderName;
-        return `${sender}: ${h.content}`;
+        const sender = h.role === 'user'
+          ? (chat.settings.myNickname || '我')
+          : (h.senderName || chat.name);   // 以前没兜底 → 总结里 AI 那几行全是 "undefined: "
+        const text = callHistoryContentToText(h.content);
+        // 群聊通话里 AI 那条内容本来就带 "名字: 台词", 别再套一层变成 "名字: 名字: 台词"
+        const prefix = `${sender}:`;
+        return text.startsWith(prefix) ? text : `${sender}: ${text}`;
       }).join('\n');
 
 
@@ -2769,11 +2804,21 @@ ${linkedContents}
         return;
       }
 
-      videoCallState.callHistory.push({
+      // ⚠️ callHistory 是【文字记录】: 用户那句话必须存纯文本。
+      //   多模态数组 (只有开了「我的画面 / 实时摄像头」或上传了本地视频时才有) 另存
+      //   visionContent, 只在发模型时用 (见下面 messagesForApi)。
+      //   以前直接把多模态数组存进 content → 通话记录弹窗 / 记忆总结里用户那几条
+      //   全变成 "[object Object],[object Object]", 用户自己说的话在记录里【看不见了】。
+      const callEntry = {
         role: 'user',
-        content: userContent,
-        timestamp: userTimestamp
-      });
+        content: userInput,
+        timestamp: userTimestamp,
+        senderName: userNickname
+      };
+      if (Array.isArray(userContent)) {
+        callEntry.visionContent = userContent;
+      }
+      videoCallState.callHistory.push(callEntry);
       }   // ← 关闭 !callIdleNudgeActive
     }
 
@@ -2862,7 +2907,8 @@ ${linkedContents}
     },
     ...videoCallState.callHistory.map(h => ({
       role: h.role,
-      content: h.content
+      // 用户那条可能带多模态数组 (visionContent) —— 发模型用它; 没有就用文字
+      content: h.visionContent || h.content
     }))
     ];
 
@@ -2961,7 +3007,9 @@ ${linkedContents}
           videoCallState.callHistory.push({
             role: 'assistant',
             content: `${turn.name}: ${turn.speech}`,
-            timestamp: aiTimestamp
+            timestamp: aiTimestamp,
+            // 带上说话人 —— 记忆总结要靠它标注"谁说的"(以前缺这一项, 总结里全是 undefined)
+            senderName: turn.name
           });
 
           const speaker = videoCallState.participants.find(p => p.name === turn.name);
@@ -3078,7 +3126,9 @@ ${linkedContents}
           videoCallState.callHistory.push({
             role: 'assistant',
             content: messageContent,
-            timestamp: aiTimestamp
+            timestamp: aiTimestamp,
+            // 带上说话人 —— 记忆总结要靠它标注"谁说的"(以前缺这一项, 总结里全是 undefined)
+            senderName: chat.name
           });
 
           markVideoCallAiResponseRendered(aiTurnId);
@@ -3922,8 +3972,13 @@ ${linkedContents}
       chat.history.push(summaryMessage);
 
       callTranscriptForAI = voiceCallState.callHistory.map(h => {
-        const sender = h.role === 'user' ? (chat.settings.myNickname || '我') : h.senderName;
-        return `${sender}: ${h.content}`;
+        const sender = h.role === 'user'
+          ? (chat.settings.myNickname || '我')
+          : (h.senderName || chat.name);   // 以前没兜底 → 总结里 AI 那几行全是 "undefined: "
+        const text = callHistoryContentToText(h.content);
+        // 群聊通话里 AI 那条内容本来就带 "名字: 台词", 别再套一层变成 "名字: 名字: 台词"
+        const prefix = `${sender}:`;
+        return text.startsWith(prefix) ? text : `${sender}: ${text}`;
       }).join('\n');
 
       await db.chats.put(chat);
@@ -4401,7 +4456,9 @@ ${voiceCallTtsBlock}
           voiceCallState.callHistory.push({
             role: 'assistant',
             content: displayText,
-            timestamp: aiTimestamp
+            timestamp: aiTimestamp,
+            // 群聊里这条内容本来就带 "名字: 台词" —— 记下说话人, 总结里才不会变成 undefined
+            senderName: turn.name
           });
 
           logVoiceCallDiag('VOICE_CALL_DISPLAY_TEXT_READY', {
@@ -4453,7 +4510,9 @@ ${voiceCallTtsBlock}
           voiceCallState.callHistory.push({
             role: 'assistant',
             content: displayText,
-            timestamp: aiTimestamp
+            timestamp: aiTimestamp,
+            // 带上说话人 —— 记忆总结要靠它标注"谁说的"(以前缺这一项, 总结里全是 undefined)
+            senderName: chat.name
           });
 
           logVoiceCallDiag('VOICE_CALL_DISPLAY_TEXT_READY', {
@@ -4755,6 +4814,8 @@ ${voiceCallTtsBlock}
   // ========== 导出到全局作用域 ==========
   window.videoCallState = videoCallState;
   window.voiceCallState = voiceCallState;
+  // 通话记录里取纯文字用 —— 视频通话的用户那条可能是多模态数组
+  window.callHistoryContentToText = callHistoryContentToText;
   window.handleInitiateCall = handleInitiateCall;
   window.startVideoCall = startVideoCall;
   window.minimizeVideoCall = minimizeVideoCall;

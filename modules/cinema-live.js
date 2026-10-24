@@ -64,6 +64,20 @@
   var SERIES_OUTLINE_MAX_CHARS = 1500;    // 短剧: 攒够一批合并出的总纲
   var SUMMARY_REQUEST_TIMEOUT_MS = 45000;
 
+  // ---- 「此刻画面」实况 (2026-10-23) ----
+  // 陪聊改走主 API 之后, 主 API 看不见画面 —— 它只能靠"剧情记忆"知道演了什么。
+  // 剧情记忆的粒度是 5 分钟一段, 问"刚才是怎么了"会答得粗。
+  // 所以 Live 多开一条【高频短句】通道: 每隔一段时间写一句"此刻屏幕上是谁在干什么",
+  // 覆盖式存进 watchSession.liveNow, 只给主 API 当上文用。
+  //
+  // 为什么默认 30 秒而不是 15 秒:
+  //   这一条每个 turn 的输入是"这 30 秒的帧"(~30 张), 单次开销只有 5 分钟摘要的 1/10,
+  //   但它会占 Live 的 turn 队列。所以宁可慢一点, 也不跟用户抢。
+  var LIVE_NOW_INTERVAL_MS = 30 * 1000;
+  var LIVE_NOW_TIMEOUT_MS = 20000;
+  // 摘要快到期时, 实况让路 (摘要优先 —— 摘要进的是剧情记忆, 实况只是陪聊的补充)
+  var LIVE_NOW_YIELD_BEFORE_SUMMARY_MS = 15000;
+
   // 🔴 2026-10-19 内容下限 —— 这次改造里最该单独拎出来的一条。
   //
   //   起因 (用户实测): 退出精炼被截断成只剩三个字, 但整条链的判据只有"非空"
@@ -168,7 +182,13 @@
     //   seriesRecap = 从 Dexie 读出来的整行, 进片时喂回模型。
     //   长剧存的是滚动锚(currentPlotSummary), 也走这张表, key = 'film:'+chatId。
     seriesRecap: null,
-    seriesRecapInjectPending: false   // 切剧时置 true, 等 Live ready 后发注入回合
+    seriesRecapInjectPending: false,   // 切剧时置 true, 等 Live ready 后发注入回合
+    // 🔴 2026-10-23 「此刻画面」实况 —— 陪聊改走主 API 之后, 主 API 看不见画面,
+    //   只能靠这句知道自己"刚刚"看到的是什么。
+    //   【单条覆盖式, 不是数组】—— 实况是"此刻"的快照, 攒多条只会互相矛盾
+    //   ("张三站在门口" 和 "李四坐在床上" 堆一起, 主 API 只会更懵)。
+    //   at = 写下来的时刻, 传给主 API 时算成"多少秒前看到的"。
+    liveNow: { text: '', at: 0 }
   };
 
   /**
@@ -378,6 +398,8 @@
     enabled: false,
     client: null,
     frameTimer: null,
+    // 「此刻画面」实况的定时器 (2026-10-23) —— 跟 frameTimer 一样, Live 就绪才起
+    liveNowTimer: null,
     canvas: null,
     ctx: null,
     framesSent: 0,
@@ -598,6 +620,8 @@
       }
     }, FRAME_INTERVAL_MS);
     log('开始 1 FPS 视频帧发送 (长边降采样到 ' + FRAME_MAX_DIM + ', 保持宽高比)');
+    // 实况通道跟帧循环同生共死 (2026-10-23): 有帧才有"此刻画面"可言
+    startLiveNowLoop();
   }
 
   function stopFrameLoop() {
@@ -606,6 +630,7 @@
       S.frameTimer = null;
       log('已停止视频帧发送');
     }
+    stopLiveNowLoop();
   }
 
   // ============================================================
@@ -1199,12 +1224,12 @@
       if (typeof p.armSettle === 'function') p.armSettle();
       return;   // ⬅ 关键: 摘要文字绝不进聊天气泡
     }
-    // 正常陪聊: 跨多个 turn 累加成【一整句】, 始终只占一个气泡
-    bubbleText += takeDelta(bubbleText, text);
-    if (bubbleText) renderGeminiBubble(bubbleText);
-    // ⚠️ 只在回合收尾 (isFinal) 记一条【完整句子】, 绝不逐字记。
-    //   中途增量进来时 bubbleText 还在长, 这时候记下来的是半截。
-    if (isFinal) recordAssistantFinal(bubbleText);
+    // 🔴 2026-10-23 陪聊改走主 API 之后, Live 的文字【一律不进聊天气泡】。
+    //   气泡现在是主 API 的地盘 (modules/cinema-chat.js 渲染)。
+    //   Live 这边的文字只有两个去处: 剧情摘要 / 此刻实况 —— 都走上面那条 pendingSummary。
+    //   落到这里 = 一次不在途的 turn 吐了字, 直接丢掉:
+    //   绝不能让它跟主 API 的回复抢同一个气泡。
+    log('[Live] 丢弃一条不在途的文字 (' + String(text).slice(0, 60) + ')');
   }
 
   function recordChat(role, text) {
@@ -1246,7 +1271,14 @@
   // 摘要请求 —— 单通道, 绝不能与用户消息并发
   // 迁移自旧文件 :579-640
   // ============================================================
-  function requestSummary(kind, instruction) {
+  function requestSummary(kind, instruction, options) {
+    // 🔴 2026-10-23 options:
+    //   silent    —— 实况通道用。不占用"正在整理剧情"那个 UI 状态, 也不重刷记忆面板
+    //                (实况只是陪聊的补充, 不该在界面上显得像在干活)。
+    //   timeoutMs —— 实况只要一句话, 20 秒还没完就该作废, 别占着 turn 队列。
+    var opts = options || {};
+    var silent = opts.silent === true;
+    var timeoutMs = opts.timeoutMs || SUMMARY_REQUEST_TIMEOUT_MS;
     if (watchSession.pendingSummary) return Promise.reject(new Error('已有摘要请求在进行中'));
     if (!S.client || !S.client.isReady()) return Promise.reject(new Error('Live 未就绪'));
 
@@ -1268,6 +1300,7 @@
       kind: kind, buffer: '', lastText: '',
       resolve: null, timer: null, settleTimer: null,
       lastTextAt: 0,
+      silent: silent,
       // gotText: 见 handleModelText / onTurnCompleteInternal 的竞态说明。
       // 摘要请求发出去之后, 必须【真的收到模型的字】才允许被收走。
       gotText: false
@@ -1275,9 +1308,11 @@
     var promise = new Promise(function (resolve) { p.resolve = resolve; });
 
     watchSession.pendingSummary = p;
-    watchSession.summaryBusy = true;
-    renderStatus('ready');
-    renderPlotPanel();
+    if (!silent) {
+      watchSession.summaryBusy = true;
+      renderStatus('ready');
+      renderPlotPanel();
+    }
 
     /**
      * 判定"这次摘要说完了" —— 连续 SUMMARY_SETTLE_MS 没新字。
@@ -1304,7 +1339,7 @@
       if (p.settleTimer) clearTimeout(p.settleTimer);   // 超时收走前先掐掉静默计时, 防二次 resolve
       watchSession.pendingSummary = null;
       watchSession.summaryBusy = false;
-      logWarn('[摘要] ' + kind + ' 请求超时 (' + SUMMARY_REQUEST_TIMEOUT_MS + 'ms)');
+      logWarn('[' + kind + '] 请求超时 (' + timeoutMs + 'ms)');
       // 超时作废后, 已经吐出来的那半句可能还在继续流 —— 开静默窗口把它们丢掉,
       // 免得流进下一次摘要的 buffer (同 waitForNoPendingSummary 里的说明)。
       // 只在真的吐过字时才开, 免得连正常聊天都被误吞三秒。
@@ -1312,18 +1347,20 @@
         watchSession.summaryGhostUntil = Date.now() + 3000;
         try { if (S.client) S.client._lastTranscription = ''; } catch (e) { /* noop */ }
       }
-      renderStatus('ready');
-      renderPlotPanel();
+      if (!silent) {
+        renderStatus('ready');
+        renderPlotPanel();
+      }
       p.resolve('');
-    }, SUMMARY_REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
 
-    log('[摘要] 发起 ' + kind + ' 请求');
+    log('[' + kind + '] 发起请求');
     var ok = S.client.sendUserText(instruction);
     if (!ok) {
       clearTimeout(p.timer);
       watchSession.pendingSummary = null;
       watchSession.summaryBusy = false;
-      renderStatus('ready');
+      if (!silent) renderStatus('ready');
       return Promise.reject(new Error('发送失败 (Live 未就绪)'));
     }
     return promise;
@@ -1340,8 +1377,11 @@
     // 正常聊天气泡有自己的 takeDelta, 清掉不影响连续性 ——
     // 下一次增量到达时 t !== '' 会正常重新赋值。
     try { if (S.client) S.client._lastTranscription = ''; } catch (e) { /* noop */ }
-    renderStatus('ready');
-    renderPlotPanel();
+    // 实况是静默通道 —— 不刷状态栏、不刷记忆面板 (它没改任何剧情记忆)
+    if (!p.silent) {
+      renderStatus('ready');
+      renderPlotPanel();
+    }
   }
 
   function flushQueuedUserText() {
@@ -1546,12 +1586,23 @@
     // 之后哪怕一直正常播放也永远不会再生成摘要 (退出时的最终总结也被拖死)。
     //
     // 正确写法: 统一在 finally 里 scheduleStageSummary(), 保证链子不断。
+    //
+    // 🔴 2026-10-23: retryInMs —— 「此刻画面」实况在途时, 摘要等它一下再跑。
+    //   实况只要几秒, 不该让这一轮摘要白等 5 分钟。
+    var retryInMs = 0;
     try {
       if (!S.enabled || watchSession.summaryBusy) return;
       if (S._leaving) return;              // 要退出了, 不必再排
       var video = getVideo();
       if (!video || video.paused || video.ended) return; // 暂停中, finally 会重排
       if (!S.client || !S.client.isReady()) return;      // 还没 ready, finally 会重排
+
+      // summaryBusy 为 false 但 pendingSummary 有值 = 实况在途 (实况是静默的, 不占 summaryBusy)
+      if (watchSession.pendingSummary) {
+        log('[摘要] 实况还没收尾, 3 秒后再试');
+        retryInMs = 3000;
+        return;
+      }
 
       runStageSummary({ reason: '5 分钟到' });
     } catch (e) {
@@ -1561,8 +1612,79 @@
       // 但退房/禁用/要生成最终总结时不要再排 —— 那三种情况定时器本来就该停。
       if (S.enabled && !S._leaving) {
         watchSession.lastSummaryStartedAt = totalPlayedMs();
-        scheduleStageSummary();
+        scheduleStageSummary(retryInMs || undefined);
       }
+    }
+  }
+
+  // ============================================================
+  // 「此刻画面」实况 (2026-10-23)
+  // ============================================================
+  // 陪聊改走主 API 之后, 主 API 看不见画面 —— 它对剧情的认知全靠剧情记忆,
+  // 而剧情记忆是 5 分钟一段, 问"刚才是怎么了"会答得粗。
+  // 这一条通道让 Live 额外写一句"此刻屏幕上是谁在干什么",
+  // 覆盖式存进 watchSession.liveNow, 只给主 API 当上文用。
+  //
+  // 【为什么覆盖式而不是数组】
+  //   实况是"此刻"的快照。攒 20 条只会互相矛盾
+  //   ("张三站在门口" 和 "李四坐在床上" 堆一起, 主 API 只会更懵)。
+  //
+  // 【优先级】摘要 > 实况。
+  //   实况在摘要在途时跳过; 摘要在实况在途时等 3 秒再试 (见 tickStageSummary)。
+  function buildLiveNowInstruction() {
+    return [
+      '【【后台任务】】用一句话说说此刻屏幕上是什么。',
+      '',
+      '· 只写此刻【正在发生】的事: 画面里有谁、在做什么、在什么场景。',
+      '· 不要评价、不要抒情、不要评论剧情、不要提你和用户的互动。',
+      '· 控制在 40 字以内, 就一句话。',
+      '· 直接输出那句话本身, 不要加称呼、不要加解释。'
+    ].join('\n');
+  }
+
+  function requestLiveNow() {
+    if (!S.client || !S.client.isReady()) return Promise.resolve('');
+    return requestSummary('live', buildLiveNowInstruction(), {
+      silent: true,
+      timeoutMs: LIVE_NOW_TIMEOUT_MS
+    })
+      .then(function (text) {
+        var t = String(text || '').trim();
+        if (!t) return '';
+        watchSession.liveNow = { text: t, at: Date.now() };
+        log('[实况] ' + t);
+        return t;
+      })
+      .catch(function (err) {
+        logWarn('[实况] 失败:', (err && err.message) || err);
+        return '';
+      });
+  }
+
+  function tickLiveNow() {
+    if (!S.enabled || S._leaving) return;
+    if (!S.client || !S.client.isReady()) return;
+    if (watchSession.pendingSummary) return;   // 摘要在途 → 让路
+    if (watchSession.summaryBusy) return;       // 正在写摘要 → 让路
+    var video = getVideo();
+    if (!video || video.paused || video.ended) return;   // 画面没动, 不用重写
+    // 摘要快到期 → 这一轮实况让路 (摘要进的是剧情记忆, 优先级更高)
+    var sinceAnchor = totalPlayedMs() - (watchSession.lastSummaryStartedAt || 0);
+    if (sinceAnchor > WATCH_SUMMARY_INTERVAL_MS - LIVE_NOW_YIELD_BEFORE_SUMMARY_MS) return;
+    requestLiveNow();
+  }
+
+  function startLiveNowLoop() {
+    stopLiveNowLoop();
+    S.liveNowTimer = setInterval(tickLiveNow, LIVE_NOW_INTERVAL_MS);
+    log('开始「此刻画面」实况 (' + Math.round(LIVE_NOW_INTERVAL_MS / 1000) + ' 秒一次)');
+  }
+
+  function stopLiveNowLoop() {
+    if (S.liveNowTimer) {
+      clearInterval(S.liveNowTimer);
+      S.liveNowTimer = null;
+      log('已停止「此刻画面」实况');
     }
   }
 
@@ -3512,15 +3634,33 @@
   }
 
   function doSendUserText(text) {
+    var t = String(text || '').trim();
+    if (!t) return;
+
+    // 🔴 2026-10-23 陪聊改走【主聊天的主 API】(modules/cinema-chat.js)。
+    //   Live 不再接收用户消息 —— 它只负责看画面 + 写剧情记忆。
+    //   人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆 全由主 API 那条链路组装,
+    //   性格跟外面聊天一致 (用户 2026-10-23 的原话: "性格也和外面聊天的不适配")。
+    if (window.CinemaChat && typeof window.CinemaChat.send === 'function') {
+      resetBubble();          // 上一句收尾, 开一个新气泡
+      bubbleText = '';
+      recordChat('user', t);  // 观影聊天记录(导出用的"一起看的回忆")照旧记
+      Promise.resolve(window.CinemaChat.send(t)).catch(function (e) {
+        log('[陪聊] 失败', e);
+      });
+      return;
+    }
+
+    // cinema-chat.js 没加载 → 临时落回旧的 Live 陪聊 (别让用户完全发不出话)
+    logWarn('CinemaChat 不可用, 临时落回 Live 陪聊');
     var video = getVideo();
     var extra = (video && !video.paused && !video.ended)
       ? '' : '（视频当前是暂停/结束状态，只能根据之前收到的画面回答）';
-    // 用户发了新消息 -> 上一句 assistant 的话收尾, 开一个新气泡
     resetBubble();
     bubbleText = '';
-    recordChat('user', text);
-    S.client.sendUserText(String(text || ''));
-    appendUserBubble(text);
+    recordChat('user', t);
+    S.client.sendUserText(t);
+    appendUserBubble(t);
     if (extra) appendSystemLine(extra);
   }
 
@@ -3529,6 +3669,21 @@
    * @returns {boolean} true = 已被 Live 接管
    */
   function handleUserMessage(text) {
+    var t = String(text || '').trim();
+    if (!t) return false;
+
+    // 🔴 2026-10-23 陪聊改走主 API 之后, 【Live 没就绪也能聊】。
+    //   陪聊要的是人设 + 长期记忆 + 主聊天历史 + 影院剧情记忆, 全都不依赖 Live。
+    //   Live 只管看画面 + 写剧情记忆, 它没连上只是"看不到此刻画面", 不该挡住聊天。
+    //
+    //   也不再有"摘要在途就排队"那套 —— 用户消息走主 API, 跟 Live 的 turn 队列
+    //   是两条完全独立的连接, 根本不会撞。
+    if (window.CinemaChat && typeof window.CinemaChat.send === 'function') {
+      doSendUserText(t);
+      return true;
+    }
+
+    // 没有 cinema-chat.js → 走老的 Live 陪聊 (那条路需要 Live 就绪)
     if (!S.enabled) return false;
     if (!S.client || !S.client.isReady()) {
       appendSystemLine('⚠️ Gemini Live 还没就绪，暂时无法提问');
@@ -3536,12 +3691,12 @@
     }
     // ⚠️ 关键: 摘要 turn 在途时【排队】, 绝不并发发第二个 turn
     if (watchSession.pendingSummary) {
-      watchSession.queuedUserText = String(text || '');
-      appendUserBubble(text);
+      watchSession.queuedUserText = t;
+      appendUserBubble(t);
       appendSystemLine('⏳ 正在整理剧情，你的消息会在整理完成后自动发出。');
       return true;
     }
-    doSendUserText(text);
+    doSendUserText(t);
     return true;
   }
 
@@ -3678,6 +3833,40 @@
       }
     },
     getChatId: function () { return S.chatId; },
+
+    // 🔴 2026-10-23 陪聊改走主 API 之后, cinema-chat.js 需要三样东西:
+    //   ① 影院这边攒下的剧情记忆 + 此刻实况 (给主 API 当上文)
+    //   ② 气泡的渲染 (气泡现在是主 API 的地盘, 但 DOM 跟样式都在这个模块里)
+    //   ③ 观影聊天记录 (导出用的"一起看的回忆")
+    getCinemaContext: function () {
+      var rec = watchSession.seriesRecap;
+      var isSeries = watchSession.kind === 'series';
+      return {
+        kind: watchSession.kind,
+        title: watchSession.seriesTitle || '',
+        lastEp: watchSession.seriesLastEp || 0,
+        segCount: watchSession.segCount || 0,
+        // 短剧: 跨场提要 (库里的那份); 长剧: 整部戏的提要
+        recap: isSeries ? ((rec && rec.text) || '') : '',
+        recapText: isSeries ? '' : ((rec && rec.recapText) || ''),
+        // 长剧的滚动锚 (内存里最新的那份)
+        anchor: isSeries ? '' : (watchSession.currentPlotSummary || ''),
+        episodes: (watchSession.episodeMemories || []).map(function (x) {
+          return { ep: x.ep, text: x.text || '' };
+        }),
+        segments: (watchSession.segments || []).map(function (x) {
+          return { ep: x.ep, text: x.text || '' };
+        }),
+        // 此刻画面 (单条覆盖式)
+        liveNow: watchSession.liveNow || { text: '', at: 0 }
+      };
+    },
+    // ---- 陪聊气泡 UI (由 cinema-chat.js 驱动) ----
+    appendUserBubble: appendUserBubble,
+    renderAssistantBubble: renderGeminiBubble,
+    resetBubble: resetBubble,
+    appendSystemLine: appendSystemLine,
+    recordAssistant: recordAssistantFinal,
 
     // 生命周期
     enable: enable,

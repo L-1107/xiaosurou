@@ -1005,7 +1005,7 @@ ${prevSummary}
         let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
         response = await fetch(geminiConfig.url, geminiConfig.data);
       } else {
-        const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+        const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
         response = await fetch(apiUrl, {
           method: 'POST',
           headers: {
@@ -1701,7 +1701,23 @@ ${updatePrompt}
 现在开始续写：`;
 
       // 调用AI生成
-      const apiConfig = await db.apiConfig.get('main');
+      // ⚠️ 必须实时读 API 预设 —— 站点预设启用后, db 里那行的 proxyUrl/apiKey 会被【清空】
+      //    (只留预设引用), 直接读它拿到的是空串 → "作者追更"直接弹"API配置不完整"。
+      let apiConfig = null;
+      if (typeof window.resolveApiSlotConfig === 'function') {
+        try {
+          apiConfig = await window.resolveApiSlotConfig('main');
+        } catch (e) {
+          console.warn('[作者追更] 解析 API 预设失败, 回落到 IndexedDB:', (e && e.message) || e);
+        }
+      }
+      if (!apiConfig || !apiConfig.proxyUrl || !apiConfig.apiKey) {
+        // 回落: 从 IndexedDB 读 (没配预设的老用户走这里)
+        const dbConfig = await db.apiConfig.get('main');
+        if (dbConfig && dbConfig.proxyUrl && dbConfig.apiKey) {
+          apiConfig = dbConfig;
+        }
+      }
       if (!apiConfig || !apiConfig.proxyUrl || !apiConfig.apiKey) {
         console.error('[作者追更] API配置不完整');
         alert('作者追更失败：API配置不完整，请先配置API');
@@ -1744,7 +1760,7 @@ ${updatePrompt}
           max_tokens: Math.min(4096, targetWordCount * 3) // 增加max_tokens，至少3倍目标字数
         };
 
-        const apiUrl = apiConfig.proxyUrl.endsWith('/v1') ? `${apiConfig.proxyUrl}/chat/completions` : `${apiConfig.proxyUrl}/v1/chat/completions`;
+        const apiUrl = `${apiConfig.proxyUrl.replace(/\/+$/, '')}/chat/completions`;
         response = await fetch(apiUrl, {
           method: 'POST',
           headers: {

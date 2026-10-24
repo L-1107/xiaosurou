@@ -187,6 +187,18 @@
   window.fetchViaOpenAICompatibleProxy = fetchViaOpenAICompatibleProxy;
   window.isMainApiProxyEnabled = isMainApiProxyEnabled;
 
+  // 🔴 2026-10-23 影院陪聊 (modules/cinema-chat.js) 要用这几样。
+  //   影院现在也调主 API 了, 但它【不能】直接调主聊天那个大函数 ——
+  //   那个函数会写主聊天历史、跑工具调用、抽记忆, 影院要用的话副作用太大。
+  //   所以这里把三个【纯函数】挂到 window 让影院复用:
+  //     · replaceTemplateVars   —— 主聊天的提示词变量替换 (人设/记忆/昵称…)
+  //     · toGeminiRequestData   —— 主 API 走 Gemini 原生格式时的请求体转换
+  //     · fetchStreamingResponse —— 主聊天的 SSE 流式解析 (影院要用同一套)
+  //   一行行为都不改, 只是把模块内的实现暴露出去。
+  window.replaceTemplateVars = replaceTemplateVars;
+  window.toGeminiRequestData = toGeminiRequestData;
+  window.fetchStreamingResponse = fetchStreamingResponse;
+
   /**
    * 第二阶段: 聊天链路「语音控制」prompt 段落。
    *
@@ -2108,7 +2120,7 @@ ${linkedContents}
         let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messagesPayload);
         response = await fetch(geminiConfig.url, withCurrentAiSignal(geminiConfig.data));
       } else {
-        response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2796,7 +2808,7 @@ ${linkedContents}
 
           const response = isGemini ?
             await fetch(geminiConfig.url, withCurrentAiSignal(geminiConfig.data)) :
-            await fetch(`${proxyUrl}/v1/chat/completions`, {
+            await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -4681,6 +4693,11 @@ ${getActiveThoughtsPrompt()}
             'narratorInstruction': narratorInstruction,
             'kinshipContext': kinshipContext,
             'coupleSpaceContext': coupleSpaceContext,
+            // 宠物屋 (2026-10-23): 让 AI 知道你们一起养了宠物, 以及能怎么照顾它。
+            // 没有宠物时这里是空串, 提示词里那一整段自然消失。
+            'petNestContext': (window.PetNest && typeof window.PetNest.getCachedContext === 'function')
+              ? window.PetNest.getCachedContext()
+              : '',
             'bilingualModeContext': bilingualModeContext,
             'thoughtsPrompt': thoughtsPrompt,
             'bilingualAlertText': chat.settings.enableBilingualMode ? ' ⚠️ 必须使用双语格式：外语〖中文〗' : '',
@@ -6699,6 +6716,19 @@ ${getActiveThoughtsPrompt()}
               showIncomingCallModal('voice', chat);
             }
             continue;
+          case 'pet_action':
+            // 宠物屋 (2026-10-23): AI 照顾你们一起养的宠物。
+            // feed=喂食 / play=陪玩 / comfort=摸摸，扣的是和用户同一个粮仓。
+            // 收据不进气泡（聊天里不会多出一条奇怪的消息），
+            // 而是通过下一轮的【当前小窝状态】回灌给 AI，让它知道自己刚做了什么。
+            if (window.PetNest && typeof window.PetNest.handlePetAction === 'function') {
+              try {
+                await window.PetNest.handlePetAction(msgData, chat);
+              } catch (petActionError) {
+                console.warn('[pet_action] 执行失败:', petActionError);
+              }
+            }
+            continue;
           case 'pat_user':
             let patterName;
             if (chat.isGroup) {
@@ -8471,7 +8501,7 @@ ${linkedContents}
 
       const response = isGemini ?
         await fetch(geminiConfig.url, withCurrentAiSignal(geminiConfig.data)) :
-        await fetch(`${proxyUrl}/v1/chat/completions`, {
+        await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

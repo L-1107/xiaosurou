@@ -184,7 +184,174 @@
 //     「精炼剧情提要」按钮; 注入时长剧把【锚 + 提要】都喂给模型。
 //   index.html 的 ?v= 已 bump (cinema-live.js 1.9.5→1.9.6, cinema-storage.js 0.5.2→0.5.3,
 //   沙盒 cinema-sandbox/index.html 同步)。
-const CACHE_VERSION = 'v0.2.56.0';
+// v0.2.57.0 (2026-10-22): 修「语音/视频通话挂断后的记忆总结」报 404 Invalid URL。
+//   症状: 通话结束 → 记忆总结失败, 弹「API 请求失败: 404 - Invalid URL
+//   (POST /v1/v1/chat/completions)」; 换成谷歌直连能通, 但 OpenAI 兼容站点死活不行。
+//   真凶: 站点地址(API 预设)自己就带 /v1, 而 summarizeCallTranscript 无条件
+//   又拼了一次 /v1 → /v1/v1/chat/completions, 中转网关当然认不出这条路由。
+//   修法: 只补 /chat/completions, 不再自动补 /v1 (语音 + 视频 + 通话记录手动总结
+//   三条路走的是同一个函数, 一处改完三处都活)。
+//   index.html 的 ?v= 已 bump (memory-summary.js 0.0.41→0.0.42)。
+// v0.2.58.0 (2026-10-22): 补修同款双 /v1 —— 结构化记忆的两处调用。
+//   ① 长期记忆 → 结构化记忆(批量转换): 404 被 console.warn 吞掉, 界面只弹
+//      "转换失败: 所有批次都未能提取有效数据 / 可能原因: Token过多…", 看着像记忆太长。
+//   ② 结构化记忆「新消息总结 / 范围总结」: 抛的是 `API 错误: ${response.statusText}`,
+//      跨域请求 statusText 基本是空的 → 弹出来是「总结失败: API 错误:」, 后面什么都没有。
+//   改法跟通话总结一致: 只补 /chat/completions, 不再自动补 /v1。
+//   index.html 的 ?v= 已 bump (memory-summary.js 0.0.42→0.0.43)。
+// v0.2.59.0 (2026-10-22): 把 memory-summary.js 剩下的几处也统一成【不拼 /v1】。
+//   项目设计一直是"用户自己把站点地址填全(含 /v1), 程序只补 /chat/completions" ——
+//   主聊天 ai-response.js:4913 就是 `${proxyUrl.replace(/\/+$/, '')}/chat/completions`,
+//   代理通路 buildOpenAICompatibleTargetUrl、cphone / proactive / 音乐日推 也都这样。
+//   但 memory-summary.js 里有 4 处老写法还在"看情况补 /v1":
+//     ① 1549 变量记忆提取、② 2299 结构化记忆自动总结、③ 3440 精炼长期记忆
+//        (都是 `endsWith('/v1') ? /chat/completions : /v1/chat/completions`)
+//     ④ 3729 记忆页「总结」按钮 (`__useSecondary ? /chat/completions : /v1/chat/completions`)
+//        —— 这处的【主站分支】拼了 /v1, 跟主聊天不一致, 主站不带 /v1 时它就是坏的。
+//   现在 7 处全部统一成主聊天那一写法, 一个字不差。
+//   index.html 的 ?v= 已 bump (memory-summary.js 0.0.43→0.0.44)。
+// v0.2.60.0 (2026-10-22): 修「视频通话结束后, 通话记录里看不到用户说的话」。
+//   症状: 视频通话挂断 → 通话记录里用户那几条是 "[object Object],[object Object]",
+//   AI 那几条正常(看着特别怪); 语音通话一切正常。
+//   真凶: 视频通话开了「我的画面/实时摄像头」(或上传了本地视频)时, 用户那条会存成
+//   多模态数组 [{type:'text'},{type:'image_url'}] —— 那是给模型看的。
+//   而通话记录弹窗 / 记忆总结都是 String(content) 当文字用 → 变成 [object Object]。
+//   修法 (video-voice-call.js + misc-features.js):
+//   · callHistory 里的 content 永远存【纯文字】, 多模态数组另存 visionContent,
+//     只在发模型时用 (messagesForApi 用 visionContent || content) → 画面功能没坏;
+//   · 通话记录弹窗和记忆总结统一走 callHistoryContentToText() 取文字,
+//     【以前存坏的老记录也能正常显示】;
+//   · 存进 IndexedDB 的记录只留文字 (base64 帧不进库, 免得把库撑大);
+//   · 顺手补上 callHistory 的 senderName —— 以前缺这一项, 记忆总结里 AI 那几行
+//     全顶着 "undefined: ", 现在是 "对方名字: 说话内容" (用角色实际名字, 不写死)。
+//   index.html 的 ?v= 已 bump (video-voice-call.js 0.0.81→0.0.82, misc-features.js 0.0.43→0.0.44)。
+// v0.2.61.0 (2026-10-22): 修「今日私选」每首歌的推荐理由一模一样。
+//   症状: 整张卡的理由全是 "来自 X，跟你最近在听的是同一个方向。", 一点推荐味都没有。
+//   真凶: 引擎读的是 state.apiConfig.proxyUrl/apiKey, 而站点预设启用后这两个字段
+//   会被【清空】(只留预设引用) → callLLM 直接抛 "AI 接口没配置" → LLM 压根没被调用
+//   → 整轮走确定性兜底 → 兜底的理由是写死的一句模板 → 每首都一样。
+//   (实测: 拿 git HEAD 的旧引擎跑新用例, 日志原样打这句, 理由和用户截图一模一样)
+//   修法 (js/music-daily-discovery.js):
+//   · callLLM 改走 resolveApiSlotConfig('main') 拿 API 配置 (跟项目其它地方一致),
+//     拿不到才回落到 state.apiConfig —— 站点预设模式下 LLM 终于能跑起来了;
+//   · 兜底理由改成 4 句轮换, 不再整张卡一句话;
+//   · 模型要是偷懒把十几首写成同一句理由, 会被检测出来并换掉;
+//   · 提示词加一条: 每首的理由必须针对这一首本身, 不许套同一句模板。
+//   index.html 的 ?v= 已 bump (music-daily-discovery.js 0.0.2→0.0.3)。
+// v0.2.62.0 (2026-10-22): 「今日私选」兜底时必须说清楚 —— 别让用户误以为那些理由是 AI 写的。
+//   起因: 我上一版把根因说成"AI 接口没配置"就下了结论, 但用户反问
+//   "悬浮球/情侣空间也读 state.apiConfig, 怎么它们好好的?"
+//   → 那说明"读 state.apiConfig"不是普遍坏, 只有【引用了预设的槽位】才会被清空;
+//     而「今日私选」失败的真实原因还有别的路 (30 秒超时 / HTTP 出错 / 输出没通过校验)。
+//   修法 (js/music-daily-discovery.js):
+//   · 兜底时把真实原因翻译成人话写进卡片 note:
+//     "这次 AI 没接上（原因）, 下面是按你的口味兜底挑的, 理由不是 AI 写的 —— 点「换一批」可以再试一次";
+//   · strategy.llmRanked 不再一律写 true —— 兜底时如实写 false + fallbackReason。
+//   以后再看到千篇一律的理由, 卡片上就写明原因, 不用再猜。
+//   index.html 的 ?v= 已 bump (music-daily-discovery.js 0.0.3→0.0.4)。
+// v0.2.63.0 (2026-10-23): 「今日私选」三条失败路径一起修 —— 不只是"写明原因", 还要让它们少发生。
+//   起因: 同一个症状(走进兜底)其实有三条路, 上一轮只做到了"让原因可见":
+//     ① 配置读不到 —— 预设解析成功、但 model 是空的时候, 代码把【整份配置丢掉】
+//        回落那个空的 state.apiConfig → 还是"没配置"。地址密钥有效就该用, 模型名单独兜。
+//     ② 30 秒超时 —— 提示词 ~3500 token(100 候选) + 输出 20 首带理由, 手机/免费额度上必然超。
+//     ③ 模型输出 id 对不上 → 一条不中就整轮作废 → 等于没策展成。
+//   修法 (js/music-daily-discovery.js):
+//   · 配置: 抽出 resolveLlmConfig(), 先 resolveApiSlotConfig('main') 再 state.apiConfig;
+//     只要地址+密钥有效就用, model 空了从 state.apiConfig / 预设里兜, 不再自己把配置扔了;
+//   · 超时: 提示词候选 100→60 砍掉一大截预填充; LLM 超时 30s→45s; 整轮总预算 90s→150s
+//     (原来 90s 顶不住"收集 + LLM + 格式重试"的最坏组合 → 硬超时让整轮直接报错, 一张卡都没有,
+//      比兜底出卡糟得多); 剩余预算不够再问一次时就不问, 直接兜底;
+//     浏览器 abort 出来的五花八门的错统一翻译成"AI 请求超时 (45 秒没回)"。
+//   · id 对不上: 校验改成三层匹配 —— id 精确命中 → id 没中就按歌名命中 → 都没有才丢;
+//     id 归一化认得 "186016.0" / 带空格 / "songId"/"song_id" 等各种写法;
+//     全程记账(strategy.llmDiag): 给了几条、认上几条、靠歌名救回几条、丢了几条。
+//   index.html 的 ?v= 已 bump (music-daily-discovery.js 0.0.4→0.0.5)。
+// v0.2.64.0 (2026-10-23): 「API 站点预设」的快照不同步 —— 换预设后几十处还在用旧地址。
+//   起因: 上一版「今日私选」修好后复查同类问题, 发现全项目读 state.apiConfig 的地方
+//     有几十处 (cphone / werewolf / 通话 / 狼人杀 / 专注计时 / 角色生成 / 表情包识图 …)。
+//   关键事实 (之前一直没搞清):
+//     · 站点预设启用后, 数据库里只留"预设引用", 静态 proxyUrl/apiKey 会被清空。
+//     · 应用启动时 (init-and-state.js) 会解析一次预设并【回填】进 state.apiConfig,
+//       所以这些地方平时是能用的 —— 这就是当年用户反问"悬浮球/情侣空间读
+//       state.apiConfig 怎么它们好好的"的答案。
+//     · 但那是【启动时的一份快照】。换一个预设之后, 只有"预设引用"变了, 快照还是旧的
+//       → 几十处继续用旧地址, 最坑的是"旧地址 + 新模型"的错配 (悬浮球切预设后必现)。
+//   修法:
+//   · 新增 syncApiSlotConfigIntoState() (modules/api-endpoint-presets.js):
+//     把各槽位【当前实际在用的】地址/密钥/模型同步回 state.apiConfig (只改内存)。
+//     换预设 / 改预设之后一律调它 —— 启动、保存设置、设置页换槽位预设、
+//     悬浮球换主 API 预设、预设库里改了或删了预设, 五个入口都接上了。
+//   · 真正坏掉的几处改成【实时读预设】(读 db 那行是救不回来的, 库里本来就只存引用):
+//     · character-generator.js  角色生成 (原来读 db.apiConfig 那行 → 预设模式下必然空)
+//     · focus-timer.js           专注计时 (同上; 顺带修掉无条件多拼 /v1 的老毛病 ——
+//       地址本来就带 /v1, 再补一次就变成 /v1/v1/… 404, 就是记忆总结那个毛病;
+//       现在跟主聊天一样【只补 /chat/completions】)
+//     · modules/green-river.js   绿水续写/作者追更 (同上)
+//     · sticker-vision.js        表情包识图 (识图专用槽位配了预设时静态字段被清空 → 误回退主 API)
+//     · couple-space.js          情侣空间 (41 处调用全部改成实时解析 couplespace 槽位)
+//   · modules/floating-ball.js 的"保存当前配置为预设"不再存下一个空预设。
+//   index.html 的 ?v= 已 bump 10 个文件 (couple-space / character-generator /
+//   focus-timer / sticker-vision / green-river / floating-ball / api-endpoint-presets /
+//   settings-presets / init-and-state / init-event-bindingsA)。
+// v0.2.65.0 (2026-10-23): 全项目不再自动补 /v1 —— 22 处拼地址的地方统一成主聊天写法。
+//   起因: 站点预设里用户填的地址【本来就带 /v1】(用户原话: "全项目所有用户填的都带 v1")。
+//     所以程序只该补 /chat/completions; 再补一次 /v1 就变成 /v1/v1/chat/completions,
+//     中转网关直接回 404 "Invalid URL" —— 几天前"通话记忆总结"报的就是这个。
+//   改法: 22 处统一成 `` `${proxyUrl.replace(/\/+$/, '')}/chat/completions` ``:
+//     · 无条件补 /v1 的 16 处 —— ai-group ×2、ai-response ×3(直连分支)、
+//       auction、avatar-library、data-management、init-event-bindingsB、
+//       misc-features ×2、werewolf ×5;
+//     · "带不带 /v1 都判断一下" 的 6 处 —— init-features ×3、green-river ×2、
+//       character-generator ×1 (它的"智能补全"三行也一并收成一行)。
+//   ⚠️ 别误伤: js/mcp-tool-bridge.js 里那几处 /v1/chat/completions 是【匹配地址】用的
+//     (最终 URL 本来就该含 /v1), 不是拼地址, 保持原样。
+//   index.html 的 ?v= 已 bump 11 个文件 (ai-group / ai-response / auction /
+//   avatar-library / data-management / init-event-bindingsB / init-features /
+//   misc-features / werewolf / character-generator / green-river)。
+// v0.2.66.0 (2026-10-23): 短剧「选集面板」最后几排点不到 / 拉不动。
+//   症状: 148 集的剧, 面板只显示到 73–96 集, 第 97 集起被手机底部边框盖住,
+//          往上拉也拉不动(用户原话: "切掉都不是问题, 只要集数能向上滚动也好")。
+//   真因: 不是 CSS, 是【HTML 嵌套错位】——
+//     .cinema-episode-sheet(选集面板)被写在了 .cinema-source-sheet(添加影片面板)【里面】。
+//     添加影片面板关掉时是 transform: translateY(100%)(滑出屏幕),
+//     选集面板作为它的子元素被【整体一起下移了自身高度】——
+//     实测整个面板底边落到屏幕外 319px, 最后几排按钮永远在可视区之外。
+//   改法: 把 .cinema-source-sheet 的收尾 </div> 上移, 让选集面板变成 .cinema-room 的
+//     【直接子元素】。bottom:0 这时以房间为基准, 面板底边贴住房间底部,
+//     集数在 grid 内部滚动, 最后几排能点到。
+//   验证: 实测(390×844)选集面板 offsetParent 从 cinema-source-sheet 变成 cinema-room,
+//     底边从 1163(屏幕外 319px) 回到 844(屏幕底); 滚到底最后一颗按钮 783–820 完整可见。
+//   回归: 新增 tests/cinema-episode-sheet.test.cjs(23 条, 结构/CSS/JS 三层都守)。
+//   index.html 的 ?v= 已 bump 1 个文件 (cinema-room.js 0.29.1 → 0.29.2)。
+// v0.2.67.0 (2026-10-23): 影院陪聊改走【主聊天的主 API】。
+//   起因 (用户原话): "调用的观影模型Gemini 3.8 live又要看视频又要回话实在太蠢了,
+//   性格也和外面聊天的不适配"。
+//   改造: Gemini Live 只保留"看画面 + 写剧情记忆"这一件事;
+//        陪聊改调主 API —— 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆 全跟外面一致。
+//   新增 modules/cinema-chat.js (陪聊层, 组上文 + 调主 API + 落进主聊天历史)。
+//   ⚠️ 它还必须做一件事: 把主聊天提示词里的【JSON 指令系统】剥掉 ——
+//     主聊天是"输出 JSON 数组"的指令式角色扮演, 影院气泡显示的是纯文字。
+//   另外 Live 新增一条【此刻画面】实况通道 (每 30 秒一句, 覆盖式),
+//     因为主 API 看不见画面, 只能靠这句知道自己"刚刚"看到的是什么。
+//   index.html 的 ?v= 已 bump 1 个文件 (cinema-live.js 1.9.6 → 1.9.7),
+//   新挂 modules/cinema-chat.js?v=0.0.1, sw.js 预缓存清单也加了它 —— 所以要 bump CACHE_VERSION。
+// v0.2.68.0 (2026-10-23): 宠物屋 (Cove 灵宠屋前端移植版) 上线 + 邮箱整体下线。
+//   宠物屋: 新增 modules/pet-nest.js + css/pet-nest.css + assets/pet-nest/4 张 starter 图集
+//     (共 ~590KB)。必须预缓存 —— 断网时小窝要能打开, 聊天界面角上的桌宠也要有图。
+//     index.html 新挂了 script/link 标签, SW 缓存了旧 index.html 就会漏掉 → 手机上整个宠物屋不出现。
+//   邮箱: 整体下线 (index.html 界面 + misc-features.js 的邮件段 + init-event-bindingsB.js 的
+//     两处写信生成器 + 备份导出 + 图标槽位)。主库 db.version(71) 把 emails 表真正删掉
+//     (Dexie 只从 .stores() 删名字是没用的, 必须在更高版本里设成 null)。
+//     index.html 的 init-db-schema.js ?v= 已 bump (0.0.42 → 0.0.43), 忘了手机就不升版。
+//   所以要 bump CACHE_VERSION。
+// v0.2.69.0 (2026-10-23): 宠物屋补「回到来处」返回键。
+//   index.html 的 .pn-header 里多了 <button id="pn-back-btn">,
+//   modules/pet-nest.js 的 ?v= 已 bump (0.0.1 → 0.0.2), css/pet-nest.css 的 ?v= 已 bump
+//     (0.0.2 → 0.0.3)。
+//   ⚠️ 但 index.html 自己【不带 ?v=】, sw.js 对它是 cache-first —— 只 bump 模块的 ?v=
+//     管不到 index.html, SW 会一直吐 v0.2.68.0 里缓存的旧 index.html, 返回键根本不出现。
+//     所以这里必须 bump CACHE_VERSION 让 SW 重装重缓存。
+const CACHE_VERSION = 'v0.2.69.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -243,9 +410,21 @@ const URLS_TO_CACHE = [
   './modules/cinema-room.js',
   './modules/cinema-room.css',
   './modules/cinema-live.js',
+  // 2026-10-23 影院陪聊层 (陪聊改走主 API)。跟上面三个一样必须预缓存 ——
+  // SW 缓存了旧 index.html 就会漏掉这个新 script 标签, 手机上影院聊天直接报错。
+  './modules/cinema-chat.js',
   // 房间背景图 93KB, 预缓存是为了离线也能开房间 + 首屏不闪白。
   // jpg 兜底不预缓存 —— 只给不认 webp 的老 WebView 用, 按需拉就行。
-  './assets/cinema-room-bg.webp'
+  './assets/cinema-room-bg.webp',
+  // 2026-10-23 宠物屋 (Cove 灵宠屋前端移植版)。
+  // 4 张 starter 图集共 ~590KB, 必须预缓存 —— 断网时小窝要能打开, 桌宠也要有图。
+  './modules/pet-nest.js',
+  './modules/pet-image.js',
+  './css/pet-nest.css',
+  './assets/pet-nest/room-light.webp',
+  './assets/pet-nest/cat-sprites-light.webp',
+  './assets/pet-nest/dog-sprites-light.webp',
+  './assets/pet-nest/egg-sprites-light.webp'
 ];
 
 self.addEventListener('install', event => {
@@ -333,7 +512,13 @@ self.addEventListener('fetch', event => {
      url.includes('/lib/pixi.min.js') ||
      url.includes('/lib/pixi-live2d-display.cubism4.min.js') ||
      url.includes('/modules/live2d-loader.js') ||
-     url.includes('/modules/video-voice-call.js'));
+     url.includes('/modules/video-voice-call.js') ||
+     // v0.2.68.0 (2026-10-23): 宠物屋。4 张图集走 cache-first (不带 ?v=, 命中预缓存直接用),
+     //   js/css 带 ?v= 走 network-first + 缓存兜底 —— 改了能立刻生效, 断网也能起。
+     url.includes('/modules/pet-nest.js') ||
+     url.includes('/modules/pet-image.js') ||
+     url.includes('/css/pet-nest.css') ||
+     url.includes('/assets/pet-nest/'));
 
   const isKnownCDN =
     url.includes('unpkg.com/dexie') ||

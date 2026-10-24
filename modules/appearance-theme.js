@@ -300,7 +300,7 @@
       'alipay': '支付宝',
       'auction': '黑市拍卖',
       'green-river': '绿江',
-      'mail': '邮箱',
+      'pet-nest': '宠物屋',
       'period-tracker': '月经记录',
       'focus-timer': '番茄钟',
 

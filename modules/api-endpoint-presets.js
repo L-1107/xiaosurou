@@ -399,6 +399,51 @@
   window.openEndpointPresetModal = openEndpointPresetModal;
   window.findOrCreateEndpointPreset = findOrCreateEndpointPreset;
 
+  /**
+   * 把各槽位【当前实际在用的】地址/密钥/模型, 同步回 state.apiConfig (只改内存, 不写库)。
+   *
+   * ⚠️ 为什么需要它 (2026-10-23):
+   *   站点预设启用后, 数据库里只留"预设引用", 静态的 proxyUrl/apiKey 会被清空
+   *   (clearReferencedSlotStaticEndpoints)。
+   *   应用启动时 (init-and-state.js) 会解析一次预设并回填到 state.apiConfig,
+   *   所以老代码读 state.apiConfig.proxyUrl 大多能拿到值 —— 但那是【启动时的一份快照】。
+   *   用户换一个预设之后, 只有"预设引用"变了, 快照还是旧的 →
+   *   所有还在读 state.apiConfig 的地方 (几十处) 会继续用旧地址
+   *   (最坑的是"旧地址 + 新模型"的错配), 悬浮球切预设后必现。
+   *   这个函数就是"换预设 / 改预设之后立刻把快照刷新"的统一入口。
+   *
+   * 什么时候要调:
+   *   · 应用启动            (init-and-state.js)
+   *   · 保存 API 设置        (init-event-bindingsA.js)
+   *   · 设置页换槽位预设     (syncApiEndpointSlotsFromDomToState)
+   *   · 悬浮球换主 API 预设   (floating-ball.js)
+   *   · 预设库里改了/删了预设 (settings-presets.js / floating-ball.js)
+   */
+  async function syncApiSlotConfigIntoState() {
+    const cfg = state.apiConfig || (state.apiConfig = {});
+    const gs = state.globalSettings || (state.globalSettings = {});
+    for (const slotName of Object.keys(API_SLOT_DEFS)) {
+      const def = API_SLOT_DEFS[slotName];
+      let resolved = null;
+      try {
+        resolved = await resolveApiSlotConfig(slotName);
+      } catch (e) {
+        console.warn(`[API 设置] 解析 ${slotName} 槽位预设失败:`, (e && e.message) || e);
+        continue;
+      }
+      if (!resolved || !resolved.proxyUrl || !resolved.apiKey) continue;
+      cfg[def.proxyUrlKey] = resolved.proxyUrl;
+      cfg[def.apiKeyKey] = resolved.apiKey;
+      cfg[def.modelKey] = resolved.model;
+      // 保留旧字段同步（可能别的地方用）
+      gs[def.proxyUrlKey] = resolved.proxyUrl;
+      gs[def.apiKeyKey] = resolved.apiKey;
+      gs[def.modelKey] = resolved.model;
+    }
+    return cfg;
+  }
+  window.syncApiSlotConfigIntoState = syncApiSlotConfigIntoState;
+
   /** 供加载整套 bundle 预设后补全 endpoint 引用 */
   window.syncApiEndpointSlotsFromDomToState = async function (options) {
     const cfg = state.apiConfig;
@@ -419,19 +464,24 @@
       if (nextId !== prevId) changedSlots.push(slotName);
     });
 
-    if (!applyDefaultModel) return;
-
-    for (const slotName of changedSlots) {
-      const def = getSlotDef(slotName);
-      const presetId = normalizePresetId(cfg[def.endpointPresetIdKey]);
-      if (!presetId) continue;
-      const preset = await db.apiPresets.get(presetId);
-      const defaultModel = getApiPresetDefaultModel(preset);
-      if (!defaultModel) continue;
-      cfg[def.modelKey] = defaultModel;
-      const input = document.getElementById(def.modelInputId);
-      if (input) input.value = defaultModel;
+    if (applyDefaultModel) {
+      for (const slotName of changedSlots) {
+        const def = getSlotDef(slotName);
+        const presetId = normalizePresetId(cfg[def.endpointPresetIdKey]);
+        if (!presetId) continue;
+        const preset = await db.apiPresets.get(presetId);
+        const defaultModel = getApiPresetDefaultModel(preset);
+        if (!defaultModel) continue;
+        cfg[def.modelKey] = defaultModel;
+        const input = document.getElementById(def.modelInputId);
+        if (input) input.value = defaultModel;
+      }
     }
+
+    // 预设引用变了 → 立刻把 state.apiConfig 里的地址/密钥刷新成【当前实际在用的】那套。
+    // 不刷新的话, 所有还读 state.apiConfig 的地方(几十处)会继续用旧地址,
+    // 最坑的是"旧地址 + 新模型"的错配 —— 悬浮球切预设后必现。
+    await syncApiSlotConfigIntoState();
   };
 
   /**

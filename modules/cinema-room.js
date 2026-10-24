@@ -203,7 +203,12 @@
     '      <div class="cinema-set-state" id="cinema-series-state"></div>',
     '      <div class="cinema-series-list" id="cinema-series-list" hidden></div>',
     '    </div>',
+    '  </div>',
     // 选集面板: 点某部剧 → 打开这里
+    // 2026-10-23 修复: 这个面板以前被错放在 .cinema-source-sheet(添加影片面板)里面。
+    //   添加影片面板关掉时会 translateY(100%) 把自己移出屏幕, 选集面板跟着一起被
+    //   下移了自身高度(实测 319px), 底边落到屏幕外 —— 最后几排按钮永远够不着。
+    //   现在它是 .cinema-room 的直接子元素, bottom:0 以房间为基准, grid 内部可滚。
     '  <div class="cinema-episode-sheet" id="cinema-episode-sheet">',
     '    <div class="cinema-source-head">',
     '      <span class="cinema-chat-head-title" id="cinema-episode-title">选择集数</span>',
@@ -212,7 +217,6 @@
     '    </div>',
     '    <div class="cinema-episode-meta" id="cinema-episode-meta"></div>',
     '    <div class="cinema-episode-grid" id="cinema-episode-grid"></div>',
-    '  </div>',
     '  </div>',
 
     // ---- Gemini 剧情记忆面板 (2026-10-16 从聊天框里拆出来) ----
@@ -2682,7 +2686,7 @@
   // 版本戳: 只为一眼确认「手机上跑的到底是哪一份代码」。
   // PWA 有 service worker 缓存, 用户看到的经常是旧版, 没有戳根本分不清。
   // 每次改动影院都顺手改这里。
-  global.__CINEMA_VER = '0.30.0';
+  global.__CINEMA_VER = '0.30.1';
 
   global.CinemaRoom = {
     open: open,

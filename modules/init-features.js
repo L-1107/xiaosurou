@@ -2831,7 +2831,7 @@ ${qaContext}
       truthGameState.abortController = new AbortController();
       const timeoutId = setTimeout(() => truthGameState.abortController.abort(), 45000);
       try {
-        const response = await fetch(`${proxyUrl}/chat/completions`, {
+        const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
           body: JSON.stringify({ model: model, messages: [{ role: 'user', content: systemPrompt }], temperature: 0.8 }),
@@ -2938,7 +2938,7 @@ ${qaContext}
       const timeoutId = setTimeout(() => truthGameState.abortController.abort(), 60000); // 60秒超时
 
       try {
-        const response = await fetch(`${proxyUrl}/chat/completions`, {
+        const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -3151,7 +3151,7 @@ ${qaContext}
       const timeoutId = setTimeout(() => truthGameState.abortController.abort(), 60000); // 60秒超时
 
       try {
-        const response = await fetch(`${proxyUrl}/chat/completions`, {
+        const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -3254,7 +3254,7 @@ ${qaContext}
       const timeoutId = setTimeout(() => truthGameState.abortController.abort(), 60000); // 60秒超时
 
       try {
-        const response = await fetch(`${proxyUrl}/chat/completions`, {
+        const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -3611,7 +3611,7 @@ ${truthGameHistoryContext}
               return;
             }
 
-            const response = await fetch(`${proxyUrl}/chat/completions`, {
+            const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -3698,7 +3698,7 @@ ${truthGameHistoryContext}
           const timeoutId = setTimeout(() => truthGameState.abortController.abort(), 60000); // 60秒超时
 
           try {
-            const response = await fetch(`${proxyUrl}/chat/completions`, {
+            const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -4412,7 +4412,7 @@ ${truthGameHistoryContext}
       let isGemini = proxyUrl.includes('generativelanguage');
       let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messagesForApi);
 
-      const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+      const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
       const response = isGemini
         ? await fetch(geminiConfig.url, geminiConfig.data)
         : await fetch(apiUrl, {
@@ -4553,7 +4553,7 @@ ${truthGameHistoryContext}
       let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messagesForApi);
 
       try {
-        const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+        const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
         const response = isGemini
           ? await fetch(geminiConfig.url, geminiConfig.data)
           : await fetch(apiUrl, {
@@ -4784,7 +4784,7 @@ ${finalInstruction}
         let isGemini = proxyUrl.includes('generativelanguage');
         let geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messagesForApi);
 
-        const apiUrl = proxyUrl.endsWith('/v1') ? `${proxyUrl}/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+        const apiUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
         const response = isGemini
           ? await fetch(geminiConfig.url, geminiConfig.data)
           : await fetch(apiUrl, {
@@ -5534,16 +5534,6 @@ ${finalInstruction}
           loadMoreTodos();
         }
       });
-    }
-    // 绑定邮箱底部按钮事件
-    const deleteSelectedBtn = document.getElementById('mail-delete-selected-btn');
-    if (deleteSelectedBtn) {
-      deleteSelectedBtn.addEventListener('click', window.executeBatchDeleteEmails);
-    }
-
-    const selectAllBtn = document.getElementById('mail-select-all-btn');
-    if (selectAllBtn) {
-      selectAllBtn.addEventListener('click', window.handleSelectAllEmails);
     }
     document.getElementById('manage-rules-btn').addEventListener('click', toggleRuleManagementMode);
     document.getElementById('import-rules-btn').addEventListener('click', () => {

@@ -214,6 +214,7 @@
 {{narratorInstruction}}
 {{kinshipContext}}
 {{coupleSpaceContext}}
+{{petNestContext}}
 ---
 
 # 【Part 3: 行为与指令系统 (你的能力)】
@@ -251,6 +252,7 @@
 {{viewMyPhonePrompt}}
 ### E. 互动与生活 (Interactive)
 - **拍一拍**: \`{"type": "pat_user", "suffix": "后缀"}\`(根据心情主动拍一拍对方)
+- **照顾你们一起养的小宠物**: \`{"type": "pet_action", "action": "feed|play|comfort", "pet": "宠物名"}\` (feed=喂食, play=陪玩, comfort=摸摸。**具体养了哪只、什么时候该喂, 看上面【当前小窝状态】那段**。小窝里没有宠物时不要用这条指令。)
 - **转账(给用户钱)**: \`{"type": "transfer", "amount": 5.20, \${chat.settings.enableDynamicCurrency ? '"currency": "CNY", ' : ''}"note": "备注"}\`
   (⚠️注意：这是【你给用户】发钱！如果你想要用户给你钱，请直接用文字说“可以给我买个xx吗”或者使用【代付】指令，绝对不要用这个指令！)\${chat.settings.enableDynamicCurrency ? '\\n  (注意：你可以自由选择货币(如CNY/USD/JPY等)。若想表达特定含义的金额(如520人民币)，必须参考汇率换算出对应的外币金额再转账！)' : ''}
 - **回应转账**: \`{"type": "accept_transfer", "for_timestamp": 时间戳}\` 或 \`{"type": "decline_transfer", ...}\`(我给你转账时，必须积极回应)
@@ -933,6 +935,11 @@
     if (typeof refreshAllEndpointPresetUi === 'function') {
       await refreshAllEndpointPresetUi();
     }
+    // 预设内容改了 → 刷新 state.apiConfig 里的地址/密钥快照,
+    // 否则正在用的那个预设改了地址, 其它读 state.apiConfig 的地方(几十处)还在用旧的。
+    if (typeof syncApiSlotConfigIntoState === 'function') {
+      await syncApiSlotConfigIntoState();
+    }
     alert('API 预设已保存！');
   }
 
@@ -957,6 +964,10 @@
       await loadApiPresetsDropdown();
       if (typeof refreshAllEndpointPresetUi === 'function') {
         await refreshAllEndpointPresetUi();
+      }
+      // 删掉的预设可能正被某个槽位引用 → 刷新快照, 让 state.apiConfig 反映真实情况
+      if (typeof syncApiSlotConfigIntoState === 'function') {
+        await syncApiSlotConfigIntoState();
       }
       alert('预设已删除。');
     }

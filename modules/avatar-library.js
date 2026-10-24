@@ -641,7 +641,7 @@
         }],
         max_tokens: 50
       };
-      response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

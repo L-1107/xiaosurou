@@ -53,8 +53,7 @@ db.version(51).stores({
   userTransactions: '++id, timestamp, type, amount, description',
   funds: '&id, code, name, riskLevel, currentNav, lastDayNav, history',
   auctions: '++id, status, itemName, endTime', // 拍卖记录
-  inventory: '++id, name, type, acquiredTime',
-  emails: '++id, sender, senderType, recipient, subject, content, timestamp, isRead'
+  inventory: '++id, name, type, acquiredTime'
 }).upgrade(tx => {
 
   return tx.table('worldBooks').toCollection().modify(book => {
@@ -292,6 +291,18 @@ db.version(70).stores({
   dailyDiscovery: '&id, chatId, date',                  // { id, chatId, date, title, subtitle, note, generatedAt, strategy, songs:[], seen }
   dailyDiscoveryFeedback: '++id, chatId, songId, action, createdAt'
   // { id, chatId, songId, artist, action, createdAt }
+});
+
+// 删表: 邮箱 (2026-10-23)
+//
+// 邮箱功能已整体下线（代码 + 入口 + 样式），这里把老库里的 emails 表真正删掉。
+// ⚠️ Dexie 里【只从 .stores() 删掉名字是没用的】, 老库的对象仓库会一直留在磁盘上。
+//    要真删, 得在更高版本里把名字设成 null —— 跟 v67 删 watchTogetherPlaylist 同一个写法。
+//
+// ⚠️ 加这个版本必须同时 bump index.html 里 init-db-schema.js 的 ?v=,
+//    忘了手机上 Dexie 压根不升版 (v66 cinemaChars 踩过这个坑)。
+db.version(71).stores({
+  emails: null
 });
 
 window.db = db;

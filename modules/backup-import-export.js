@@ -488,8 +488,7 @@
         db.userTransactions.toArray(),
         db.funds.toArray(),
         db.auctions.toArray(),
-        db.inventory.toArray(),
-        db.emails.toArray()
+        db.inventory.toArray()
       ]);
 
       // 方案3：导出时移除API历史记录
@@ -545,7 +544,6 @@
         funds,
         auctions,
         inventory,
-        emails,
 
         // 扩展设置 localStorage 数据 (情侣空间/悬浮球/生图/MCP 等)
         localStorage: extraLocalStorage
@@ -663,7 +661,6 @@
         funds: '基金',
         auctions: '拍卖',
         inventory: '背包',
-        emails: '邮件',
       };
 
       // 统计各表数据
@@ -1345,7 +1342,7 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         if (Array.isArray(backupData.funds)) await db.funds.bulkPut(backupData.funds);
         if (Array.isArray(backupData.auctions)) await db.auctions.bulkPut(backupData.auctions);
         if (Array.isArray(backupData.inventory)) await db.inventory.bulkPut(backupData.inventory);
-        if (Array.isArray(backupData.emails)) await db.emails.bulkPut(backupData.emails);
+        // [2026-10-23] 邮箱已下线: 老备份里的 emails 字段直接忽略, 不要报错也不要再访问 db.emails
       });
       
       // 3. 如果备份中有 localStorage 数据，则恢复

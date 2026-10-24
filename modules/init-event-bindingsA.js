@@ -2222,57 +2222,9 @@ window.initEventBindingsA = async function(state, db) {
         stopAutoBackupTimer();
       }
       // 【API配置兼容层】同步所有五个 API slot 配置到 state.apiConfig
-      if (typeof resolveApiSlotConfig === 'function') {
-        const mainConfig = await resolveApiSlotConfig('main');
-        if (mainConfig && mainConfig.proxyUrl && mainConfig.apiKey) {
-          state.apiConfig.proxyUrl = mainConfig.proxyUrl;
-          state.apiConfig.apiKey = mainConfig.apiKey;
-          state.apiConfig.model = mainConfig.model;
-          // 保留旧字段同步（可能别的地方用）
-          state.globalSettings.proxyUrl = mainConfig.proxyUrl;
-          state.globalSettings.apiKey = mainConfig.apiKey;
-          state.globalSettings.model = mainConfig.model;
-        }
-        
-        const secondaryConfig = await resolveApiSlotConfig('secondary');
-        if (secondaryConfig && secondaryConfig.proxyUrl && secondaryConfig.apiKey) {
-          state.apiConfig.secondaryProxyUrl = secondaryConfig.proxyUrl;
-          state.apiConfig.secondaryApiKey = secondaryConfig.apiKey;
-          state.apiConfig.secondaryModel = secondaryConfig.model;
-          state.globalSettings.secondaryProxyUrl = secondaryConfig.proxyUrl;
-          state.globalSettings.secondaryApiKey = secondaryConfig.apiKey;
-          state.globalSettings.secondaryModel = secondaryConfig.model;
-        }
-        
-        const backgroundConfig = await resolveApiSlotConfig('background');
-        if (backgroundConfig && backgroundConfig.proxyUrl && backgroundConfig.apiKey) {
-          state.apiConfig.backgroundProxyUrl = backgroundConfig.proxyUrl;
-          state.apiConfig.backgroundApiKey = backgroundConfig.apiKey;
-          state.apiConfig.backgroundModel = backgroundConfig.model;
-          state.globalSettings.backgroundProxyUrl = backgroundConfig.proxyUrl;
-          state.globalSettings.backgroundApiKey = backgroundConfig.apiKey;
-          state.globalSettings.backgroundModel = backgroundConfig.model;
-        }
-        
-        const visionConfig = await resolveApiSlotConfig('vision');
-        if (visionConfig && visionConfig.proxyUrl && visionConfig.apiKey) {
-          state.apiConfig.visionProxyUrl = visionConfig.proxyUrl;
-          state.apiConfig.visionApiKey = visionConfig.apiKey;
-          state.apiConfig.visionModel = visionConfig.model;
-          state.globalSettings.visionProxyUrl = visionConfig.proxyUrl;
-          state.globalSettings.visionApiKey = visionConfig.apiKey;
-          state.globalSettings.visionModel = visionConfig.model;
-        }
-        
-        const coupleConfig = await resolveApiSlotConfig('couplespace');
-        if (coupleConfig && coupleConfig.proxyUrl && coupleConfig.apiKey) {
-          state.apiConfig.couplespaceProxyUrl = coupleConfig.proxyUrl;
-          state.apiConfig.couplespaceApiKey = coupleConfig.apiKey;
-          state.apiConfig.couplespaceModel = coupleConfig.model;
-          state.globalSettings.couplespaceProxyUrl = coupleConfig.proxyUrl;
-          state.globalSettings.couplespaceApiKey = coupleConfig.apiKey;
-          state.globalSettings.couplespaceModel = coupleConfig.model;
-        }
+      //   统一走 syncApiSlotConfigIntoState() —— 换预设 / 改预设之后也要调它。
+      if (typeof syncApiSlotConfigIntoState === 'function') {
+        await syncApiSlotConfigIntoState();
       }
       
       await db.apiConfig.put(state.apiConfig);

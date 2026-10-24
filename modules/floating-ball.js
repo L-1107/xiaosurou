@@ -190,6 +190,25 @@
         </svg>
         <span>AI 原创曲管理</span>
       </div>
+      <div class="fb-menu-item" data-action="pet-nest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="12" cy="16.4" rx="4.7" ry="3.7"></ellipse>
+          <ellipse cx="5.6" cy="11.2" rx="2.1" ry="2.6"></ellipse>
+          <ellipse cx="9.9" cy="7.3" rx="2.1" ry="2.6"></ellipse>
+          <ellipse cx="14.5" cy="7.3" rx="2.1" ry="2.6"></ellipse>
+          <ellipse cx="18.8" cy="11.2" rx="2.1" ry="2.6"></ellipse>
+        </svg>
+        <span>宠物屋</span>
+      </div>
+      <div class="fb-menu-item" data-action="toggle-desktop-pet">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"></path>
+          <path d="M4 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"></path>
+          <path d="M20 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"></path>
+          <path d="M7.5 15.5c1.2 3.4 2.6 5 4.5 5s3.3-1.6 4.5-5"></path>
+        </svg>
+        <span id="fb-desktop-pet-label">桌宠</span>
+      </div>
       <div class="fb-menu-divider"></div>
       <div class="fb-menu-item" data-action="hide">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -416,7 +435,16 @@
   // 打开菜单
   function openMenu() {
     floatingBallState.menuOpen = true;
-    
+
+    // 桌宠开关的文案跟着当前状态走（2026-10-23 宠物屋）
+    const petLabel = document.getElementById('fb-desktop-pet-label');
+    if (petLabel) {
+      const visible = window.PetNest && typeof window.PetNest.desktopPetEnabled === 'function'
+        ? window.PetNest.desktopPetEnabled()
+        : true;
+      petLabel.textContent = visible ? '隐藏桌宠' : '显示桌宠';
+    }
+
     // 先临时显示菜单以获取真实尺寸（但保持透明）
     menuEl.style.visibility = 'hidden';
     menuEl.style.display = 'block';
@@ -821,6 +849,15 @@
         await db.globalSettings.put(state.globalSettings);
       }
 
+      // 换预设了 → 立刻把 state.apiConfig 里的地址/密钥刷新成【当前实际在用的】那套。
+      // 不刷新的话, 所有还读 state.apiConfig 的地方(几十处)会继续用旧地址,
+      // 最坑的是"旧地址 + 新模型"的错配 —— 悬浮球切预设后必现。
+      // ⚠️ 必须放在 db.apiConfig.put 之后 —— 免得把解析出来的地址/密钥写进库,
+      //    破坏"只存预设引用"的设计。
+      if (typeof syncApiSlotConfigIntoState === 'function') {
+        await syncApiSlotConfigIntoState();
+      }
+
       updateMainApiDisplayFromFloatingSwitch(preset.id, newMainModel);
 
       if (typeof refreshAllEndpointPresetUi === 'function') {
@@ -865,7 +902,13 @@
   async function saveCurrentApiPreset() {
     const name = await showCustomPrompt('保存 API 预设', '请输入预设名称');
     if (!name || !name.trim()) return;
-    
+
+    // ⚠️ 先把 state.apiConfig 刷新成【当前实际在用的】地址/密钥 ——
+    //    站点预设模式下, 静态字段会被清空, 直接存会存下一个空预设。
+    if (typeof syncApiSlotConfigIntoState === 'function') {
+      await syncApiSlotConfigIntoState();
+    }
+
     const presetData = {
       name: name.trim(),
       proxyUrl: state.apiConfig.proxyUrl || '',
@@ -911,6 +954,24 @@
   // 处理菜单操作
   function handleMenuAction(action) {
     switch (action) {
+      case 'pet-nest':
+        closeMenu();
+        if (typeof window.openPetNest === 'function') {
+          window.openPetNest();
+        } else if (typeof showToast === 'function') {
+          showToast('宠物屋还没加载好，刷新一下页面');
+        }
+        break;
+      case 'toggle-desktop-pet':
+        closeMenu();
+        if (window.PetNest && typeof window.PetNest.toggleDesktopPet === 'function') {
+          const next = !window.PetNest.desktopPetEnabled();
+          window.PetNest.toggleDesktopPet(next);
+          if (typeof showToast === 'function') {
+            showToast(next ? '桌宠已显示' : '桌宠已隐藏');
+          }
+        }
+        break;
       case 'clear-chat-images':
         closeMenu();
         handleQuickClearChatImages();

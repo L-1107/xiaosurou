@@ -603,7 +603,7 @@ const DEFAULT_APP_ICONS = {
     'alipay': '',
     'auction': '',
     'green-river': '',
-    'mail': '',
+    'pet-nest': '',
     'period-tracker': '',
     'focus-timer': '',
 

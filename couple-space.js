@@ -136,11 +136,32 @@ function _csInitUnread() {
 }
 
 // 获取情侣空间API配置（优先使用情侣空间专用API，否则回退到主API）
-function getCoupleSpaceApiConfig() {
-  const useCoupleSpaceApi = state.apiConfig.couplespaceProxyUrl && 
-                            state.apiConfig.couplespaceApiKey && 
+// ⚠️ 必须走 resolveApiSlotConfig('couplespace') —— 站点预设启用后,
+//    state.apiConfig 里的地址/密钥只剩【启动时回填的那份快照】,
+//    实时切预设 / 改了预设之后拿到的还是旧的。
+//    resolveApiSlotConfig('couplespace') 本身就是"情侣空间专用 → 沿用主 API"的语义,
+//    正好跟这里原本想要的逻辑一致。
+async function getCoupleSpaceApiConfig() {
+  if (typeof resolveApiSlotConfig === 'function') {
+    try {
+      const resolved = await resolveApiSlotConfig('couplespace');
+      if (resolved && resolved.proxyUrl && resolved.apiKey) {
+        return {
+          proxyUrl: resolved.proxyUrl,
+          apiKey: resolved.apiKey,
+          model: resolved.model || state.apiConfig.couplespaceModel || state.apiConfig.model || ''
+        };
+      }
+    } catch (e) {
+      console.warn('[情侣空间] 解析 API 预设失败, 回落到 state.apiConfig:', (e && e.message) || e);
+    }
+  }
+
+  // 回落: 老逻辑 (直接读 state)
+  const useCoupleSpaceApi = state.apiConfig.couplespaceProxyUrl &&
+                            state.apiConfig.couplespaceApiKey &&
                             state.apiConfig.couplespaceModel;
-  
+
   if (useCoupleSpaceApi) {
     return {
       proxyUrl: state.apiConfig.couplespaceProxyUrl,
@@ -789,7 +810,7 @@ async function handleCoupleSpaceDiarySummaryRequest(data) {
   const iframe = document.getElementById('couple-space-iframe');
   if (!iframe || !iframe.contentWindow) return;
   try {
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
     const authorName = data.diaryAuthor === 'char' ? data.charName : data.userName;
@@ -1169,7 +1190,7 @@ function buildDiaryAiContext(chat) {
 }
 
 async function generateCoupleSpaceDiaryAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -1278,7 +1299,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceDiaryComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -1440,7 +1461,7 @@ async function triggerAutoDiaryWrite(charId, isTimer = false) {
 }
 
 async function askAiIfShouldWriteDiary(chat) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) return false;
 
   const ctx = buildDiaryAiContext(chat);
@@ -1604,7 +1625,7 @@ async function handleCoupleSpaceAlbumCommentRequest(data) {
 }
 
 async function generateCoupleSpaceAlbumComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -1669,7 +1690,7 @@ ${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
 }
 
 async function generateCoupleSpaceAlbumAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -1880,7 +1901,7 @@ async function triggerAutoAlbumPost(charId, isTimer = false) {
 }
 
 async function askAiIfShouldPostPhoto(chat) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) return false;
 
   const ctx = buildDiaryAiContext(chat);
@@ -1942,7 +1963,7 @@ async function handleCoupleSpaceAnnivHeartRequest(data) {
 
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
 
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给纪念日"${data.annivTitle}"点了爱心。
@@ -1993,7 +2014,7 @@ async function handleCoupleSpaceAnnivCreateRequest(data) {
   }
 
   try {
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) {
       iframe.contentWindow.postMessage({ type: 'coupleSpaceAnnivCreateResult', error: true, reason: 'noApi' }, '*');
       return;
@@ -2117,7 +2138,7 @@ function setupCoupleSpaceAnnivDiscovery() {
 async function triggerAnnivDiscovery(charId) {
   const chat = state.chats[charId];
   if (!chat) return;
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) return;
 
   // Check settings
@@ -2294,7 +2315,7 @@ async function handleCoupleSpaceChecklistHeartRequest(data) {
 
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
 
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给清单项"${data.itemTitle}"点了爱心。
@@ -2335,7 +2356,7 @@ async function handleCoupleSpaceChecklistHeartRequest(data) {
 }
 
 async function generateCoupleSpaceChecklistAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -2455,7 +2476,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceChecklistComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -2657,7 +2678,7 @@ async function handleCoupleSpaceMessageHeartRequest(data) {
 
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
 
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给留言"${data.msgContent}"点了爱心。
@@ -2696,7 +2717,7 @@ async function handleCoupleSpaceMessageHeartRequest(data) {
 }
 
 async function generateCoupleSpaceMessageAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -2826,7 +2847,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceMessageReply(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -3020,7 +3041,7 @@ async function handleCoupleSpaceMoodHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"记录了一条心情"${data.moodType}: ${data.moodContent || ''}"并点了爱心。
 你会不会也想给这条心情点爱心？考虑你的性格和你们的关系。
@@ -3051,7 +3072,7 @@ async function handleCoupleSpaceMoodHeartRequest(data) {
 }
 
 async function generateCoupleSpaceMoodAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const moodSettings = data.moodSettings || {};
@@ -3156,7 +3177,7 @@ moodType 可选值: happy(开心) sweet(甜蜜) calm(平静) miss(想你) excite
 }
 
 async function generateCoupleSpaceMoodComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const systemPrompt = `# 你的任务
@@ -3333,7 +3354,7 @@ async function handleCoupleSpaceTimelineHeartRequest(data) {
 
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
 
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给时光轴上的记录"${data.itemContent}"点了爱心。
@@ -3372,7 +3393,7 @@ async function handleCoupleSpaceTimelineHeartRequest(data) {
 }
 
 async function generateCoupleSpaceTimelineAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -3495,7 +3516,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceTimelineComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
   const ctx = buildDiaryAiContext(chat);
@@ -3716,7 +3737,7 @@ async function handleCoupleSpaceLetterHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"写了一封信"${data.letterTitle}"并点了爱心。
 你会不会也想给这封信点爱心？考虑你的性格和你们的关系。
@@ -3747,7 +3768,7 @@ async function handleCoupleSpaceLetterHeartRequest(data) {
 }
 
 async function generateCoupleSpaceLetterAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const letterSettings = data.letterSettings || {};
@@ -3854,7 +3875,7 @@ envelope 可选值: none(普通) love(情书) classic(经典) seasonal(时令) h
 }
 
 async function generateCoupleSpaceLetterReply(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
 
@@ -3913,7 +3934,7 @@ envelope 可选值: none(普通) love(情书) classic(经典) seasonal(时令) h
 }
 
 async function generateCoupleSpaceLetterComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
 
@@ -4069,7 +4090,7 @@ async function handleCoupleSpaceScreenshotRequest(data) {
 
 async function generateChatScreenshot(chat, data) {
   const ctx = buildDiaryAiContext(chat);
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
 
   // Step 1: Ask AI to pick a memorable conversation segment
   let selectedMessages = [];
@@ -4367,7 +4388,7 @@ function setupCoupleSpaceScreenshotTimer() {
 async function triggerAutoScreenshot(charId) {
   const chat = state.chats[charId];
   if (!chat) return;
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) return;
 
   const ctx = buildDiaryAiContext(chat);
@@ -4493,7 +4514,7 @@ async function handleCoupleSpaceGardenHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给你们的情侣树浇了水，写了："${data.waterContent || ''}"，并点了爱心。
 你会不会也想给这条浇水记录点爱心？考虑你的性格和你们的关系。
@@ -4524,7 +4545,7 @@ async function handleCoupleSpaceGardenHeartRequest(data) {
 }
 
 async function generateCoupleSpaceGardenAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const gardenSettings = data.gardenSettings || {};
@@ -4632,7 +4653,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceGardenComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const systemPrompt = `# 你的任务
@@ -4822,7 +4843,7 @@ async function handleCoupleSpaceLocationHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const prompt = `你是"${ctx.charName}"。伴侣"${ctx.myNickname}"给一条定位记录点了爱心。
 地点: "${data.locationName}"
@@ -4854,7 +4875,7 @@ async function handleCoupleSpaceLocationHeartRequest(data) {
 }
 
 async function generateCoupleSpaceLocationAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const locSettings = data.locationSettings || {};
@@ -4959,7 +4980,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceLocationComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const systemPrompt = `# 你的任务
@@ -5129,7 +5150,7 @@ async function handleCoupleSpaceSleepHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const sleepDesc = data.sleepNote || data.wakeNote || '';
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"记录了一条睡眠动态"${sleepDesc}"并点了爱心。
@@ -5161,7 +5182,7 @@ async function handleCoupleSpaceSleepHeartRequest(data) {
 }
 
 async function generateCoupleSpaceSleepAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const sleepSettings = data.sleepSettings || {};
@@ -5407,7 +5428,7 @@ quality 可选值: good(睡得好) normal(一般) bad(没睡好) terrible(失眠
 }
 
 async function generateCoupleSpaceSleepComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
 
@@ -5630,7 +5651,7 @@ async function handleCoupleSpaceFinanceAiRequest(data) {
     return;
   }
   try {
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) {
       iframe.contentWindow.postMessage({ type: 'coupleSpaceFinanceAiResult', error: true }, '*');
       return;
@@ -5678,7 +5699,7 @@ async function handleCoupleSpaceFinanceHeartRequest(data) {
   if (!chat) return;
   try {
     const ctx = buildDiaryAiContext(chat);
-    const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+    const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
     if (!proxyUrl || !apiKey || !model) return;
     const typeLabel = data.itemType === 'income' ? '收入' : '支出';
     const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"记了一笔${typeLabel}："${data.itemTitle}"，金额¥${data.itemAmount}，并点了爱心。
@@ -5710,7 +5731,7 @@ async function handleCoupleSpaceFinanceHeartRequest(data) {
 }
 
 async function generateCoupleSpaceFinanceAi(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const finSettings = data.financeSettings || {};
@@ -5837,7 +5858,7 @@ ${ctx.currentTime}
 }
 
 async function generateCoupleSpaceFinanceComment(chat, data) {
-  const { proxyUrl, apiKey, model } = getCoupleSpaceApiConfig();
+  const { proxyUrl, apiKey, model } = await getCoupleSpaceApiConfig();
   if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
   const ctx = buildDiaryAiContext(chat);
   const typeLabel = data.itemType === 'income' ? '收入' : '支出';
