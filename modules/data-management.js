@@ -3167,6 +3167,21 @@ async function cleanupRedundantData() {
         }
       });
 
+      // 宠物屋是独立库 (PetNestDB)，主库清空它不会跟着清 → 这里单独清
+      // 不然「重置所有数据」之后宠物还活蹦乱跳的，跟这个按钮的意思对不上。
+      try {
+        if (window.PetNest && typeof window.PetNest.getDb === 'function') {
+          const petDb = await window.PetNest.getDb();
+          await petDb.transaction('rw', petDb.tables, async () => {
+            for (const table of petDb.tables) {
+              await table.clear();
+            }
+          });
+        }
+      } catch (petError) {
+        console.warn('清理宠物屋数据失败（不影响其它数据）', petError);
+      }
+
       localStorage.clear();
 
       setTimeout(() => {

@@ -1000,6 +1000,13 @@
     ensureDom();
     flushProgress(true);
 
+    // 告诉宠物屋：今天看了片子 → 它头顶挂一小块幕布
+    try {
+      if (global.PetNest && typeof global.PetNest.reportSignal === 'function') {
+        global.PetNest.reportSignal('watching', 1, { title: String(id || '') });
+      }
+    } catch (e) { /* 忽略 */ }
+
     const film = await S.getFilm(id);
     if (!film) return;
 
@@ -1600,6 +1607,12 @@
    */
   function playSeriesEpisode(ep) {
     if (!seriesPicked) return;
+    // 告诉宠物屋：今天看了剧 → 它头顶挂一小块幕布
+    try {
+      if (global.PetNest && typeof global.PetNest.reportSignal === 'function') {
+        global.PetNest.reportSignal('watching', 1, { title: String((seriesPicked && seriesPicked.title) || '') });
+      }
+    } catch (e) { /* 忽略 */ }
     var url = mediaUrl(seriesPicked.key, ep);
     seriesLastEp = ep - 1;          // 还没看完这一集, 上一集才算看过
     writeSeriesProgress(seriesPicked.key, ep);

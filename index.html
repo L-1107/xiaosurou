@@ -155,7 +155,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/ai-response.js?v=0.0.57" defer></script>
   <script src="modules/ai-group.js?v=0.0.41" defer></script>
   <!-- 第五层：功能模块 -->
-  <script src="modules/music-player.js?v=0.0.45" defer></script>
+  <script src="modules/music-player.js?v=0.0.46" defer></script>
   <script src="modules/ai-music.js?v=0.0.80" defer></script>
   <script src="js/music-voice-sample.js?v=0.0.79" defer></script>
   <script src="js/ai-songs-store.js?v=0.0.79" defer></script>
@@ -174,7 +174,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/video-voice-call.js?v=0.0.82" defer></script>
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
   <script src="modules/nai-imagen.js?v=0.0.36" defer></script>
-  <script src="modules/backup-import-export.js?v=0.0.38" defer></script>
+  <script src="modules/backup-import-export.js?v=0.0.39" defer></script>
   <script src="modules/settings-presets.js?v=0.0.90" defer></script>
   <script src="modules/chat-settings-presets.js?v=0.0.36" defer></script>
   <script src="modules/shopping.js?v=0.0.36" defer></script>
@@ -189,7 +189,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/cphone.js?v=0.0.36" defer></script>
   <script src="modules/myphone.js?v=0.0.36" defer></script>
   <script src="modules/werewolf.js?v=0.0.37" defer></script>
-  <script src="modules/reading-room.js?v=0.0.38" defer></script>
+  <script src="modules/reading-room.js?v=0.0.39" defer></script>
 
   <!-- 第七层：其余功能 -->
   <script src="api-config.js?v=0.0.36" defer></script>
@@ -221,7 +221,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <link rel="stylesheet" href="css/proactive-wake.css?v=0.2.01">
   <script src="modules/card-import.js?v=0.0.36" defer></script>
   <script src="modules/character-export.js?v=0.0.36" defer></script>
-  <script src="modules/data-management.js?v=0.0.38" defer></script>
+  <script src="modules/data-management.js?v=0.0.39" defer></script>
   <script src="modules/misc-features.js?v=0.0.45" defer></script>
   <script src="modules/system-settings-home.js?v=0.0.37" defer></script>
   <!-- 第八层：初始化（必须在所有模块之后） -->
@@ -259,7 +259,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.29.2" defer></script>
+  <script src="modules/cinema-room.js?v=0.29.3" defer></script>
   <link rel="stylesheet" href="modules/cinema-room.css?v=0.38.1">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
@@ -273,11 +273,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
        纯前端: 数据存本机 IndexedDB (独立库 PetNestDB), 不需要后端。
        规则与素材移植自 https://github.com/moonlin1213/cove-pet-nest (MIT)
        必须在 modules/message-store.js 之后 —— 它要包落库函数来按对话计量攒粮。 -->
-  <script src="modules/pet-nest.js?v=0.0.13" defer></script>
+  <script src="modules/pet-nest.js?v=0.0.21" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
-  <script src="modules/pet-image.js?v=0.0.1" defer></script>
-  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.6">
+  <script src="modules/pet-image.js?v=0.0.3" defer></script>
+  <!-- 宠物说话系统 (宠物自己开口)
+       必须在 pet-nest.js 之后 —— 它要拿 PetNest.listPets() 和 rules.dimensionScores()。 -->
+  <script src="modules/pet-speech.js?v=0.0.2" defer></script>
+  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.12">
   <!-- 主入口（最后加载，调用 init） -->
   <script src="modules/init-and-state.js?v=0.0.84" defer></script>
   <!-- 第九层：DOMContentLoaded 外部的独立模块 -->
@@ -8885,6 +8888,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
     <button id="pn-back-btn" class="pn-back-btn" type="button" aria-label="返回">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
     </button>
+    <button id="pn-manage-btn" class="pn-manage-btn" type="button" aria-label="小屋管理" title="小屋管理">⚙</button>
     <p class="pn-eyebrow">COVE · PET NEST</p>
     <h1 class="pn-title">我们的小窝</h1>
     <p class="pn-subtitle" id="pn-subtitle">一起生活，慢慢长大。</p>
@@ -8926,6 +8930,19 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
     <h2 id="pn-care-title"></h2>
     <p id="pn-care-details" class="pn-quiet"></p>
     <div id="pn-care-info" class="pn-quiet"></div>
+    <!-- 每只宠物独立的说话开关 -->
+    <div id="pn-speech-toggles" class="pn-speech-toggles">
+      <label class="pn-switch">
+        <input type="checkbox" id="pn-switch-speak" />
+        <span>允许说话</span>
+      </label>
+      <label class="pn-switch">
+        <input type="checkbox" id="pn-switch-insert" />
+        <span>允许插话到聊天框</span>
+      </label>
+      <!-- 还是颗蛋的时候说明一下为什么开关是灰的（用户 2026-10-26 以为坏了） -->
+      <p class="pn-quiet pn-speech-hint" id="pn-speech-hint" hidden></p>
+    </div>
     <div id="pn-care-actions" class="pn-actions">
       <button class="pn-btn" type="button" data-pn-action="comfort">摸摸</button>
       <button class="pn-btn" type="button" data-pn-action="play">陪玩</button>
@@ -8933,6 +8950,16 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
     </div>
     <div class="pn-actions">
       <button class="pn-btn" type="button" id="pn-evolve-btn">换个模样</button>
+      <button class="pn-btn" type="button" data-pn-close>关上</button>
+    </div>
+  </dialog>
+
+  <!-- 小屋管理（规则说明 + 放弃一只宠物） -->
+  <dialog id="pn-manage-dialog">
+    <h2>小屋管理</h2>
+    <p class="pn-quiet" id="pn-manage-rules"></p>
+    <div id="pn-manage-list" class="pn-manage-list"></div>
+    <div class="pn-actions">
       <button class="pn-btn" type="button" data-pn-close>关上</button>
     </div>
   </dialog>

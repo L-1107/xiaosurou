@@ -63,6 +63,10 @@ function loadRules() {
       getItem: (k) => (k in store ? store[k] : null),
       setItem: (k, v) => { store[k] = String(v); }
     },
+    // 备份/恢复要用 Blob ↔ base64（Node 18+ 自带）
+    Blob,
+    btoa,
+    atob,
     document: {
       readyState: 'loading',       // 故意不进 init(), 免得真去开 Dexie
       addEventListener() {},
@@ -104,55 +108,164 @@ section('规则: 饱腹随时间衰减（上游 store.py）');
 {
   const R = loadRules();
   const now = Date.UTC(2026, 0, 10, 12, 0, 0);
+  // 【2026-10-25 用户定】「饿得太慢了，至少 100 的饱腹，一天要喂两次嘛」
+  //   → 每小时 -8：满值 100 撑 12.5 小时 ≈ 一天两次
   const pet = { satiety: 60, settledAt: now - 5 * 3600 * 1000 };
   const s = R.currentSatiety(pet, now);
-  check('60 饱腹过 5 小时 → 50', Math.abs(s - 50) < 0.01, 'got ' + s);
+  check('60 饱腹过 5 小时 → 20（每小时 -8）', Math.abs(s - 20) < 0.01, 'got ' + s);
   const pet2 = { satiety: 60, settledAt: now - 100 * 3600 * 1000 };
   check('衰减到 0 不会变负', R.currentSatiety(pet2, now) === 0, 'got ' + R.currentSatiety(pet2, now));
   const pet3 = { satiety: 60, settledAt: now };
   check('刚喂完不衰减', R.currentSatiety(pet3, now) === 60, 'got ' + R.currentSatiety(pet3, now));
+
+  // 满值 100 能撑多久
+  const full = { satiety: 100, settledAt: now };
+  const half = R.currentSatiety(full, now + 12.5 * 3600 * 1000);
+  check('满值 100 撑约 12.5 小时见底（一天正好喂两次）',
+    half >= 0 && half <= 0.01, '12.5h 后剩 ' + half);
+  check('衰减速度是每小时 8 点', R.SATIETY_DECAY_PER_HOUR === 8, String(R.SATIETY_DECAY_PER_HOUR));
+  check('每颗粮给半饱（吃 2 颗刚好吃饱）', R.FEED_SATIETY_PER_GRAIN === 50, String(R.FEED_SATIETY_PER_GRAIN));
+  // ⚠️【2026-10-25 用户定】「一开始喂一次一颗，升级后一次两颗什么的」
+  check('喂一顿吃的粮随阶段变多（0阶段1颗 / 1阶段2颗 / 3阶段4颗）',
+    R.feedGrainCost({ stage: 0 }) === 1 && R.feedGrainCost({ stage: 1 }) === 2
+    && R.feedGrainCost({ stage: 3 }) === 4,
+    JSON.stringify([0, 1, 3].map(s => R.feedGrainCost({ stage: s }))));
 }
 
-section('规则: 成长阶段门槛（上游 growth.py）');
+section('规则: 饿死（用户 2026-10-25 定的：饿满 3 天真没了）');
+{
+  const R = loadRules();
+  const now = Date.UTC(2026, 0, 10, 12, 0, 0);
+  const H = 3600 * 1000, D = 86400000;
+
+  check('饿满 3 天的阈值是 3 天', R.STARVE_DAYS === 3, String(R.STARVE_DAYS));
+
+  // 刚喂饱 → 不饿
+  const fed = { satiety: 100, settledAt: now };
+  check('刚喂饱不饿', R.starveState(fed, now).hungry === false);
+
+  // 12.5 小时后归零 → 开始饿
+  const zeroAt = now + 12.5 * H;
+  const st0 = R.starveState(fed, zeroAt + 1000);
+  check('饱腹归零后开始饿', st0.hungry === true);
+  check('饿的开始时间算得对（≈12.5 小时后）',
+    Math.abs(st0.since - zeroAt) < 2000, 'since=' + st0.since + ' 期望≈' + zeroAt);
+  check('刚饿的时候还有 3 天（不会马上没）', st0.leftMs > 2.9 * D, String(Math.round(st0.leftMs / D)));
+
+  // 饿 2 天 → 还在，但快不行了
+  const twoDays = R.starveState(fed, zeroAt + 2 * D);
+  check('饿了 2 天还没消失', twoDays.leftMs > 0, String(Math.round(twoDays.leftMs / D)));
+  check('饿了 2 天要提醒了（dying）', twoDays.dying === true);
+
+  // 饿满 3 天 → 消失
+  const threeDays = R.starveState(fed, zeroAt + 3 * D + 1000);
+  check('饿满 3 天就消失（leftMs = 0）', threeDays.leftMs === 0, String(threeDays.leftMs));
+
+  // 不饿的时候不能判死（还没归零的那段时间）
+  check('不饿的宠物不会被判饿死', R.starveState(fed, now + 5 * H).leftMs === Infinity,
+    String(R.starveState(fed, now + 5 * H).leftMs));
+
+  // 饱腹本来就是 0 的老数据 → 从结算时间开始算
+  const zeroBase = { satiety: 0, settledAt: now };
+  check('本来就是 0 饱腹的，从结算时间开始饿',
+    R.starveState(zeroBase, now + 1000).since === now);
+}
+
+section('规则: 成长阶段门槛（上游 growth.py + 用户定新刻度）');
 {
   const R = loadRules();
   const day = 86400000;
   const created = Date.UTC(2026, 0, 1);
   const now = created + 10 * day;
 
-  // 普通宠物: 第 1 阶段要成长 40 + 相处 7 天
-  const cat = { kind: 'cat', stage: 0, growth: 45, createdAt: created };
+  // 普通宠物（猫狗没有蛋期）: 第 1 阶段要成长 130 + 相处 10 天
+  const cat = { kind: 'cat', stage: 0, growth: 135, createdAt: created };
   const t1 = R.growthTarget(cat, null, now);
-  check('猫: 阶段1 门槛 = 成长40 / 7天', t1.requiredGrowth === 40 && t1.requiredDays === 7,
+  check('猫: 阶段1 门槛 = 成长130 / 10天', t1.requiredGrowth === 130 && t1.requiredDays === 10,
     'got ' + t1.requiredGrowth + '/' + t1.requiredDays);
-  check('猫: 成长45 + 10天 → 第1阶段就绪', t1.ready === true);
+  check('猫: 成长135 + 10天 → 第1阶段就绪', t1.ready === true);
   check('猫: 成长值不够就不就绪',
     R.growthTarget({ kind: 'cat', stage: 0, growth: 10, createdAt: created }, null, now).ready === false);
   check('猫: 天数不够就不就绪',
-    R.growthTarget({ kind: 'cat', stage: 0, growth: 45, createdAt: now - 2 * day }, null, now).ready === false);
+    R.growthTarget({ kind: 'cat', stage: 0, growth: 135, createdAt: now - 2 * day }, null, now).ready === false);
 
-  // 第 2 阶段: 成长 100 + 14 天, 从上一阶段激活时间算
-  const cat2 = { kind: 'cat', stage: 1, growth: 120, createdAt: created };
-  const t2 = R.growthTarget(cat2, { stage: 1, activatedAt: now - 3 * day, growthAtActivation: 45 }, now);
-  check('猫: 阶段2 门槛 = 成长100 / 14天', t2.requiredGrowth === 100 && t2.requiredDays === 14,
+  // 第 2 阶段: 成长 324 + 25 天, 从上一阶段激活时间算
+  const cat2 = { kind: 'cat', stage: 1, growth: 330, createdAt: created };
+  const t2 = R.growthTarget(cat2, { stage: 1, activatedAt: now - 3 * day, growthAtActivation: 135 }, now);
+  check('猫: 阶段2 门槛 = 成长324 / 25天', t2.requiredGrowth === 324 && t2.requiredDays === 25,
     'got ' + t2.requiredGrowth + '/' + t2.requiredDays);
   check('猫: 天数从【上一阶段激活】起算, 不是从领养起算', t2.elapsedDays === 3, 'got ' + t2.elapsedDays);
 
-  // 蛋: 第 1 阶段只要成长 12 + 2 天
-  const egg = { kind: 'egg', stage: 0, growth: 12, createdAt: created };
+  // 蛋: 第 1 阶段只要成长 26 + 2 天
+  const egg = { kind: 'egg', stage: 0, growth: 26, createdAt: created };
   const te = R.growthTarget(egg, null, now);
-  check('蛋: 阶段1 门槛 = 成长12 / 2天', te.requiredGrowth === 12 && te.requiredDays === 2,
+  check('蛋: 阶段1 门槛 = 成长26 / 2天', te.requiredGrowth === 26 && te.requiredDays === 2,
     'got ' + te.requiredGrowth + '/' + te.requiredDays);
-  check('蛋: 成长12 + 满2天 → 可孵化',
-    R.canHatch({ kind: 'egg', growth: 12, createdAt: now - 2 * day }, now) === true);
+  check('蛋: 成长26 + 满2天 → 可孵化',
+    R.canHatch({ kind: 'egg', growth: 26, createdAt: now - 2 * day }, now) === true);
   check('蛋: 差一天不能孵化',
-    R.canHatch({ kind: 'egg', growth: 12, createdAt: now - 1 * day }, now) === false);
+    R.canHatch({ kind: 'egg', growth: 26, createdAt: now - 1 * day }, now) === false);
   check('蛋: 成长不够不能孵化',
-    R.canHatch({ kind: 'egg', growth: 11, createdAt: now - 5 * day }, now) === false);
+    R.canHatch({ kind: 'egg', growth: 25, createdAt: now - 5 * day }, now) === false);
   check('已经孵出来的（stage>0）→ 不再算「蛋可以孵化」',
     R.canHatch({ kind: 'egg', stage: 3, growth: 999, createdAt: now - 40 * day }, now) === false);
   check('鹦鹉羽化成神兽后 → 也不再算「蛋可以孵化」',
     R.canHatch({ kind: 'parrot', stage: 4, growth: 999, createdAt: now - 40 * day }, now) === false);
+
+  // 门槛表本身（用户 2026-10-25 拍板的中档刻度）
+  check('蛋类门槛表 = 26/130/324/648 + 2/10/25/50 天',
+    JSON.stringify(R.STAGE_RULES_HATCH) === JSON.stringify({ 1: [26, 2], 2: [130, 10], 3: [324, 25], 4: [648, 50] }),
+    'got ' + JSON.stringify(R.STAGE_RULES_HATCH));
+  check('猫狗门槛表 = 130/324/648 + 10/25/50 天（对齐蛋类第 2/3/4 档）',
+    JSON.stringify(R.STAGE_RULES_PLAIN) === JSON.stringify({ 1: [130, 10], 2: [324, 25], 3: [648, 50] }),
+    'got ' + JSON.stringify(R.STAGE_RULES_PLAIN));
+  check('猫狗没有蛋期 → 第 1 阶段就要求成长 130',
+    R.growthTarget({ kind: 'cat', stage: 0, growth: 129, createdAt: created }, null, now).ready === false);
+  check('猫狗第 3 阶段门槛 = 成长 648 / 50 天',
+    (() => {
+      const t3 = R.growthTarget({ kind: 'cat', stage: 2, growth: 700, createdAt: created },
+        { stage: 2, activatedAt: now - 60 * day, growthAtActivation: 330 }, now);
+      return t3.requiredGrowth === 648 && t3.requiredDays === 50;
+    })());
+  check('猫狗第 3 阶段之后（表里没第 4 档）→ 兜底按最后一档继续往上叠 648',
+    (() => {
+      const t4 = R.growthTarget({ kind: 'cat', stage: 3, growth: 2000, createdAt: created },
+        { stage: 3, activatedAt: now - 90 * day, growthAtActivation: 648 }, now);
+      return t4.requiredGrowth === 1296 && t4.requiredDays === 30;
+    })());
+  const src = read('modules/pet-nest.js');
+  check('孵化提示写的是门槛常量（不是写死的 12）',
+    src.includes("'还是一颗蛋（孵化需要成长 ' + STAGE_RULES_HATCH[1][0]") && !src.includes('孵化需要成长 12'));
+}
+
+section('规则: 陪玩/摸摸多久回一点成长值（上游秒 → 330 是毫秒）');
+{
+  const R = loadRules();
+  const H = 3600 * 1000;
+  const t0 = Date.UTC(2026, 0, 10);
+
+  // 上游 store.py: recovery = 3600*(5-trait/50)，now 是秒 → 性格 50 = 4 小时回满 1 点
+  check('第一次陪玩直接给满 1 点', R.interactionDelta('play', { traits: { energy: 50 } }, t0) === 1);
+  check('第一次摸摸直接给满 1 点', R.interactionDelta('comfort', { traits: { attachment: 50 } }, t0) === 1);
+
+  const pet = { traits: { energy: 50, attachment: 50 }, lastPlay: t0, lastComfort: t0 };
+  check('陪玩：刚点完不给点', R.interactionDelta('play', pet, t0) === 0);
+  check('陪玩：4 分钟后只有 1/60 点',
+    Math.abs(R.interactionDelta('play', pet, t0 + 4 * 60 * 1000) - 1 / 60) < 1e-9,
+    'got ' + R.interactionDelta('play', pet, t0 + 4 * 60 * 1000));
+  check('陪玩：4 小时后回满 1 点', R.interactionDelta('play', pet, t0 + 4 * H) === 1);
+  check('陪玩：8 小时后仍然封顶 1 点', R.interactionDelta('play', pet, t0 + 8 * H) === 1);
+  check('陪玩：15 秒不会回满（老 bug 是 14.4 秒就满）',
+    R.interactionDelta('play', pet, t0 + 15 * 1000) < 0.01,
+    'got ' + R.interactionDelta('play', pet, t0 + 15 * 1000));
+  check('摸摸走 attachment（性格 50 → 4 小时）',
+    R.interactionDelta('comfort', pet, t0 + 4 * H) === 1);
+  check('性格越高回得越快（活力 90 → 3.2 小时）',
+    R.interactionDelta('play', { traits: { energy: 90 }, lastPlay: t0 }, t0 + 3.2 * H) === 1);
+  check('性格越低回得越慢（活力 10 → 4.8 小时）',
+    R.interactionDelta('play', { traits: { energy: 10 }, lastPlay: t0 }, t0 + 4.8 * H) === 1);
+  check('没有性格数据时按 50 算（4 小时）',
+    R.interactionDelta('play', { lastPlay: t0 }, t0 + 4 * H) === 1);
 }
 
 section('规则: 性格由 seed 决定且稳定');
@@ -212,20 +325,20 @@ section('规则: 鹦鹉（从蛋里出来 → 定品种 → 羽化神兽）');
   check('灵宠蛋也算', R.isHatchKind('egg') === true);
   check('猫不算', R.isHatchKind('cat') === false);
 
-  // ② 蛋期规则跟灵宠蛋一样：成长 12 + 相处 2 天
-  const tp = R.growthTarget({ kind: 'parrot', stage: 0, growth: 12, createdAt: created }, null, now);
-  check('鹦鹉: 阶段1 门槛 = 成长12 / 2天', tp.requiredGrowth === 12 && tp.requiredDays === 2,
+  // ② 蛋期规则跟灵宠蛋一样：成长 26 + 相处 2 天
+  const tp = R.growthTarget({ kind: 'parrot', stage: 0, growth: 26, createdAt: created }, null, now);
+  check('鹦鹉: 阶段1 门槛 = 成长26 / 2天', tp.requiredGrowth === 26 && tp.requiredDays === 2,
     'got ' + tp.requiredGrowth + '/' + tp.requiredDays);
-  check('鹦鹉: 成长12 + 满2天 → 可孵化',
-    R.canHatch({ kind: 'parrot', growth: 12, createdAt: now - 2 * day }, now) === true);
+  check('鹦鹉: 成长26 + 满2天 → 可孵化',
+    R.canHatch({ kind: 'parrot', growth: 26, createdAt: now - 2 * day }, now) === true);
   check('鹦鹉: 差一天不能孵化',
-    R.canHatch({ kind: 'parrot', growth: 12, createdAt: now - 1 * day }, now) === false);
+    R.canHatch({ kind: 'parrot', growth: 26, createdAt: now - 1 * day }, now) === false);
 
   // ③ 能走到第 4 阶段（羽化神兽）
   const t4 = R.growthTarget({ kind: 'parrot', stage: 3, growth: 999, createdAt: created },
     { stage: 3, activatedAt: now - 30 * day, growthAtActivation: 200 }, now);
   check('鹦鹉: 有第 4 阶段（羽化神兽）', t4.stage === 4, 'got ' + t4.stage);
-  check('鹦鹉: 第4阶段门槛 = 成长220 / 21天', t4.requiredGrowth === 220 && t4.requiredDays === 21,
+  check('鹦鹉: 第4阶段门槛 = 成长648 / 50天', t4.requiredGrowth === 648 && t4.requiredDays === 50,
     'got ' + t4.requiredGrowth + '/' + t4.requiredDays);
   check('神兽阶段号 = 4', R.DIVINE_STAGE === 4, 'got ' + R.DIVINE_STAGE);
 
@@ -265,9 +378,11 @@ section('规则: 鹦鹉（从蛋里出来 → 定品种 → 羽化神兽）');
     R.stageBriefKind({ kind: 'parrot', stage: 2 }, { stage: 3 }) === 'normal');
   check('猫永远走普通成长',
     R.stageBriefKind({ kind: 'cat', stage: 0 }, { stage: 1 }) === 'normal' &&
-    R.stageBriefKind({ kind: 'cat', stage: 3 }, { stage: 4 }) === 'normal');
-  check('灵宠蛋不会羽化成神兽',
-    R.stageBriefKind({ kind: 'egg', stage: 3 }, { stage: 4 }) === 'normal');
+    R.stageBriefKind({ kind: 'cat', stage: 2 }, { stage: 3 }) === 'normal');
+  // ⚠️【2026-10-25 用户定】「羽化不会是每个神兽最后的设定吧？不能最后都长翅膀吧？」
+  //   → 灵宠蛋孵出来的幻兽【也要】有终形态，只是按族群分（龙神/灵瑞/灵幻），不是都长翅膀
+  check('灵宠蛋长到第4阶段 → 羽化（按族群挑终形态，不是都变神鸟）',
+    R.stageBriefKind({ kind: 'egg', stage: 3 }, { stage: 4 }) === 'divine');
 
   // ⑧ 羽化：血脉不变，形态换成神鸟
   const b1 = R.parrotBreedFor('seed-abc');
@@ -343,6 +458,24 @@ section('规则: 生图提示词（鹦鹉 / 神兽 / 幻兽）');
   check('灵宠蛋孵出来后 → 提示词是幻兽不是蛋', !/egg/i.test(fantasySubject), fantasySubject);
   check('幻兽提示词含英文身份', /fuzz beast/i.test(fantasySubject), fantasySubject);
   check('幻兽提示词里没有中文', !/[一-龥]/.test(fantasySubject), fantasySubject);
+
+  // 新幻兽（2026-10-25 物种盲盒）：appearance 里带 beastSpeciesEn
+  const newBeastSubject = R.subjectForPet({
+    kind: 'egg', stage: 2,
+    appearance: {
+      kind: 'fantasy', beastSpecies: '奶龙',
+      beastSpeciesEn: 'a chubby round baby dragon with big friendly eyes',
+      palette: '粉红', beastPaletteEn: 'pastel pink',
+      marking: '心形绒纹', markEn: 'a soft heart-shaped tuft on the chest'
+    }
+  });
+  check('新幻兽孵出来后 → 提示词是那只幻兽不是蛋', !/egg/i.test(newBeastSubject), newBeastSubject);
+  check('新幻兽提示词里有物种英文名',
+    newBeastSubject.indexOf('a chubby round baby dragon with big friendly eyes') >= 0, newBeastSubject);
+  check('新幻兽提示词里有配色英文名', newBeastSubject.indexOf('pastel pink') >= 0, newBeastSubject);
+  check('新幻兽提示词里没有中文', !/[一-龥]/.test(newBeastSubject), newBeastSubject);
+  check('提示词不会拼成 "a a ..."（物种英文自带冠词，别补两次）',
+    !/\ba a\b/i.test(newBeastSubject) && !/\ban an\b/i.test(newBeastSubject), newBeastSubject);
 
   // 猫狗的老样子别动
   check('猫的提示词还是 fluffy cat',
@@ -445,7 +578,7 @@ section('接线: 羽化后要提醒换新样（形态变了，旧图对不上）
   check('AI 上下文走 lookHint',
     /\(lookHint\(pet\) \|\| \{\}\)\.ai/.test(src));
   check('羽化 toast 会顺带引导去画一张',
-    /羽化成神兽了[\s\S]{0,80}画一张新样子/.test(src));
+    /羽化成[了]?「[\s\S]{0,80}画一张新样子/.test(src));
   check('按钮会区分「换个新模样」', /pet\.needsRedraw \? '✨ 换个新模样'/.test(src));
   check('lookHint 导出到 rules（方便外部复用）',
     /rules\s*=|needsLook,\s*\n\s*lookHint,/.test(src));
@@ -513,6 +646,121 @@ section('接线: 桌宠被弹窗挡住（用户实测点不动）');
     /startDesktopPetWatchdog\(\);[\s\S]{0,300}await openDb\(\);[\s\S]{0,200}await refreshAll\(\);/.test(src));
 }
 
+section('幻兽盲盒: 物种 + 每天换一次造型');
+{
+  const R = loadRules();
+  const src = read('modules/pet-nest.js');
+
+  // --- 物种池 ---
+  check('物种池够大（≥50 种）', R.BEAST_SPECIES.length >= 50, R.BEAST_SPECIES.length + ' 种');
+  check('龙之九子全在',
+    ['囚牛', '睚眦', '嘲风', '蒲牢', '狻猊', '霸下', '狴犴', '蚣蝮', '螭吻'].every(k => R.BEAST_SPECIES.some(s => s.cn === k)));
+  check('保留了最初的四个（月光绒兽那批，老玩家还能抽到）',
+    ['月光绒兽', '森林长耳兽', '星尘角兽', '潮汐软鳞兽'].every(k => R.BEAST_SPECIES.some(s => s.cn === k)));
+  check('物种池不含家猫/家狗/鹦鹉（这三个有专门的；小熊猫、小龙猫不算）',
+    !R.BEAST_SPECIES.some(s => /小猫|小狗|鹦鹉|犬|喵|家猫|猫狗|幼猫/.test(s.cn)));
+  check('每个物种都有中文名和英文描述', R.BEAST_SPECIES.every(s => s.cn && s.en && s.en.length > 8));
+
+  // --- 意象库 ---
+  check('意象库够大（≥40 条）', R.ICON_LIBRARY.length >= 40, R.ICON_LIBRARY.length + ' 条');
+  check('每条意象都有 cn/en/keys', R.ICON_LIBRARY.every(i => i.cn && i.en && Array.isArray(i.keys) && i.keys.length));
+  check('意象不做身体结构变异（不出现翅膀/角/尾巴/鳞）',
+    !R.ICON_LIBRARY.some(i => /翅膀|鹿角|龙尾|鳞片/.test(i.cn)));
+
+  // --- 从当天内容现挑意象 ---
+  const pickCoffee = R.pickIconsFromText('今天去喝了一杯拿铁咖啡', 1);
+  check('能从当天聊的内容里挑出对应意象',
+    pickCoffee.length === 1 && /咖啡|热饮/.test(pickCoffee[0].cn), pickCoffee[0] && pickCoffee[0].cn);
+  check('挑不出就不硬凑', R.pickIconsFromText('zzz 什么也没有', 1).length === 0);
+  const pickMulti = R.pickIconsFromText('看了电影又听了歌还读了书', 3);
+  check('一天能挑出多个意象', pickMulti.length >= 2, pickMulti.map(i => i.cn).join('/'));
+
+  // --- 物种盲盒 ---
+  const b1 = R.beastSpeciesForSeed('seed-A');
+  const b2 = R.beastSpeciesForSeed('seed-A');
+  const b3 = R.beastSpeciesForSeed('seed-B');
+  check('同一只永远同一物种（同一只不能变脸）',
+    b1.species === b2.species && b1.palette === b2.palette, b1.species + '/' + b1.palette);
+  check('不同种子能出不同物种', b1.species !== b3.species || b1.palette !== b3.palette,
+    b1.species + ' vs ' + b3.species);
+  check('物种/配色都在池子里',
+    R.BEAST_SPECIES.some(s => s.cn === b1.species) && R.BEAST_PALETTES.some(p => p.cn === b1.palette));
+
+  // --- 每天的造型 ---
+  const look = R.dailyLookFor([{ type: 'reading', count: 1 }], '2026-01-01', 'seed-A', ['今天读了一本书']);
+  check('当天内容能挑出小装饰', look.icons.length === 1, look.icons[0] && look.icons[0].cn);
+  check('每天有一件穿搭', !!look.outfit && !!look.outfit.cn);
+
+  // ⚠️ 用户 2026-10-25 定的：「听歌，看剧，摸摸，陪玩都不低频，
+  //    干脆不根据这些加装饰了」→ 后来拍板「全删」——
+  //    行为**一律**不体现在长相上，每天只靠「记忆小装饰 + 随机穿搭」变。
+  const ALL_BEHAVIORS = ['listening', 'watching', 'reading', 'playing',
+    'comforting', 'feeding', 'idle', 'chatting'];
+  const withFeature = ALL_BEHAVIORS.filter(t =>
+    R.dailyLookFor([{ type: t, count: 99 }], '2026-01-01', 'seed-A', []).features.length > 0);
+  check('任何行为都不再产生形态特征（行为完全不体现在长相上）',
+    withFeature.length === 0, '还长着的: ' + withFeature.join('/'));
+  check('形态特征表是空的', Object.keys(R.BEHAVIOR_FEATURES).length === 0,
+    Object.keys(R.BEHAVIOR_FEATURES).join('/'));
+  check('喂食门槛常量已删（没有形态特征就不需要门槛，别留半死的代码）',
+    !/FEEDING_FEATURE_MIN/.test(read('modules/pet-nest.js')),
+    (read('modules/pet-nest.js').match(/FEEDING_FEATURE_MIN/g) || []).length + ' 处残留');
+  check('行为仍然会被记录（听歌/看剧要记关系维度分，其余当「今天有动静」的触发）',
+    ['listening', 'watching', 'reading', 'playing', 'comforting', 'feeding', 'chatting']
+      .every(t => R.TRIGGER_SIGNALS.indexOf(t) >= 0), R.TRIGGER_SIGNALS.join('/'));
+
+  // --- 提示词 ---
+  const app = {
+    beastSpecies: b1.species, beastSpeciesEn: b1.speciesEn, beastPaletteEn: b1.paletteEn,
+    palette: b1.palette, marking: '心形绒纹'
+  };
+  const prompt = R.beastPrompt(app, look, 'a soft heart-shaped tuft on the chest');
+  check('提示词里有物种', prompt.indexOf(b1.speciesEn) >= 0);
+  check('提示词里有当天挑出来的装饰', look.icons.length ? prompt.indexOf(look.icons[0].en) >= 0 : true);
+  check('提示词带审美锁（不许丑）',
+    prompt.indexOf(R.ART_STYLE_LOCK) >= 0 && /chibi/.test(R.ART_STYLE_LOCK) && /big sparkly eyes/.test(R.ART_STYLE_LOCK));
+  check('提示词全英文（不塞中文给生图模型）', !/[\u4e00-\u9fa5]/.test(prompt));
+
+  const name = R.beastDisplayName(app, look);
+  check('中文组合名能读出来', name.indexOf(b1.species) >= 0 && name.indexOf(b1.palette) >= 0, name);
+  check('组合名不会出现「的的」（20 件穿搭的中文名全都以「的」结尾）',
+    name.indexOf('的的') < 0, name);
+  // 每一件穿搭单独用一次，都不能拼出「的的」
+  const badNames = R.BEAST_OUTFITS.filter(o => {
+    const n = R.beastDisplayName({ beastSpecies: '奶龙', palette: '粉红' },
+      { features: [], icons: [], outfit: o });
+    return n.indexOf('的的') >= 0;
+  });
+  check('20 件穿搭逐个试都不会拼出「的的」', badNames.length === 0,
+    badNames.map(o => o.cn).join('/'));
+}
+
+
+section('接线: 行为信号上报到宠物屋');
+{
+  const musicSrc = read('modules/music-player.js');
+  const cinemaSrc = read('modules/cinema-room.js');
+  const readingSrc = read('modules/reading-room.js');
+  const nestSrc = read('modules/pet-nest.js');
+  const countOf = (s, re) => (s.match(re) || []).length;
+
+  check('听歌会上报 listening', /reportSignal\('listening'/.test(musicSrc));
+  check('看剧会上报 watching（放电影 + 追剧两处都要有，缺一处就漏记）',
+    countOf(cinemaSrc, /reportSignal\('watching'/g) >= 2,
+    countOf(cinemaSrc, /reportSignal\('watching'/g) + ' 处');
+  check('阅读会上报 reading', /reportSignal\('reading'/.test(readingSrc));
+  check('聊天会上报 chatting', /reportSignal\('chatting'/.test(nestSrc));
+  check('喂食/陪玩/摸摸会上报', /'feeding'/.test(nestSrc) && /'playing'/.test(nestSrc) && /'comforting'/.test(nestSrc));
+  check('TRIGGER_SIGNALS 是数组，判断得用 indexOf（`key in 数组` 查的是下标 → 信号永远不落库）',
+    /TRIGGER_SIGNALS\.indexOf\(key\)\s*>=\s*0/.test(nestSrc) && !/key in TRIGGER_SIGNALS/.test(nestSrc));
+  check('PetNestDB 升到 v3，有 dailySignals / dailyNotes',
+    /d\.version\(3\)\.stores/.test(nestSrc) &&
+    /dailySignals/.test(nestSrc) && /dailyNotes/.test(nestSrc));
+  check('每天最多自动换一次造型', /petNestLastAutoLookDay/.test(nestSrc));
+  check('画不成就跳过，不报错不影响别的', /换造型失败（忽略/.test(nestSrc));
+  check('生图有每日上限兜底', /CFG && window\.PetImage\.CFG\.dailyLimit/.test(nestSrc));
+}
+
 section('接线: index.html');
 {
   const html = read('index.html');
@@ -554,7 +802,7 @@ section('接线: sw.js 预缓存');
   //   SW 一直吐缓存里的旧 index.html, 返回键根本不出现, 只 bump 模块版本号完全没用。
   //   所以这里锁一个下限: 任何再改 index.html 的活, CACHE_VERSION 必须 >= 这个值。
   const ver = m ? m[1].replace(/^v/, '').split('.').map(Number) : null;
-  const MIN = [0, 2, 69, 0];
+  const MIN = [0, 2, 78, 0];
   function verGte(a, b) {
     if (!a || a.length !== 4 || a.some((n) => !Number.isFinite(n))) return false;
     for (let i = 0; i < 4; i++) {
@@ -563,10 +811,29 @@ section('接线: sw.js 预缓存');
     }
     return true;
   }
-  check('CACHE_VERSION >= v0.2.69.0（改过 index.html 就必须 bump，只 bump 模块 ?v= 没用）',
+  check('CACHE_VERSION >= v0.2.78.0（改过 index.html 就必须 bump，只 bump 模块 ?v= 没用）',
     verGte(ver, MIN), m ? m[1] : 'not found');
   check('index.html 在预缓存清单里（它走 cache-first，漏了会一直吐旧页面）',
     sw.includes("'./index.html'"));
+
+  // 【本轮教训】改过模块文件就必须 bump 它在 index.html 里的 ?v= ——
+  //   不 bump 的话手机上吃的是浏览器 HTTP 缓存里的旧模块，新功能（齿轮面板/饿死）根本不出现。
+  //   这条断言把「改了 pet-nest.js / pet-nest.css / pet-image.js 却忘了 bump」变成会报红。
+  const html = read('index.html');
+  const EXPECT_V = {
+    'modules/pet-nest.js': '0.0.21',
+    'modules/pet-image.js': '0.0.3',
+    'modules/pet-speech.js': '0.0.2',
+    'modules/backup-import-export.js': '0.0.39',
+    'modules/data-management.js': '0.0.39',
+    'css/pet-nest.css': '0.0.12'
+  };
+  for (const [file, want] of Object.entries(EXPECT_V)) {
+    const re = new RegExp(file.replace(/[/.]/g, '\\$&') + '\\?v=([0-9.]+)');
+    const got = (html.match(re) || [])[1];
+    check(file + ' 的 ?v= 已 bump 到 ' + want + '（不 bump 手机上吃旧版，新功能不出现）',
+      got === want, '实际 ' + (got || '没找到'));
+  }
 }
 
 section('接线: 鹦鹉（modules/pet-nest.js 源码级）');
@@ -598,7 +865,7 @@ section('接线: 动画与光效（css/pet-nest.css）');
   check('有 6 格循环的关键帧 pn-frame-x', css.includes('@keyframes pn-frame-x'));
   check('有 6 格循环的关键帧 pn-frame-y', css.includes('@keyframes pn-frame-y'));
   check('切帧用 step-end（steps(2) 会让第三格一闪而过）',
-    css.includes('pn-frame-x 1.8s step-end') && css.includes('pn-frame-y 3.6s step-end'));
+    css.includes('pn-frame-x 9s step-end') && css.includes('pn-frame-y 18s step-end'));
   check('x 走 3 格 0/50/100', /pn-frame-x[\s\S]*?0%[\s\S]*?50%[\s\S]*?100%/.test(css));
   check('y 走 2 行 0/100', /pn-frame-y[\s\S]*?background-position-y: 0%[\s\S]*?background-position-y: 100%/.test(css));
   check('场景宠物带 pn-sprite-anim 才会动', css.includes('.pn-sprite-anim'));
@@ -699,7 +966,765 @@ section('接线: 素材齐了');
   check('署名里含上游仓库地址', lic.includes('github.com/moonlin1213/cove-pet-nest'));
 }
 
-console.log('\n================================');
-console.log('通过 ' + passed + ' / 失败 ' + failed);
-console.log('================================');
-if (failed > 0) process.exit(1);
+
+// ============================================================
+// 桌宠可见性（要真跑 DOM, 所以单独一个沙箱）
+//   2026-10-25 用户实测：「每次新进聊天页面，可移动宠物都看不见，
+//   要先关掉再开才出现」—— 根因是【可见性】和【sprite 渲染】是两条路：
+//   renderDesktopPet() 在「当前不在聊天页」时会提前 return，sprite 一直空着；
+//   切进聊天页只走了 syncDesktopPetVisibility()（只管 hidden），没人去画 sprite。
+// ============================================================
+function loadDesktopPetSandbox() {
+  const src = read('modules/pet-nest.js');
+  const store = {};
+  const screenState = { chat: false };
+  const els = {};
+  function mkEl(id) {
+    return {
+      id: id,
+      hidden: false,
+      dataset: {},
+      style: {},
+      textContent: '',
+      classList: { _s: [], add() {}, remove() {}, contains() { return false; } },
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 60, height: 60 }),
+      contains: () => false,
+      addEventListener() {},
+      append() {},
+      appendChild() {},
+      replaceChildren() {},
+      querySelectorAll: () => []
+    };
+  }
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {}, info() {} },
+    setTimeout: (fn) => ({ fn: fn }),
+    clearTimeout: () => {},
+    setInterval: () => ({ fn: null }),
+    clearInterval: () => {},
+    TextEncoder,
+    crypto: { randomUUID: () => 'test-uuid-0000' },
+    localStorage: {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); }
+    },
+    document: {
+      readyState: 'loading',          // 不进 init()
+      addEventListener() {},
+      getElementById: (id) => {
+        if (!els[id]) els[id] = mkEl(id);
+        return els[id];
+      },
+      createElement: (tag) => mkEl(tag),
+      querySelectorAll: (sel) =>
+        (sel === '.screen.active' && screenState.chat ? [{ id: 'chat-interface-screen' }] : []),
+      elementFromPoint: () => els['pn-desktop-pet-sprite'] || null,
+      body: mkEl('body'),
+      documentElement: mkEl('html')
+    },
+    Dexie: function () { throw new Error('规则测试不该碰 Dexie'); },
+    innerWidth: 390,
+    innerHeight: 844
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: 'pet-nest.js' });
+  return {
+    rules: sandbox.window.PetNest.rules,
+    els: els,
+    sandbox: sandbox,
+    screenState: screenState,
+    // getElementById 是懒创建的 → 元素要用过之后才在 els 里
+    getEl: (id) => sandbox.document.getElementById(id)
+  };
+}
+
+section('桌宠: 新进聊天页必须立刻画出来（用户 2026-10-25 实测）');
+{
+  const D = loadDesktopPetSandbox();
+  const R = D.rules;
+  const pet = { id: 'p1', name: '小花', kind: 'cat', stage: 0, sprite: 'cat-sprites-light.webp', satiety: 80 };
+  const state = { pets: [pet], events: [], grains: 10, total: 1 };
+
+  // ① 先在【别的界面】渲染一次 → 桌宠是藏着的，sprite 也没画
+  D.screenState.chat = false;
+  R.renderDesktopPet(state);
+  const wrap = D.getEl('pn-desktop-pet');
+  const sprite = D.getEl('pn-desktop-pet-sprite');
+  check('不在聊天页时桌宠是藏着的', wrap.hidden === true);
+
+  // ② 切进聊天页 → 只走可见性重算（这正是切屏时会发生的事）
+  D.screenState.chat = true;
+  sprite.style.backgroundImage = '';
+  sprite.hidden = true;
+  R.syncDesktopPetVisibility();
+  check('切进聊天页后桌宠不藏了', wrap.hidden === false);
+  check('切进聊天页后 sprite 【必须】被画出来（不然就是个空壳，看不见）',
+    !!sprite.style.backgroundImage && sprite.hidden === false,
+    'backgroundImage=' + String(sprite.style.backgroundImage));
+
+  // ③ 再切走 → 又藏起来；再切回来 → 依然有图（不能画一次就丢）
+  D.screenState.chat = false;
+  R.syncDesktopPetVisibility();
+  check('切走聊天页后桌宠又藏起来了', wrap.hidden === true);
+  D.screenState.chat = true;
+  R.syncDesktopPetVisibility();
+  check('再切回聊天页，sprite 还是画好的', !!sprite.style.backgroundImage);
+}
+
+section('事件流: AI 用角色名 + 带时间戳（用户 2026-10-25 提）');
+{
+  const src = read('modules/pet-nest.js');
+  check('事件里记下了是谁做的（actorName）',
+    /actorName:\s*\(opts\.actorName \|\| ''\)/.test(src));
+  check('AI 的名字是从聊天对象读的（单聊 chat.name / 群聊成员昵称）',
+    /function assistantNameFor/.test(src) && /chat\.name \|\| chat\.originalName/.test(src)
+    && /groupNickname \|\| m\.originalName/.test(src));
+  check('handlePetAction 把角色名传给了 care()',
+    /actorName:\s*assistantNameFor\(msgData, chat\)/.test(src));
+  check('事件流不再写死「TA」，改用记录下来的角色名',
+    /ev\.actorName \|\| 'TA'/.test(src) && !/ev\.actor === 'user' \? '我' : 'TA'/.test(src));
+  check('事件流带时间戳', /function eventTimeLabel/.test(src) && /pn-event-time/.test(src));
+  check('时间戳有样式（别跟正文一样大）',
+    /#pet-nest-screen \.pn-event-time \{/.test(read('css/pet-nest.css')));
+}
+
+section('返回键: 别被手机状态栏挡住（用户 2026-10-25 实测）');
+{
+  const css = read('css/pet-nest.css');
+  check('头部让开安全区（env(safe-area-inset-top)）',
+    /padding:\s*calc\(18px \+ env\(safe-area-inset-top/.test(css));
+  check('返回键也往下挪了安全区',
+    /top:\s*calc\(12px \+ env\(safe-area-inset-top/.test(css));
+  check('返回键不再是死写的 12px', !/#pet-nest-screen \.pn-back-btn \{[^}]*top:\s*12px;/.test(css));
+}
+
+// ============================================================
+// 异步段: 调度守卫 + 代表词来源（要真跑 promise, 所以放最后）
+// ============================================================
+(async () => {
+
+section('备份: 宠物屋得跟着走（用户 2026-10-26 提：换窗不能重新养一只）');
+{
+  const R = loadRules();
+
+  // ① 哪些样貌图进备份：每只宠物最新几张 + 当前这张必带
+  const assets = [
+    { id: 'a1', petId: 'p1', createdAt: 100 },
+    { id: 'a2', petId: 'p1', createdAt: 200 },
+    { id: 'a3', petId: 'p1', createdAt: 300 },
+    { id: 'a4', petId: 'p1', createdAt: 400 },
+    { id: 'b1', petId: 'p2', createdAt: 50 }
+  ];
+  const capped = R.selectAssetsForBackup(assets, [{ id: 'p1', assetRef: 'a3' }], 2);
+  const ids = capped.map(r => r.id);
+  check('超上限时只带最新的两张 + 当前这张（当前这张不占配额）',
+    ids.includes('a4') && ids.includes('a3') && ids.includes('a2') && !ids.includes('a1'),
+    ids.join(','));
+  check('每只宠物分开算（p2 的图不受 p1 的上限影响）', ids.includes('b1'), ids.join(','));
+  const withOldCurrent = R.selectAssetsForBackup(assets, [{ id: 'p1', assetRef: 'a1' }], 2);
+  check('当前这张哪怕最旧也必带（不然恢复后宠物没脸）',
+    withOldCurrent.map(r => r.id).includes('a1'), withOldCurrent.map(r => r.id).join(','));
+  check('没有宠物时也不会炸', Array.isArray(R.selectAssetsForBackup([], [], 2)));
+
+  // ② Blob ↔ base64（备份里存的是 data URL）
+  const blob = new Blob([new Uint8Array([1, 2, 3, 250, 0, 255])], { type: 'image/webp' });
+  const url = await R.blobToDataUrl(blob);
+  check('Blob 能转成 data URL', String(url).startsWith('data:image/webp;base64,'), String(url).slice(0, 40));
+  const back = await R.dataUrlToBlob(url);
+  check('data URL 能转回 Blob', !!back && back.type === 'image/webp');
+  check('转回来的内容一模一样',
+    !!back && new Uint8Array(await back.arrayBuffer()).length === 6);
+  check('空数据不会炸', (await R.blobToDataUrl(null)) === '' && (await R.dataUrlToBlob('')) === null);
+
+  // ③ 接线：备份模块要把宠物屋这一节带进去/还回来
+  const pn = read('modules/pet-nest.js');
+  const bi = read('modules/backup-import-export.js');
+  check('宠物屋自己提供导出/恢复两个口子',
+    /exportBackupData,/.test(pn) && /importBackupData,/.test(pn));
+  check('导出会带全部九张表（宠物/阶段/事件/粮仓/图…）',
+    /const BACKUP_TABLES = \[[\s\S]{0,300}'assets'/.test(pn));
+  check('样貌图上限是按只算的（免得备份被撑爆）',
+    /BACKUP_ASSET_KEEP_PER_PET = \d+/.test(pn));
+  check('备份导出时把宠物屋带上了', /petNest: await exportPetNestBackup\(\)/.test(bi));
+  check('四条导出路径都带了宠物屋（JSON/流式/分片ZIP）',
+    (bi.match(/exportPetNestBackup\(\)/g) || []).length >= 4,
+    (bi.match(/exportPetNestBackup\(\)/g) || []).length + ' 处');
+  check('导入时把宠物屋还回去了（新版 + 旧版两条路）',
+    (bi.match(/importPetNestBackup\(backupData\.petNest\)/g) || []).length >= 2);
+  check('选择性导入时宠物屋不走主库表', /if \(type === 'petNest'\) continue;/.test(bi));
+  check('localStorage 前缀清单里有 petNest / petSpeech（桌宠开关、生图配置、上次开口时间）',
+    /'petNest',\s*\/\/ 宠物屋/.test(bi) && /'petSpeech',/.test(bi));
+  check('老备份（没有宠物屋这一节）不会报错',
+    /reason: 'no_data'/.test(pn) && /备份中没有宠物屋数据/.test(bi));
+  check('「重置所有数据」也会把宠物屋一起清掉（不然宠物比数据活得久）',
+    /清理宠物屋数据失败/.test(read('modules/data-management.js')));
+}
+// ============================================================
+// 调度守卫 + 代表词来源（要真跑 promise, 所以放最后）
+//   守卫是【钱】的防线；代表词是「当天挑什么小装饰」的来源。
+//   光用正则查源码查不出行为 = 没测到，
+//   所以这里起一个假 Dexie + 假 PetImage 探针, 把整套流程真跑一遍。
+// ============================================================
+section('调度守卫 + 代表词来源（真跑一遍）');
+{
+  const petNestSrc = read('modules/pet-nest.js');
+  const ARRAY_TABLES = ['dailySignals', 'dailyNotes'];
+  const OBJ_TABLES = ['pets', 'events', 'stages', 'days', 'turns', 'meta', 'assets'];
+
+  /**
+   * 起一个能跑 PetNest 整套流程的沙箱。
+   * cfg: { lastLookDay, used, noSignals, chats, memory }
+   * 返回 { sandbox, calls, day, meta, rows }
+   *   calls.atlas = 「真的去调生图接口」的次数
+   *   rows.dailySignals / rows.dailyNotes = 落库的原始行
+   */
+  function makeSandbox(cfg) {
+    cfg = cfg || {};
+    const day = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const calls = { atlas: 0 };
+    const rows = {
+      pets: {
+        'pet-1': {
+          id: 'pet-1', kind: 'egg', stage: 2, seed: 'seed-A', createdAt: 1, name: '团子',
+          // 饱腹要像样：默认 0 + settledAt=1（1970 年）会被当成「饿了 3 天」一 refresh 就扫掉
+          satiety: 60, settledAt: Date.now(),
+          appearance: {
+            beastSpecies: '奶龙', beastSpeciesEn: 'a chubby round baby dragon with big friendly eyes',
+            palette: '粉红', beastPaletteEn: 'pastel pink', marking: '心形绒纹'
+          }
+        }
+      },
+      events: {}, stages: {}, assets: {}, days: {}, turns: {},
+      dailyNotes: [],
+      dailySignals: cfg.noSignals ? [] : [{ day: day, type: 'listening', at: Date.now() }]
+    };
+    const meta = { petNestLastAutoLookDay: cfg.lastLookDay === undefined ? '' : cfg.lastLookDay };
+
+    const all = ARRAY_TABLES.concat(OBJ_TABLES);
+    let autoId = 0;
+    const d = {};
+    for (const n of all) {
+      const isArr = ARRAY_TABLES.indexOf(n) >= 0;
+      const listOf = () => (isArr ? rows[n] : Object.keys(rows[n]).map(kk => rows[n][kk]));
+      d[n] = {
+        async get(k) {
+          if (n === 'meta') return meta[k] === undefined ? undefined : { key: k, value: meta[k] };
+          if (isArr) return rows[n].find(r => r.id === k);
+          return rows[n][k];
+        },
+        async put(v) {
+          if (n === 'meta') { meta[v.key] = v.value; return v.key; }
+          if (isArr) { rows[n].push(v); return v.id; }
+          const k = (v.id || v.key || ('auto' + (++autoId)));
+          rows[n][k] = v; return k;
+        },
+        async add(v) {
+          if (n === 'meta') { meta[v.key] = v.value; return v.key; }
+          if (isArr) { rows[n].push(v); return v.id; }
+          const k = (v.id || v.key || ('auto' + (++autoId)));
+          rows[n][k] = v; return k;
+        },
+        async delete(k) {
+          if (n === 'meta') { delete meta[k]; return; }
+          if (isArr) {
+            const i = rows[n].findIndex(r => r.id === k);
+            if (i >= 0) rows[n].splice(i, 1);
+            return;
+          }
+          delete rows[n][k];
+        },
+        async update(k, patch) {
+          if (rows[n] && rows[n][k]) Object.assign(rows[n][k], patch);
+          return 1;
+        },
+        where(field) {
+          return {
+            equals(v) {
+              return {
+                async toArray() { return listOf().filter(r => r[field] === v); },
+                async delete() {
+                  if (isArr) {
+                    const keep = rows[n].filter(r => r[field] !== v);
+                    rows[n].length = 0;
+                    for (const r of keep) rows[n].push(r);
+                    return;
+                  }
+                  for (const kk of Object.keys(rows[n])) {
+                    if (rows[n][kk] && rows[n][kk][field] === v) delete rows[n][kk];
+                  }
+                }
+              };
+            },
+            belowOrEqual(v) { return { async count() { return listOf().filter(r => Number(r[field]) <= Number(v)).length; } }; }
+          };
+        },
+        orderBy(field) {
+          const api = {
+            async first() {
+              const arr = listOf().slice().sort((a, b) => Number(a[field] || 0) - Number(b[field] || 0));
+              return arr[0];
+            },
+            async toArray() {
+              return listOf().slice().sort((a, b) => Number(a[field] || 0) - Number(b[field] || 0));
+            },
+            // 假 Dexie：reverse / limit 只为让链式调用不炸，语义不严格
+            reverse() { return api; },
+            limit() { return api; }
+          };
+          return api;
+        },
+        async toArray() { return listOf(); }
+      };
+    }
+    d.version = () => d;
+    d.stores = () => d;
+    d.open = async () => d;
+
+    // 沙箱里 console 默认静音，但 warn/error 要放出来 —— 渲染路径静默失败会让人误判成「没数据」。
+    // 探针的报错是预期的（它就是拿来探到底的），滤掉免得刷屏。
+    const quiet = {
+      log() {},
+      warn() { if (!/探针/.test(String(arguments[0]))) console.warn('[沙箱 warn]', ...arguments); },
+      error() { console.error('[沙箱 error]', ...arguments); },
+      info() {}
+    };
+    // DOM 桩：只在 cfg.dom 时启用，且只认下面这些 id，
+    // 免得把 renderAll 里别的渲染路径也拉进来（那些路径不该影响本组断言）
+    const DEFAULT_DOM_IDS = [
+      'pn-manage-dialog', 'pn-manage-rules', 'pn-manage-list',
+      'pn-hint-bar', 'pn-hint-text', 'pn-hint-icon', 'pn-hint-go'
+    ];
+    const domIds = cfg.domIds || DEFAULT_DOM_IDS;
+    const domEls = {};
+    function mkStub(id) {
+      return {
+        id: id,
+        open: false,
+        hidden: false,
+        textContent: '',
+        className: '',
+        type: '',
+        onclick: null,
+        dataset: {},
+        style: {},
+        children: [],
+        classList: {
+          _s: [],
+          add(c) { this._s.push(c); },
+          remove(c) { this._s = this._s.filter(x => x !== c); },
+          contains(c) { return this._s.indexOf(c) >= 0; },
+          toggle(c, on) { if (on === false) this.remove(c); else this.add(c); }
+        },
+        setAttribute() {},
+        removeAttribute() {},
+        append() { this.children.push(...arguments); },
+        appendChild(n) { this.children.push(n); return n; },
+        replaceChildren() { this.children = Array.from(arguments); },
+        showModal() { this.open = true; },
+        close() { this.open = false; },
+        addEventListener() {},
+        removeEventListener() {}
+      };
+    }
+    const toasts = [];
+    const confirmCalls = [];
+    const sandbox = {
+      console: quiet,
+      // 假定时器: reportSignal 会排一个 60 秒的「换造型」定时器,
+      // 真定时器会把 node 卡住 60 秒, 所以这里只登记不执行
+      setTimeout: (fn, ms) => ({ fn: fn, ms: ms }),
+      clearTimeout: () => {},
+      setInterval: (fn, ms) => ({ fn: fn, ms: ms }),
+      clearInterval: () => {},
+      TextEncoder,
+      crypto: { randomUUID: () => 'test-uuid-0000' },
+      localStorage: { getItem: () => null, setItem() {} },
+      document: {
+        readyState: 'loading',       // 不进 init(), 免得真去开 Dexie
+        addEventListener() {},
+        getElementById: (id) => {
+          if (!cfg.dom) return null;
+          if (domIds.indexOf(id) < 0) return null;
+          if (!domEls[id]) domEls[id] = mkStub(id);
+          return domEls[id];
+        },
+        createElement: (tag) => mkStub(tag),
+        // renderEvents 拼文本节点用（系统事件的原文）
+        createTextNode: (text) => ({ nodeType: 3, textContent: String(text) }),
+        querySelectorAll: () => []
+      },
+      Dexie: function () { return d; },
+      state: { chats: cfg.chats || {} },
+      // 放弃宠物的二次确认（用户点了「取消」就绝不能删）
+      showCustomConfirm: async (title, message, opts) => {
+        confirmCalls.push({ title: title, message: message, opts: opts });
+        return cfg.confirmResult !== false;
+      },
+      showToast: (text, type) => { toasts.push({ text: text, type: type }); },
+      PetImage: {
+        CFG: { dailyLimit: 3 },
+        todayCount: () => Number(cfg.used || 0),
+        async generateAtlas() { calls.atlas++; throw new Error('探针：到这一步就停'); },
+        async evolveAtlas() { calls.atlas++; throw new Error('探针：到这一步就停'); },
+        async saveAsset() { return { id: 'asset-1' }; }
+      }
+    };
+    if (cfg.memory) {
+      sandbox.vectorMemoryManager = { getAllFragments: () => (cfg.memory || []) };
+    }
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(petNestSrc, sandbox, { filename: 'pet-nest.js' });
+    return { sandbox, calls, day, meta, rows, domEls, toasts, confirmCalls };
+  }
+
+  // ===== 调度守卫（钱）=====
+  // --- 基准: 什么都不拦着的时候, 确实会真的去调生图（证明探针是通的）---
+  const base = makeSandbox({ lastLookDay: '', used: 0 });
+  await base.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('基准：没有守卫时会真的去调生图（探针是通的，不然守卫测试就是假通过）',
+    base.calls.atlas === 1, 'atlas 调用 ' + base.calls.atlas + ' 次');
+
+  // --- 守卫 1: 今天已经画过了, 不能再画 ---
+  const g1 = makeSandbox({ lastLookDay: base.day, used: 0 });
+  await g1.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('今天画过了就不再画（一天一次，别烧钱）',
+    g1.calls.atlas === 0, 'atlas 调用 ' + g1.calls.atlas + ' 次');
+  check('今天画过了：也不会把守卫标记往后推',
+    g1.meta.petNestLastAutoLookDay === base.day, g1.meta.petNestLastAutoLookDay);
+
+  // --- 守卫 2: 每日上限 ---
+  const g2 = makeSandbox({ lastLookDay: '', used: 3 });
+  await g2.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('每日上限用满了就不再画（dailyLimit=3）',
+    g2.calls.atlas === 0, 'atlas 调用 ' + g2.calls.atlas + ' 次');
+
+  // --- 前置闸门: 当天啥也没发生, 不画（没东西可挑, 硬画就是随机凑）---
+  const g3 = makeSandbox({ lastLookDay: '', used: 0, noSignals: true });
+  await g3.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('当天没有任何行为就不画（没代表词可挑）',
+    g3.calls.atlas === 0, 'atlas 调用 ' + g3.calls.atlas + ' 次');
+
+  // --- 画失败要静默（不能把别的功能带崩）---
+  const g4 = makeSandbox({ lastLookDay: '', used: 0 });
+  const r4 = await g4.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('画失败不抛错（静默跳过，造型保持上一张）', r4 === null || r4 === false, String(r4));
+
+  // ===== 代表词来源 ①: 长期记忆碎片的【标签】也要参与 =====
+  const m1 = makeSandbox({
+    lastLookDay: '', used: 0,
+    chats: { c1: { id: 'c1' } },
+    memory: [{ content: '今天有点累', tags: ['咖啡'], createdAt: Date.now() }]
+  });
+  const m1texts = await m1.sandbox.window.PetNest.rules.todayRepresentativeTexts();
+  check('长期记忆碎片的标签也参与代表词（不然只打了标签的碎片挑不出装饰）',
+    /咖啡/.test(m1texts.join(' ')), JSON.stringify(m1texts));
+  const m1icons = m1.sandbox.window.PetNest.rules.pickIconsFromText(m1texts.join(' '), 1);
+  check('记忆标签里的词能挑出小装饰（咖啡 → 一杯热饮）',
+    m1icons.length === 1 && /咖啡|热饮/.test(m1icons[0].cn), m1icons[0] && m1icons[0].cn);
+
+  // ===== 代表词来源 ②: 当天聊过的话要存进 dailyNotes =====
+  const m2 = makeSandbox({ lastLookDay: '', used: 0 });
+  await m2.sandbox.window.PetNest.recordConversation({
+    chatId: 'c1', turnId: 't1', userText: '今天去喝了杯拿铁', aiText: '好喝'
+  });
+  check('当天聊的话存进了 dailyNotes（代表词的第二个来源）',
+    m2.rows.dailyNotes.length === 1 && /拿铁/.test(m2.rows.dailyNotes[0].text || ''),
+    JSON.stringify(m2.rows.dailyNotes));
+  const m2texts = await m2.sandbox.window.PetNest.rules.todayRepresentativeTexts();
+  check('当天聊的话能在代表词里找到',
+    /拿铁/.test(m2texts.join(' ')), JSON.stringify(m2texts));
+  check('聊天会上报 chatting 信号（触发换造型）',
+    m2.rows.dailySignals.some(s => s.type === 'chatting'),
+    JSON.stringify(m2.rows.dailySignals.map(s => s.type)));
+
+  // ===== 代表词来源 ③: 聊天里提到什么 → 也算今天经历的一部分 =====
+  const m3 = makeSandbox({ lastLookDay: '', used: 0 });
+  await m3.sandbox.window.PetNest.recordConversation({
+    chatId: 'c1', turnId: 't2', userText: '今天看了一部电影', aiText: '好看'
+  });
+  check('聊天里提到电影 → 上报 watching 信号',
+    m3.rows.dailySignals.some(s => s.type === 'watching'),
+    JSON.stringify(m3.rows.dailySignals.map(s => s.type)));
+
+  // ===== 饿死 + 放弃（真跑一遍）=====
+  const D = 86400000;
+  const now = Date.now();
+
+  // ① 饿了 4 天的 → 扫掉
+  const X = makeSandbox({ lastLookDay: '', used: 0 });
+  X.rows.pets['pet-1'].satiety = 0;
+  X.rows.pets['pet-1'].settledAt = now - 4 * D;
+  X.rows.stages['pet-1::2'] = { key: 'pet-1::2', petId: 'pet-1', stage: 2 };
+  X.rows.events.e1 = { id: 'e1', petId: 'pet-1', actor: 'user', action: 'feed', createdAt: now - D };
+  X.rows.assets.a1 = { id: 'a1', petId: 'pet-1', stage: 2 };
+  const gone = await X.sandbox.window.PetNest.rules.sweepStarvedPets(now);
+  check('饿过 3 天的会被扫掉', gone.length === 1 && gone[0] === '团子', JSON.stringify(gone));
+  check('饿死：本体被删了', !X.rows.pets['pet-1']);
+  check('饿死：阶段记录被删了', !X.rows.stages['pet-1::2']);
+  check('饿死：照顾事件被删了', !Object.values(X.rows.events).some(e => e.petId === 'pet-1'));
+  check('饿死：生图资产被删了', !X.rows.assets.a1);
+  check('饿死：留了一条系统事件说明它走了',
+    Object.values(X.rows.events).some(e => e.actor === 'system' && /离开/.test(e.note || '')),
+    JSON.stringify(Object.values(X.rows.events).map(e => e.note)));
+
+  // ② 只饿 2 天的 → 不动
+  const Y = makeSandbox({ lastLookDay: '', used: 0 });
+  Y.rows.pets['pet-1'].satiety = 0;
+  Y.rows.pets['pet-1'].settledAt = now - 2 * D;
+  const gone2 = await Y.sandbox.window.PetNest.rules.sweepStarvedPets(now);
+  check('只饿 2 天的不会被删', gone2.length === 0 && !!Y.rows.pets['pet-1'], JSON.stringify(gone2));
+
+  // ③ 手动放弃 → 也删干净
+  const Z = makeSandbox({ lastLookDay: '', used: 0 });
+  Z.rows.stages['pet-1::2'] = { key: 'pet-1::2', petId: 'pet-1', stage: 2 };
+  Z.rows.events.e1 = { id: 'e1', petId: 'pet-1', actor: 'user', action: 'feed', createdAt: now };
+  Z.rows.assets.a1 = { id: 'a1', petId: 'pet-1', stage: 2 };
+  const rm = await Z.sandbox.window.PetNest.rules.removePet('pet-1', 'remove');
+  check('手动放弃：返回成功', rm && rm.ok === true, JSON.stringify(rm));
+  check('手动放弃：本体没了', !Z.rows.pets['pet-1']);
+  check('手动放弃：阶段/事件/资产也清了',
+    !Z.rows.stages['pet-1::2']
+    && !Object.values(Z.rows.events).some(e => e.petId === 'pet-1')
+    && !Z.rows.assets.a1);
+  check('手动放弃：也留了一条系统事件',
+    Object.values(Z.rows.events).some(e => e.actor === 'system' && /送走/.test(e.note || '')));
+}
+
+section('弹窗: 确认框别被自家 dialog 压住 + 换成宠物屋的样式（用户 2026-10-26 实测）');
+{
+  const S = makeSandbox({
+    dom: true,
+    domIds: ['pn-care-dialog', 'pn-manage-dialog', 'custom-modal-overlay']
+  });
+  const dlg = S.sandbox.document.getElementById('pn-care-dialog');
+  const overlay = S.sandbox.document.getElementById('custom-modal-overlay');
+  dlg.open = true;   // 照顾弹窗开着（真实场景：点「换样貌」的时候它就是开着的）
+
+  let openAtConfirm = null;
+  let skinAtConfirm = null;
+  S.sandbox.showCustomConfirm = async () => {
+    openAtConfirm = dlg.open;
+    skinAtConfirm = overlay.classList.contains('pn-modal-skin');
+    return true;
+  };
+
+  const ok = await S.sandbox.window.PetNest.rules.petConfirm('放弃 团子', '确定吗？', {});
+  check('问确认的时候，自家的 <dialog> 已经先收起来了',
+    openAtConfirm === false, 'dialog 还开着=' + openAtConfirm);
+  check('确认框套上了宠物屋的暖色皮肤', skinAtConfirm === true);
+  check('问完把 <dialog> 开回去（用户不用再点一次）', dlg.open === true);
+  check('皮肤用完就摘掉（不影响全应用其它弹窗）',
+    overlay.classList.contains('pn-modal-skin') === false);
+  check('确认结果照常返回', ok === true);
+
+  // 取消也要把 dialog 开回去
+  const S2 = makeSandbox({
+    dom: true,
+    domIds: ['pn-care-dialog', 'custom-modal-overlay']
+  });
+  const dlg2 = S2.sandbox.document.getElementById('pn-care-dialog');
+  dlg2.open = true;
+  S2.sandbox.showCustomConfirm = async () => false;
+  const ok2 = await S2.sandbox.window.PetNest.rules.petConfirm('放弃 团子', '确定吗？', {});
+  check('点了取消 → 不删，但 <dialog> 照样开回去', ok2 === false && dlg2.open === true);
+
+  // CSS：动画放慢了 + 皮肤规则在
+  const css = read('css/pet-nest.css');
+  check('6 格姿势循环：每格停 3 秒（x 9s / y 18s，一轮 18 秒）',
+    /pn-frame-x 9s step-end/.test(css) && /pn-frame-y 18s step-end/.test(css));
+  check('皮肤规则只挂在 pn-modal-skin 上（不污染全应用弹窗）',
+    /#custom-modal-overlay\.pn-modal-skin #custom-modal/.test(css)
+    && !/^\s*#custom-modal \{/m.test(css));
+  const pnSrc = read('modules/pet-nest.js');
+  check('放弃宠物 / 换样貌都走 petConfirm（不然照样被自家 dialog 压住）',
+    (pnSrc.match(/await petConfirm\(/g) || []).length >= 2,
+    (pnSrc.match(/await petConfirm\(/g) || []).length + ' 处');
+}
+
+section('蛋还没孵化：说话开关是灰的，而且写清楚为什么（用户 2026-10-26 提）');
+{
+  const html = read('index.html');
+  const pn = read('modules/pet-nest.js');
+  const ps = read('modules/pet-speech.js');
+  check('照顾弹窗里有一句「为什么开关是灰的」说明',
+    /id="pn-speech-hint"/.test(html));
+  check('蛋阶段把说明显示出来（并算出还差多少成长值）',
+    /swHint\.hidden = false/.test(pn) && /成长还差/.test(pn));
+  check('不是蛋就把说明藏起来',
+    /swHint\.hidden = true/.test(pn));
+  check('蛋阶段的两个开关确实是禁用的',
+    /swSpeak\.disabled = isEgg/.test(pn) && /swInsert\.disabled = isEgg/.test(pn));
+  check('说话系统那边也有一道蛋的关卡（双重保险，不是只靠界面禁用）',
+    /还是颗蛋就不会说话/.test(ps) && /isEggPet\(petRow\)/.test(ps));
+  check('「是不是蛋」按物种判，不是光看阶段（猫狗第 0 阶段不是蛋）',
+    /isHatchKind\(pet\.kind\) && Number\(pet\.stage \|\| 0\) <= 0/.test(pn)
+    && /isHatchKind/.test(ps));
+  check('成长值差多少是按门槛常量算的（门槛改了这里跟着改）',
+    /STAGE_RULES_HATCH\[1\]\[0\]/.test(pn));
+}
+
+section('桌宠气泡: 宠物说话的时候别被饥饿提示盖掉（宠物说话系统 2026-10-26）');
+{
+  const D = loadDesktopPetSandbox();
+  const hungry = { id: 'p1', name: '小花', kind: 'cat', stage: 0, sprite: 'cat-sprites-light.webp', satiety: 0, starving: true };
+
+  // ① 没人说话的时候 → 照旧弹饥饿提示
+  D.sandbox.window.PetSpeech = { isBubbleActive: () => false };
+  D.rules.renderDesktopPetContent(hungry);
+  const bubble = D.getEl('pn-desktop-pet-bubble');
+  check('没人说话时桌宠照旧催你喂',
+    bubble.hidden === false && /喂/.test(String(bubble.textContent)),
+    String(bubble.textContent));
+
+  // ② 宠物正在说话 → 气泡归它用，饥饿提示不许盖掉
+  D.sandbox.window.PetSpeech = { isBubbleActive: () => true };
+  bubble.hidden = false;
+  bubble.textContent = '我想睡觉了';
+  D.rules.renderDesktopPetContent(hungry);
+  check('宠物说话时不会被饥饿提示盖掉',
+    String(bubble.textContent) === '我想睡觉了',
+    String(bubble.textContent));
+
+  // ③ 宠物说完了 → 饥饿提示重新接管
+  D.sandbox.window.PetSpeech = { isBubbleActive: () => false };
+  D.rules.renderDesktopPetContent(hungry);
+  check('宠物说完之后饥饿提示重新接管',
+    /喂/.test(String(bubble.textContent)),
+    String(bubble.textContent));
+}
+
+section('小屋管理: 齿轮面板 + 放弃宠物（用户 2026-10-25 提）');
+{
+  const html = read('index.html');
+  const css = read('css/pet-nest.css');
+  const src = read('modules/pet-nest.js');
+
+  // ① 接线：齿轮按钮 + 面板在 HTML 里
+  check('小窝右上角有齿轮按钮', /id="pn-manage-btn"/.test(html));
+  check('齿轮按钮是 ⚙', /id="pn-manage-btn"[^>]*>⚙</.test(html));
+  check('有管理面板 dialog', /<dialog id="pn-manage-dialog">/.test(html));
+  check('面板里有规则说明位和列表位',
+    /id="pn-manage-rules"/.test(html) && /id="pn-manage-list"/.test(html));
+  check('齿轮按钮点了会开面板', /manageBtn\.onclick = \(\) => openManageDialog\(\)/.test(src));
+  check('面板有危险按钮样式', /\.pn-manage-danger \{/.test(css));
+
+  // ② 行为：点放弃 → 弹二次确认 → 确认后才真删
+  const M = makeSandbox({ lastLookDay: '', used: 0, dom: true });
+  M.rows.stages['pet-1::2'] = { key: 'pet-1::2', petId: 'pet-1', stage: 2 };
+  M.rows.events.e1 = { id: 'e1', petId: 'pet-1', actor: 'user', action: 'feed', createdAt: Date.now() };
+  M.rows.assets.a1 = { id: 'a1', petId: 'pet-1', stage: 2 };
+  await M.sandbox.window.PetNest.rules.doRemovePet({ id: 'pet-1', name: '团子' });
+  check('放弃前要弹二次确认（防止手滑删掉）',
+    M.confirmCalls.length === 1, JSON.stringify(M.confirmCalls.map(c => c.title)));
+  check('二次确认里写清楚了「不可恢复」',
+    /不可恢复/.test(String(M.confirmCalls[0] && M.confirmCalls[0].message)));
+  check('确认后宠物真的没了', !M.rows.pets['pet-1']);
+  check('确认后阶段/事件/资产也清了',
+    !M.rows.stages['pet-1::2']
+    && !Object.values(M.rows.events).some(e => e.petId === 'pet-1')
+    && !M.rows.assets.a1);
+
+  // ③ 用户点「取消」→ 绝不能删
+  const N = makeSandbox({ lastLookDay: '', used: 0, dom: true, confirmResult: false });
+  await N.sandbox.window.PetNest.rules.doRemovePet({ id: 'pet-1', name: '团子' });
+  check('用户点了取消 → 宠物还在（没误删）', !!N.rows.pets['pet-1']);
+  check('用户点了取消 → 也没弹「送走了」的提示',
+    !N.toasts.some(t => /送走/.test(t.text || '')),
+    JSON.stringify(N.toasts.map(t => t.text)));
+
+  // ④ 面板列表：列出每只宠物 + 饱腹/饥饿信息
+  const P2 = makeSandbox({ lastLookDay: '', used: 0, dom: true });
+  P2.rows.pets['pet-1'].satiety = 0;
+  P2.rows.pets['pet-1'].settledAt = Date.now() - 2.5 * 86400000;
+  await P2.sandbox.window.PetNest.refresh();
+  P2.sandbox.window.PetNest.rules.renderManageList();
+  const listEl = P2.domEls['pn-manage-list'];
+  const rulesEl = P2.domEls['pn-manage-rules'];
+  const petRows = listEl ? listEl.children.filter(c => c.className === 'pn-manage-row') : [];
+  check('面板里列出了宠物', petRows.length === 1,
+    '宠物行 ' + petRows.length);
+  check('规则说明写了「3 天会离开」',
+    /3 天/.test(String(rulesEl && rulesEl.textContent)),
+    String(rulesEl && rulesEl.textContent));
+  check('规则说明写了每小时掉多少',
+    /每小时/.test(String(rulesEl && rulesEl.textContent)));
+
+  // ⑤ 饥饿状态在各个地方都能看见
+  const R2 = P2.sandbox.window.PetNest.rules;
+  const starvingPet = R2.petView(
+    { id: 'pet-1', name: '团子', kind: 'egg', stage: 2, satiety: 0, settledAt: Date.now() - 2.5 * 86400000, createdAt: 1 },
+    Date.now()
+  );
+  check('快撑不住的宠物 starving = true', starvingPet.starving === true);
+  check('快撑不住的宠物带「已经饿了几天」', starvingPet.hungryDays >= 2, String(starvingPet.hungryDays));
+  check('快撑不住的宠物带「还剩几天会离开」（2.5 天饿 → 还剩 0.5 天）',
+    starvingPet.starveDaysLeft === 0.5, String(starvingPet.starveDaysLeft));
+
+  const fedPet = R2.petView(
+    { id: 'pet-2', name: '花卷', kind: 'cat', stage: 1, satiety: 90, settledAt: Date.now(), createdAt: 1 },
+    Date.now()
+  );
+  check('刚喂饱的宠物不算 starving', fedPet.starving === false);
+  check('刚喂饱的宠物没有「还剩几天」（null = 没在饿）', fedPet.starveDaysLeft === null, String(fedPet.starveDaysLeft));
+
+  // ⑥ 提示条：饥饿优先级最高（比「该画一张」「能孵了」都高）
+  const H = makeSandbox({ lastLookDay: '', used: 0, dom: true });
+  H.rows.pets['pet-1'].satiety = 0;
+  H.rows.pets['pet-1'].settledAt = Date.now() - 2.5 * 86400000;
+  await H.sandbox.window.PetNest.refresh();
+  const bar = H.domEls['pn-hint-bar'];
+  const barText = H.domEls['pn-hint-text'];
+  check('饿到要没了的时候，提示条会弹出来', bar && bar.hidden === false);
+  check('提示条写的是「撑不住了」而不是别的',
+    /撑不住/.test(String(barText && barText.textContent)),
+    String(barText && barText.textContent));
+
+  // ⑦ 桌宠也要看得出在饿
+  const Dp = loadDesktopPetSandbox();
+  Dp.rules.renderDesktopPetContent({ id: 'p1', name: '小花', kind: 'cat', stage: 0, sprite: 'cat-sprites-light.webp', satiety: 0, starving: true });
+  check('桌宠名字写着「快撑不住了」',
+    /快撑不住了/.test(String(Dp.getEl('pn-desktop-pet-name').textContent)),
+    String(Dp.getEl('pn-desktop-pet-name').textContent));
+  check('桌宠气泡弹出来催你喂',
+    Dp.getEl('pn-desktop-pet-bubble').hidden === false
+    && /喂/.test(String(Dp.getEl('pn-desktop-pet-bubble').textContent)),
+    String(Dp.getEl('pn-desktop-pet-bubble').textContent));
+
+  // ⑧ 打开小窝时会自动扫饿死（忘了喂 → 回来它真没了，不是还杵在那儿）
+  const S1 = makeSandbox({ lastLookDay: '', used: 0, dom: true });
+  S1.rows.pets['pet-1'].satiety = 0;
+  S1.rows.pets['pet-1'].settledAt = Date.now() - 4 * 86400000;
+  await S1.sandbox.window.PetNest.refresh();
+  check('打开小窝时会自动扫掉饿死的（不用手动去点齿轮）',
+    !S1.rows.pets['pet-1'], '还在就说明没扫');
+  check('扫掉时会告诉用户它走了',
+    S1.toasts.some(t => /离开/.test(t.text || '')),
+    JSON.stringify(S1.toasts.map(t => t.text)));
+
+  // ⑨ 放弃之后界面要跟着刷新（列表里不该还显示着已删掉的宠物）
+  const S2 = makeSandbox({ lastLookDay: '', used: 0, dom: true });
+  await S2.sandbox.window.PetNest.refresh();
+  S2.sandbox.window.PetNest.rules.renderManageList();
+  const listS2 = S2.domEls['pn-manage-list'];
+  // 只数「宠物行」，别把空态提示段算进去（那是 .pn-quiet，不是 .pn-manage-row）
+  const rowsBefore = listS2.children.filter(c => c.className === 'pn-manage-row');
+  check('放弃前：面板里有一只宠物的行', rowsBefore.length === 1,
+    '宠物行 ' + rowsBefore.length + ' / 子节点 ' + listS2.children.length);
+  await S2.sandbox.window.PetNest.rules.doRemovePet({ id: 'pet-1', name: '团子' });
+  const rowsLeft = listS2.children.filter(c => c.className === 'pn-manage-row');
+  check('放弃后面板里不再有它的行（界面跟着刷新了）', rowsLeft.length === 0,
+    '还剩 ' + rowsLeft.length + ' 行');
+}
+  printSummary();
+})().catch(e => { console.error(e); process.exit(1); });
+
+function printSummary() {
+  console.log('\n================================');
+  console.log('通过 ' + passed + ' / 失败 ' + failed);
+  console.log('================================');
+  if (failed > 0) process.exit(1);
+}

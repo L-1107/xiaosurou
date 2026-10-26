@@ -304,6 +304,8 @@
     'openaiCompatImage',       // OpenAI 兼容生图 (Enabled/PresetId/BaseUrl/ApiKey/Model/AspectRatio)
     'ephone.mcp.',             // MCP 服务器列表 + 原生工具开关
     'aphone.mcp.',             // MCP 工具调用卡片历史
+    'petNest',                 // 宠物屋 (桌宠开关/位置/生图配置/每日计数)
+    'petSpeech',               // 宠物说话 (上次开口时间)
   ];
 
   function _matchesExtraPrefix(key) {
@@ -398,6 +400,44 @@
   // ============================================================
   // 导出函数
   // ============================================================
+
+  /**
+   * 宠物屋的数据（PetNestDB 是独立于主库的另一个 IndexedDB 库）
+   * ⚠️【2026-10-26】主库备份只扫 db.tables，扫不到它 → 换设备 = 宠物全没了
+   *   → 这里单独问宠物屋要一份，它自己负责把自己那点东西打包/还原
+   */
+  async function exportPetNestBackup() {
+    try {
+      if (!window.PetNest || typeof window.PetNest.exportBackupData !== 'function') return null;
+      const data = await window.PetNest.exportBackupData();
+      if (!data) return null;
+      console.log(`已打包宠物屋数据: ${(data.pets || []).length} 只宠物, ${(data.assets || []).length} 张样貌图`);
+      return data;
+    } catch (e) {
+      console.warn('[备份] 宠物屋数据导出失败（不影响其它数据）', e);
+      return null;
+    }
+  }
+
+  /** 还原宠物屋（备份里没这一节 = 老备份，跳过） */
+  async function importPetNestBackup(section) {
+    if (!section) {
+      console.log('备份中没有宠物屋数据（可能是旧版备份），已跳过');
+      return false;
+    }
+    if (!window.PetNest || typeof window.PetNest.importBackupData !== 'function') {
+      console.warn('[备份] 宠物屋模块没加载，宠物数据这次没能还原');
+      return false;
+    }
+    try {
+      const r = await window.PetNest.importBackupData(section);
+      console.log('宠物屋数据已还原:', r);
+      return true;
+    } catch (e) {
+      console.warn('[备份] 宠物屋数据还原失败', e);
+      return false;
+    }
+  }
 
   async function exportBackup() {
     try {
@@ -546,7 +586,10 @@
         inventory,
 
         // 扩展设置 localStorage 数据 (情侣空间/悬浮球/生图/MCP 等)
-        localStorage: extraLocalStorage
+        localStorage: extraLocalStorage,
+
+        // 宠物屋 (独立库 PetNestDB，主库备份扫不到，得单独带)
+        petNest: await exportPetNestBackup()
       });
 
       const blob = new Blob(
@@ -851,6 +894,9 @@
         console.log('备份中没有 localStorage 数据（可能是旧版备份），已清理扩展设置');
       }
 
+      // 4. 宠物屋 (独立库 PetNestDB，不在主库表里，得单独还原)
+      await importPetNestBackup(backupData.petNest);
+
     } catch (error) {
 
       throw new Error(`数据库写入失败: ${error.message}`);
@@ -950,7 +996,8 @@
       'auctions': '拍卖记录',
       'inventory': '物品清单',
       'emails': '邮件',
-      'localStorage': '扩展设置（情侣空间/悬浮球/生图/MCP 等）'
+      'localStorage': '扩展设置（情侣空间/悬浮球/生图/MCP 等）',
+      'petNest': '宠物屋（宠物 + 样貌图）'
     };
 
     let foundData = false;
@@ -959,8 +1006,12 @@
         let count;
         let countText;
         
-        // localStorage 是对象，显示键的数量
-        if (key === 'localStorage' && typeof backupDataContent[key] === 'object') {
+        // 宠物屋是一个整块（独立库），显示有几只宠物
+        if (key === 'petNest' && backupDataContent[key] && typeof backupDataContent[key] === 'object') {
+          const n = Array.isArray(backupDataContent[key].pets) ? backupDataContent[key].pets.length : 0;
+          count = n;
+          countText = `${n} 只宠物`;
+        } else if (key === 'localStorage' && typeof backupDataContent[key] === 'object') {
           count = Object.keys(backupDataContent[key]).length;
           countText = `${count} 个键`;
         } else {
@@ -1120,7 +1171,8 @@
       'auctions': '拍卖记录',
       'inventory': '物品清单',
       'emails': '邮件',
-      'localStorage': '扩展设置（情侣空间/悬浮球/生图/MCP 等）'
+      'localStorage': '扩展设置（情侣空间/悬浮球/生图/MCP 等）',
+      'petNest': '宠物屋（宠物 + 样貌图）'
     };
 
     let hasContent = false;
@@ -1130,8 +1182,13 @@
         let countText;
         let isSingleObject = false;
         
-        // localStorage 是对象，显示键的数量
-        if (key === 'localStorage' && typeof backupDataContent[key] === 'object') {
+        // 宠物屋是一个整块（独立库），显示有几只宠物
+        if (key === 'petNest' && backupDataContent[key] && typeof backupDataContent[key] === 'object') {
+          const n = Array.isArray(backupDataContent[key].pets) ? backupDataContent[key].pets.length : 0;
+          count = n;
+          countText = `${n} 只宠物`;
+          isSingleObject = true; // 整库覆盖
+        } else if (key === 'localStorage' && typeof backupDataContent[key] === 'object') {
           count = Object.keys(backupDataContent[key]).length;
           countText = `${count} 个键`;
           isSingleObject = true; // localStorage 会覆盖现有数据
@@ -1227,11 +1284,18 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         }
       }
 
+      // 宠物屋 (独立库 PetNestDB，不在主库表里，得单独还原)
+      if (typesToMerge.includes('petNest')) {
+        await importPetNestBackup(dataToMerge.petNest);
+      }
+
       // 处理数据库表
       await db.transaction('rw', db.tables, async () => {
         for (const type of typesToMerge) {
           // 跳过 localStorage，它已经在上面处理了
           if (type === 'localStorage') continue;
+          // 宠物屋也是独立库，不在主库表里
+          if (type === 'petNest') continue;
           
           const data = dataToMerge[type];
           if (!data) continue;
@@ -1352,6 +1416,9 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
       } else {
         console.log('备份中没有 localStorage 数据（可能是旧版备份），已清理扩展设置');
       }
+
+      // 4. 宠物屋 (独立库 PetNestDB，不在主库表里，得单独还原)
+      await importPetNestBackup(backupData.petNest);
       
     } catch (error) {
       throw new Error(`旧版备份数据写入数据库失败: ${error.message}`);
@@ -1485,6 +1552,17 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         }));
       }
 
+      // 宠物屋 (独立库 PetNestDB，主库备份扫不到，得单独带)
+      const petNestBackup = await exportPetNestBackup();
+      if (petNestBackup) {
+        console.log('正在打包宠物屋数据...');
+        zip.file('petNest.json', JSON.stringify({
+          version: 4,
+          type: 'petNest',
+          data: petNestBackup
+        }));
+      }
+
       console.log("所有切片已打包，开始流式下载ZIP...");
 
 
@@ -1588,6 +1666,13 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
       await writer.write(encoder.encode(',\n"localStorage": '));
       await writer.write(encoder.encode(JSON.stringify(extraLocalStorage)));
 
+      // 宠物屋 (独立库 PetNestDB，主库备份扫不到，得单独带)
+      const petNestBackup = await exportPetNestBackup();
+      if (petNestBackup) {
+        await writer.write(encoder.encode(',\n"petNest": '));
+        await writer.write(encoder.encode(JSON.stringify(petNestBackup)));
+      }
+
 
       await writer.write(encoder.encode('\n}\n}'));
 
@@ -1629,6 +1714,9 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
       // 导出扩展设置 localStorage 数据 (情侣空间/悬浮球/生图/MCP 等)
       const extraLocalStorage = exportExtraLocalStorage();
       backupData.data.localStorage = extraLocalStorage;
+
+      // 宠物屋 (独立库 PetNestDB，主库备份扫不到，得单独带)
+      backupData.data.petNest = await exportPetNestBackup();
 
       const blob = new Blob(
         [JSON.stringify(backupData, null, 2)], {

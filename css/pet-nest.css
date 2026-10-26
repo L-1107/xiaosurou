@@ -13,14 +13,16 @@
 #pet-nest-screen .pn-header {
   position: relative;        /* 返回键绝对定位，标题保持居中 */
   text-align: center;
-  padding: 18px 16px 10px;
+  /* ⚠️ 让开 iPhone 状态栏（灵动岛/刘海）——
+     以前返回键 top:12px，正好顶在「20:44」那个时间上，点不到，退出不了 */
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 16px 10px;
   flex: 0 0 auto;
 }
 
 #pet-nest-screen .pn-back-btn {
   position: absolute;
   left: 10px;
-  top: 12px;
+  top: calc(12px + env(safe-area-inset-top, 0px));
   width: 36px;
   height: 36px;
   display: flex;
@@ -39,6 +41,75 @@
 
 #pet-nest-screen .pn-back-btn:hover {
   background: #efe8d4;
+}
+
+/* 齿轮按钮（小窝管理：放弃宠物 + 规则说明）—— 和返回键对称放右上角 */
+#pet-nest-screen .pn-manage-btn {
+  position: absolute;
+  right: 10px;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(122, 98, 62, .28);
+  border-radius: 999px;
+  background: rgba(250, 244, 230, .82);
+  color: #6b5638;
+  cursor: pointer;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2;
+}
+
+#pet-nest-screen .pn-manage-btn:hover {
+  background: #efe8d4;
+}
+
+/* 管理面板里的每一只宠物 */
+#pet-nest-screen .pn-manage-list {
+  margin: 10px 0 0;
+}
+
+#pet-nest-screen .pn-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dashed rgba(122, 98, 62, .18);
+}
+
+#pet-nest-screen .pn-manage-row:last-child {
+  border-bottom: none;
+}
+
+#pet-nest-screen .pn-manage-info {
+  flex: 1;
+  min-width: 0;
+}
+
+#pet-nest-screen .pn-manage-name {
+  font-size: 14px;
+  color: #5a4f3d;
+}
+
+#pet-nest-screen .pn-manage-note {
+  font-size: 12px;
+  color: #a1907a;
+}
+
+#pet-nest-screen .pn-manage-danger {
+  border-color: rgba(170, 80, 60, .38);
+  color: #a34a34;
+  background: rgba(255, 238, 232, .8);
+}
+
+#pet-nest-screen .pn-manage-danger:hover {
+  background: #f3ddd2;
 }
 
 #pet-nest-screen .pn-back-btn svg {
@@ -237,7 +308,12 @@
    【为什么不用 steps(2)】background-position-x 的三格是 0% / 50% / 100%,
    steps(2) 只会停在 0% 和 50%, 第三格一闪而过 —— 所以改成显式关键帧 + step-end。
    【为什么不吃性能】step-end 只在换帧那一瞬间改值重绘, 不是每帧都重绘。
-   一轮 = 6 格 × 0.6s = 3.6s; x 走 3 格(1.8s), y 走 2 行(3.6s), 两者始终同相。
+   ⚠️【2026-10-26 用户提】「宠物屋里的动画感觉变化太快了，把换图片的速度放慢一点」
+     → 原来一轮 = 6 格 × 0.6s = 3.6s（x 走 3 格 1.8s, y 走 2 行 3.6s）, 有点闹
+     → 改成 6 格 × 1.0s = 6s（x 走 3 格 3s, y 走 2 行 6s）, x/y 仍然严格同相
+   ⚠️【2026-10-26 用户再提】「还是快了，改成每 3 秒换一张」
+     → 现在每格停 3 秒：x 走 3 格 = 9s, y 走 2 行 = 18s, 一轮 6 格 = 18s
+     → x 的周期 9s 正好是 y 换行周期 18s 的一半 → x 回到第 1 列时 y 换行, 仍然严格同相
    ============================================================ */
 @keyframes pn-frame-x {
   0%      { background-position-x: 0%; }
@@ -253,8 +329,8 @@
 #pet-nest-screen .pn-sprite-anim {
   animation:
     pn-breathe 4s ease-in-out infinite,
-    pn-frame-x 1.8s step-end infinite,
-    pn-frame-y 3.6s step-end infinite;
+    pn-frame-x 9s step-end infinite,
+    pn-frame-y 18s step-end infinite;
 }
 
 /* 孵出来了：金辉一闪一闪 */
@@ -304,6 +380,11 @@
 }
 #pet-nest-screen .pn-pet-sub.pn-pet-sub-divine {
   color: #b07a22;
+  font-weight: 600;
+}
+/* 快撑不住了（饿到只剩不到一天） */
+#pet-nest-screen .pn-pet-sub.pn-pet-sub-starving {
+  color: #b3543a;
   font-weight: 600;
 }
 
@@ -392,6 +473,14 @@
   color: #5a4f3d;
 }
 
+/* 事件流前面的时间戳（不然不知道是什么时候喂的） */
+#pet-nest-screen .pn-event-time {
+  font-size: 12px;
+  color: #a1907a;
+  margin-right: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- 弹窗 ---------- */
 
 #pet-nest-screen dialog,
@@ -408,6 +497,90 @@ dialog.pn-dialog {
 
 #pet-nest-screen dialog::backdrop {
   background: rgba(48, 34, 18, .38);
+}
+
+/* ============================================================
+   宠物屋风格的「确认框」皮肤
+   【为什么需要】#custom-modal 是全应用通用的灰白弹窗，在暖色绘本风的
+     宠物屋里看着特别突兀（用户 2026-10-26 提：「提示弹窗很原始白白的」）。
+   【怎么做到不影响别人】只在弹出来的那一瞬间给 #custom-modal-overlay
+     加一个 pn-modal-skin 类（pet-nest.js 的 petConfirm 负责加/摘），
+     下面每条规则都带这个类 → 全应用其它 180 多处调用还是老样子。
+   【顺带】330 的确认框是普通 z-index，我们的原生 <dialog> 进了 top layer，
+     所以问确认之前得先把 dialog 关掉（见 pet-nest.js 的 petConfirm）。
+   ============================================================ */
+#custom-modal-overlay.pn-modal-skin {
+  background-color: rgba(48, 34, 18, .38);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+#custom-modal-overlay.pn-modal-skin #custom-modal {
+  background: linear-gradient(180deg, #fdf8ee 0%, #f6ead4 100%);
+  border: 1px solid rgba(122, 98, 62, .28);
+  border-radius: 20px;
+  box-shadow: 0 20px 55px rgba(57, 38, 20, .26);
+  width: 300px;
+  overflow: hidden;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-header {
+  padding: 18px 18px 10px;
+  color: #4c3828;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: .4px;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-header::before {
+  content: '🐾';
+  margin-right: 6px;
+  font-size: 15px;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-body {
+  padding: 0 18px 16px;
+  color: #5a4f3d;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-body b {
+  color: #c05a45;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer {
+  border-top: 1px solid rgba(122, 98, 62, .18);
+  background: rgba(255, 253, 248, .55);
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer button {
+  padding: 13px 10px;
+  color: #6b5a44;
+  font-size: 15px;
+  transition: background .15s ease;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer button:first-child {
+  border-right: 1px solid rgba(122, 98, 62, .18);
+  border-bottom-left-radius: 0;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer button:last-child {
+  border-bottom-right-radius: 0;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer button:hover {
+  background: rgba(185, 139, 79, .13);
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer .confirm-btn {
+  color: #a4703a;
+  font-weight: 600;
+}
+
+#custom-modal-overlay.pn-modal-skin .custom-modal-footer .confirm-btn.btn-danger {
+  color: #c05a45;
 }
 
 #pn-care-dialog h2,
@@ -602,4 +775,92 @@ dialog.pn-dialog {
 @media (max-width: 480px) {
   #pet-nest-screen .pn-scene { border-radius: 0; }
   #pn-desktop-pet { width: 66px; bottom: 110px; }
+}
+
+/* ============================================================
+   宠物说话系统（2026-10-26）
+   · 小窝照顾弹窗里的两个开关
+   · 聊天框里的「啾啾：……」气泡
+   · 桌宠气泡说长话时允许换行
+   ============================================================ */
+
+.pn-speech-toggles {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+}
+
+.pn-speech-toggles[hidden] {
+  display: none !important;
+}
+
+/* 还是颗蛋的时候，那句「为什么开关是灰的」（用户 2026-10-26 以为功能坏了） */
+.pn-speech-hint {
+  flex: 0 0 100%;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #a1907a;
+}
+
+.pn-speech-hint[hidden] {
+  display: none !important;
+}
+
+#pn-care-dialog .pn-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(122, 98, 62, .3);
+  border-radius: 999px;
+  background: #fffdf8;
+  font-size: 13px;
+  color: #5a4f3d;
+  cursor: pointer;
+  user-select: none;
+}
+
+#pn-care-dialog .pn-switch input[type="checkbox"] {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: #b98b4f;
+  flex: none;
+}
+
+#pn-care-dialog .pn-switch input[type="checkbox"]:disabled {
+  opacity: .5;
+}
+
+/* 聊天框里的宠物发言 —— 居中的一条小气泡 */
+.message-wrapper.system-pat .pet-say-bubble {
+  background: rgba(255, 253, 248, .94);
+  border: 1px solid rgba(122, 98, 62, .22);
+  color: #4c3828;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 7px 12px;
+  border-radius: 14px;
+  text-align: left;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.message-wrapper.system-pat .pet-say-name {
+  color: #a9762f;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+/* 桌宠气泡：宠物说话时可能比较长，允许换行，别撑出屏幕 */
+#pn-desktop-pet-bubble.pn-say {
+  white-space: normal;
+  max-width: 220px;
+  line-height: 1.45;
+  text-align: left;
 }

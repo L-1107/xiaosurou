@@ -1128,6 +1128,13 @@
     const track = musicState.playlist[index];
     const chat = state.chats[musicState.activeChatId];
 
+    // 告诉宠物屋：今天听了歌 → 它脑袋上飘几个小音符
+    try {
+      if (window.PetNest && typeof window.PetNest.reportSignal === 'function') {
+        window.PetNest.reportSignal('listening', 1, { title: String((track && track.name) || '') });
+      }
+    } catch (e) { /* 忽略 */ }
+
     if (!track.isLocal && track.source === 'netease_real') {
       const refreshed = await refreshNeteaseTrackUrl(track);
       if (!refreshed || !track.src) {

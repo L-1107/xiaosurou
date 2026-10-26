@@ -77,6 +77,12 @@
       linesPerPage: 15,
       currentSnippet: ''
     };
+    // 告诉宠物屋：今天在读书 → 它背上一片翻开的书页
+    try {
+      if (window.PetNest && typeof window.PetNest.reportSignal === 'function') {
+        window.PetNest.reportSignal('reading', 1, { title: '' });
+      }
+    } catch (e) { /* 忽略 */ }
   }
 
 

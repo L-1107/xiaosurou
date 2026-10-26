@@ -744,6 +744,31 @@
 
       return wrapper;
     }
+    if (msg.type === 'pet_say') {
+      // 宠物自己说的话（modules/pet-speech.js）
+      // ⚠️ 走 system role + 专用 type —— AI 上下文里会转成「[宠物 啾啾] …」，
+      //    这样 AI 明确知道是宠物说的，不会误以为是自己说的（角色扮演里这是要命的）
+      const wrapper = document.createElement('div');
+      wrapper.className = 'message-wrapper system-pat pet-say-wrapper';
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble system-bubble pet-say-bubble';
+      bubble.dataset.timestamp = msg.timestamp;
+      const who = document.createElement('span');
+      who.className = 'pet-say-name';
+      who.textContent = (msg.petName || msg.senderName || '宠物') + '：';
+      const body = document.createElement('span');
+      body.className = 'pet-say-text';
+      body.textContent = msg.content;
+      bubble.appendChild(who);
+      bubble.appendChild(body);
+      wrapper.appendChild(bubble);
+      addLongPressListener(wrapper, () => showMessageActions(msg.timestamp));
+      wrapper.addEventListener('click', () => {
+        if (isSelectionMode) toggleMessageSelection(msg.timestamp);
+      });
+      return wrapper;
+    }
+
     if (msg.type === 'pat_message') {
       const wrapper = document.createElement('div');
       wrapper.className = 'message-wrapper system-pat';

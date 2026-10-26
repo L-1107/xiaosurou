@@ -351,7 +351,73 @@
 //   ⚠️ 但 index.html 自己【不带 ?v=】, sw.js 对它是 cache-first —— 只 bump 模块的 ?v=
 //     管不到 index.html, SW 会一直吐 v0.2.68.0 里缓存的旧 index.html, 返回键根本不出现。
 //     所以这里必须 bump CACHE_VERSION 让 SW 重装重缓存。
-const CACHE_VERSION = 'v0.2.69.0';
+// v0.2.70.0 (2026-10-25): 灵宠蛋孵出来的幻兽改成【随机盲盒 + 每天换一次造型】。
+//   index.html 的 pet-nest.js ?v= 0.0.13 → 0.0.14，music-player.js / cinema-room.js /
+//     reading-room.js 也 bump（它们新增了 reportSignal 上报）。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.71.0 (2026-10-25): 宠物屋四个小 bug ——
+//   ① 返回键被 iPhone 状态栏（时间）挡住 → 让开 safe-area-inset-top
+//   ② 喂食记录里 AI 一律写「TA喂了…」 → 改成读 AI 角色名
+//   ③ 事件流加时间戳（不然不知道什么时候喂的）
+//   ④ 新进聊天页时桌面宠物不显示（可见性和 sprite 渲染是两条路，只走了前者）
+//   index.html 的 pet-nest.js ?v= 0.0.14 → 0.0.15、pet-nest.css ?v= 0.0.6 → 0.0.7。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.72.0 (2026-10-25): 宠物屋加「删除宠物 + 饿死机制 + 小窝齿轮面板」。
+//   index.html 的 .pn-header 里多了 <button id="pn-manage-btn">，
+//   并新增 <dialog id="pn-manage-dialog">（规则说明 + 放弃宠物）。
+//   modules/pet-nest.js 的 ?v= 0.0.15 → 0.0.16、css/pet-nest.css ?v= 0.0.7 → 0.0.8、
+//   modules/pet-image.js ?v= 0.0.1 → 0.0.2（新增 releaseAssetUrls 回收 objectURL）。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.73.0 (2026-10-26): 宠物屋加「宠物说话系统」。
+//   新增 modules/pet-speech.js（宠物自己开口：事件触发 + 15 分钟本地巡视 + 唤醒即说）。
+//   index.html 新挂了 <script src="modules/pet-speech.js?v=0.0.1">，
+//   小窝照顾弹窗里多了两个开关（允许说话 / 允许插话到聊天框）。
+//   modules/pet-nest.js 的 ?v= 0.0.16 → 0.0.17、css/pet-nest.css ?v= 0.0.8 → 0.0.9。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.74.0 (2026-10-26): 宠物屋的「成长值门槛」整体上调 + 修一个秒/毫秒单位 bug。
+//   成长值门槛（用户拍板的中档）：蛋类 26/130/324/648、猫狗 130/324/648（天数 2/10/25/50 不变）。
+//   ⚠️ 修 bug：陪玩/摸摸了成长值的恢复间隔，上游用的是秒（time.time()），330 这边是毫秒
+//      → 原来 14.4 秒就回满 1 点（上游是 4 小时），成长门槛形同虚设 → 现在按毫秒算。
+//   modules/pet-nest.js 的 ?v= 0.0.17 → 0.0.18。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.75.0 (2026-10-26): 备份/恢复带上宠物屋（PetNestDB 独立库）。
+//   之前主库备份只扫 db.tables，扫不到 PetNestDB → 换设备/换窗宠物全没了。
+//   现在备份里多一节 petNest（宠物 + 阶段 + 事件 + 粮仓 + 样貌图），
+//   localStorage 前缀清单也加了 petNest / petSpeech（桌宠开关、生图配置、上次开口时间）。
+//   modules/pet-nest.js 的 ?v= 0.0.18 → 0.0.19、backup-import-export.js 的 ?v= 0.0.38 → 0.0.39。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.76.0 (2026-10-26): 宠物屋的确认框不再被自家弹窗压住 + 换成宠物屋的样式 + 动画放慢。
+//   确认框看不见的真凶：我们的界面用原生 <dialog>，showModal() 会进 top layer，
+//   而 #custom-modal-overlay 是普通 z-index → top layer 永远盖在它上面。
+//   现在问确认前先把 <dialog> 收起来、问完再开回去，并给确认框套暖色皮肤（pn-modal-skin）。
+//   6 格姿势循环放慢：x 3s / y 6s（原来 1.8s / 3.6s）。
+//   modules/pet-nest.js 的 ?v= 0.0.19 → 0.0.20、css/pet-nest.css 的 ?v= 0.0.9 → 0.0.10。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.77.0 (2026-10-26): 蛋阶段的「允许说话 / 允许插话」两个开关是灰的，但写清楚为什么。
+//   用户点不动以为功能坏了 → 现在照顾弹窗里多一句「还颗蛋，说不了话，孵化之后就能用了」
+//   + 还差多少成长值（按门槛常量算）。
+//   modules/pet-nest.js 的 ?v= 0.0.20 → 0.0.21、css/pet-nest.css 的 ?v= 0.0.10 → 0.0.11。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.78.0 (2026-10-26): 修「刚领养的猫狗也被当成蛋禁言」。
+//   原来的门是 stage<=0 → 猫狗刚领养（stage 0）也一句话不说，等 10 天升阶段才能开口，
+//   跟用户定的「重新打开 App → 立刻说一句」直接冲突。
+//   现在只把「蛋类 + 第 0 阶段」当真蛋禁言；猫狗第 0 阶段是活的，照说。
+//   modules/pet-speech.js 的 ?v= 0.0.1 → 0.0.2。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.79.0 (2026-10-26): 修「抠完的图旁边残留色块」—— 真凶是六格串格，不是抠图精度。
+//   用户实测：残留的色块「像另一格的宠物的一部分」（第三张图里那块蓝的就是邻格鸟的尾羽）。
+//   根因：AI 画六格没对齐 + 宠物越出自己那格 → 邻格的东西被切进本格。
+//   改法：modules/pet-image.js 改成【按格处理】——每格单独抠（自己的背景色、从自己的四边泛洪）
+//   + 只留本格主体（连通域删除外来碎片）+ 主体挪到格心 + 切图范围收小 8%（宠物顶到边的那侧不切）。
+//   抠图算法本身也重写：多色背景 + 局部参考生长 + 多遍递增容差，
+//   安全网从「画面还剩多少不透明」改成「宠物本体有没有被啃」（12% 底线会误杀只占 9.7% 的小宠物）。
+//   modules/pet-image.js 的 ?v= 0.0.2 → 0.0.3。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.80.0 (2026-10-26): 小窝里的 6 格姿势动画再放慢 —— 每 3 秒换一张。
+//   用户提「还是快了，改成每 3 秒换一张」→ pn-frame-x 3s → 9s、pn-frame-y 6s → 18s（一轮 18 秒）。
+//   css/pet-nest.css 的 ?v= 0.0.11 → 0.0.12。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.80.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -420,6 +486,7 @@ const URLS_TO_CACHE = [
   // 4 张 starter 图集共 ~590KB, 必须预缓存 —— 断网时小窝要能打开, 桌宠也要有图。
   './modules/pet-nest.js',
   './modules/pet-image.js',
+  './modules/pet-speech.js',
   './css/pet-nest.css',
   './assets/pet-nest/room-light.webp',
   './assets/pet-nest/cat-sprites-light.webp',
@@ -517,6 +584,7 @@ self.addEventListener('fetch', event => {
      //   js/css 带 ?v= 走 network-first + 缓存兜底 —— 改了能立刻生效, 断网也能起。
      url.includes('/modules/pet-nest.js') ||
      url.includes('/modules/pet-image.js') ||
+     url.includes('/modules/pet-speech.js') ||
      url.includes('/css/pet-nest.css') ||
      url.includes('/assets/pet-nest/'));
 

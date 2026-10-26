@@ -3540,6 +3540,15 @@ ${linkedContents}
                 role: 'user',
                 content: `(${formatTimestampForHistory(msg.timestamp)}) [系统] ${msg.content}`
               };
+            } else if (msg.type === 'pet_say') {
+              // 宠物自己说的话（modules/pet-speech.js）
+              // ⚠️ 必须标明是【宠物】说的 —— 否则 AI 会以为那是它自己说的话，
+              //    角色扮演里会出「我刚才说过这句」的错乱
+              const petWho = msg.petName || msg.senderName || '宠物';
+              return {
+                role: 'user',
+                content: `(${formatTimestampForHistory(msg.timestamp)}) [宠物 ${petWho}] ${msg.content}`
+              };
             }
           }
 
@@ -3900,6 +3909,16 @@ ${enabledEntries}
           messagesPayload = filteredHistory.map(msg => {
             if (msg.isHidden) return null;
 
+
+            // 宠物自己说的话（modules/pet-speech.js）
+            // ⚠️ 必须标明是【宠物】说的 —— 否则 AI 会以为那是它自己说的话
+            if (msg.type === 'pet_say') {
+              const petWho = msg.petName || msg.senderName || '宠物';
+              return {
+                role: 'user',
+                content: `[宠物 ${petWho}] ${msg.content}`
+              };
+            }
 
 
 
@@ -4743,6 +4762,14 @@ ${getActiveThoughtsPrompt()}
                 return {
                   role: 'user',
                   content: `(${formatTimestampForHistory(msg.timestamp)}) [系统] ${msg.content}`
+                };
+              } else if (msg.type === 'pet_say') {
+                // 宠物自己说的话（modules/pet-speech.js）
+                // ⚠️ 必须标明是【宠物】说的 —— 否则 AI 会以为那是它自己说的话
+                const petWho = msg.petName || msg.senderName || '宠物';
+                return {
+                  role: 'user',
+                  content: `(${formatTimestampForHistory(msg.timestamp)}) [宠物 ${petWho}] ${msg.content}`
                 };
               }
             }
