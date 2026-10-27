@@ -264,72 +264,92 @@
            }
 
            /* ========================================= */
-           /* ▼▼▼ 瑞士极简主义通知系统 (Swiss Toast) ▼▼▼ */
+           /* ▼▼▼ 全局通知 toast（屏幕居中 + 宠物屋皮肤）▼▼▼ */
+           /* 【2026-10-26 用户改】「这个全局弹窗本来就很简陋我早就看不惯了」
+              → 整个全局 toast 改成：弹在屏幕【中央】、宠物屋的暖色皮肤、停 5 秒。
+              （不再单独给宠物屋做一套 —— 一套就够，全应用都受益。）
+              老样子是「顶部 top:12px + 白色胶囊 + 停 3 秒 + 25 字就截断」。 */
            /* ========================================= */
 
            .toast-container {
                position: fixed;
-               top: 12px;
-               /* 顶部留出状态栏呼吸感 */
+               top: 50%;
                left: 50%;
-               transform: translateX(-50%);
+               transform: translate(-50%, -50%);
                z-index: 9999;
                display: flex;
                flex-direction: column;
+               align-items: center;
                gap: 10px;
+               max-width: min(400px, 88vw);
+               max-height: 74vh;
+               overflow: hidden;
                pointer-events: none;
                /* 允许点击穿透 */
            }
 
            .toast-item {
                display: flex;
-               align-items: center;
-               gap: 12px;
-               padding: 12px 20px 12px 16px;
-               background-color: rgba(255, 255, 255, 0.92);
-               /* 极高纯度的白 */
-               backdrop-filter: blur(20px);
-               /* 磨砂玻璃质感 */
-               -webkit-backdrop-filter: blur(20px);
-               border-radius: 50px;
-               /* 完全胶囊状 */
-               box-shadow:
-                   0 4px 24px rgba(0, 0, 0, 0.06),
-                   /* 弥散阴影 */
-                   0 1px 2px rgba(0, 0, 0, 0.04),
-                   /* 锐利阴影 */
-                   inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
-               /* 内描边代替边框 */
-               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-               font-size: 14px;
+               align-items: flex-start;
+               gap: 10px;
+               padding: 14px 18px;
+               /* 宠物屋的奶油渐变皮肤 */
+               background: linear-gradient(180deg, #fdf8ee 0%, #f6ead4 100%);
+               border: 1px solid rgba(122, 98, 62, .28);
+               border-radius: 18px;
+               box-shadow: 0 20px 55px rgba(57, 38, 20, .26);
+               font-family: inherit;
+               font-size: 15px;
+               line-height: 1.6;
                font-weight: 500;
-               color: #1d1d1f;
-               /* 深炭灰，非纯黑 */
+               color: #4c3828;
                opacity: 0;
-               transform: translateY(-20px) scale(0.95);
-               transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-               /* iOS 物理动效曲线 */
+               transform: scale(.94);
+               transition: opacity .24s ease, transform .24s cubic-bezier(.16, 1, .3, 1);
+               max-width: 100%;
+               word-break: break-word;
            }
 
            .toast-item.visible {
                opacity: 1;
-               transform: translateY(0) scale(1);
+               transform: scale(1);
+           }
+
+           /* 正文：保留换行（有些提示是多行的），长句也能断行 */
+           .toast-text {
+               white-space: pre-line;
+               word-break: break-word;
+               padding-top: 1px;
            }
 
            .toast-icon {
                display: flex;
                align-items: center;
                justify-content: center;
-               width: 20px;
-               height: 20px;
-               color: #0071e3;
-               /* 苹果蓝 */
+               flex: none;
+               width: 22px;
+               height: 22px;
+               margin-top: 2px;
+               border-radius: 50%;
+               background: rgba(185, 139, 79, .16);
+               color: #a4703a;
            }
 
            .toast-icon svg {
                width: 100%;
                height: 100%;
                stroke-width: 2;
+           }
+
+           /* 按类型上色（成功 / 失败） */
+           .toast-item-success .toast-icon {
+               background: rgba(111, 154, 82, .18);
+               color: #5d8442;
+           }
+
+           .toast-item-error .toast-icon {
+               background: rgba(192, 90, 69, .16);
+               color: #c05a45;
            }
 
            /* 加载中动画 */
@@ -347,17 +367,13 @@
                }
            }
 
-           /* 暗黑模式适配 - 深邃而通透 */
-           #phone-screen.dark-mode .toast-item {
-               background-color: rgba(28, 28, 30, 0.92);
-               color: #f5f5f7;
-               box-shadow:
-                   0 4px 24px rgba(0, 0, 0, 0.2),
-                   inset 0 0 0 0.5px rgba(255, 255, 255, 0.1);
-           }
-
-           #phone-screen.dark-mode .toast-icon {
-               color: #0a84ff;
+           /* 暗黑模式：容器挂在 body 上（不在 #phone-screen 里），
+              所以深浅由 JS 给容器加 .toast-dark 来判断 */
+           .toast-container.toast-dark .toast-item {
+               background: linear-gradient(180deg, #3d372d 0%, #302b23 100%);
+               border-color: rgba(214, 186, 138, .22);
+               color: #f0e6d4;
+               box-shadow: 0 20px 55px rgba(0, 0, 0, .5);
            }
 
            /* ========================================= */

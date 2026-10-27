@@ -417,7 +417,49 @@
 //   用户提「还是快了，改成每 3 秒换一张」→ pn-frame-x 3s → 9s、pn-frame-y 6s → 18s（一轮 18 秒）。
 //   css/pet-nest.css 的 ?v= 0.0.11 → 0.0.12。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.80.0';
+// v0.2.81.0 (2026-10-26): 桌宠菜单加「喂食 / 摸摸 / 陪玩」三个快捷照顾。
+//   用户提「这些还得点进宠物屋才做得到，太麻烦」→ 点桌宠弹出的菜单里直接能照顾，
+//   走的是同一份 care()，喂食照样扣粮食、宠物照样会自己开口说一句。
+//   index.html 的 #pn-desktop-pet-menu 里多了三个 button + 一条分隔线,
+//   modules/pet-nest.js 的 ?v= 0.0.21 → 0.0.22、css/pet-nest.css 的 ?v= 0.0.12 → 0.0.13。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.82.0 (2026-10-26): 全局通知 toast 整个换掉 —— 【屏幕居中 + 宠物屋皮肤 + 停 5 秒】。
+//   用户提「这个全局弹窗本来就很简陋我早就看不惯了」→
+//   不再单独给宠物屋做一套（那样全应用还是老样子），直接把全局 toast 换掉，全应用都受益。
+//   老样子：顶部 top:12px + 白色胶囊 + 停 3 秒 + 超过 25 个字就截成「…」（宠物的话被砍掉半句）。
+//   现在：居中、奶油渐变皮肤、停 5 秒、截断放宽到 140 字、按类型上色、深色模式跟着走。
+//   index.html 的 ?v=：modules/ui-modals.js 0.0.36 → 0.0.37、css/features-3.css 0.0.36 → 0.0.37。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.83.0 (2026-10-27): 宠物屋「每日换装」的三个洞一起补上 + 六格留白。
+//   ① 蜕变提示词以前【收了 subject 却一次没用】→ 发出去的只有「只改这一处」，
+//      模型压根不知道今天该穿什么 → 界面上写着「抱着小水壶」，画出来还是原来那只（用户实测）。
+//   ② 每日换装以前只给灵宠蛋（鹦鹉、猫狗直接跳过），而且只有一个全局守卫
+//      → 一天只有「最早领养的那只」能换。现在所有种类都换，守卫改成每只一个 key。
+//   ③ 生图提示词从「每格塞满」改成「宠物只占格子 75%、四周留白」→ 耳朵尾巴不再画进隔壁格，
+//      本地切图就不会再削掉它们（用户 2026-10-27 定的：还是六张，动作数不改）。
+//   ④ 换装改成【衣服 + 道具一起换】：当天聊不到东西时按「天 + 种子」兜底挑一个道具。
+//   ⑤ 自动换装和手动「换个模样」分开计数（自动的不再吃掉手动名额）。
+//   ⑥ 顺带修：petView 以前不带 seed → 界面显示的穿搭和提示词算出来的是两套。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.22 → 0.0.23、modules/pet-image.js 0.0.3 → 0.0.4。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.84.0 (2026-10-27): 影院两个用户实测的问题。
+//   ① 影院里想聊天 → 「主 API 没配好（地址 / API Key / 模型缺一个）」。
+//      真因：影院跑在 iframe 沙盒里，沙盒只加载了 7 个文件，【没有 api-endpoint-presets.js】
+//      → 沙盒里没有 resolveApiSlotConfig，自己的库里也没有 apiPresets 表 → 拿不到主 API 配置；
+//      而宿主传过去的 payload 里同样没有它。
+//      修法：宿主用 resolveApiSlotConfig('main') 实时解析（预设模式下 state.apiConfig 里的
+//      地址/密钥本来就被清空了，不能直接读），随 payload + 补发消息交给沙盒。
+//   ② 一集短剧看完【第一次不总结单集剧情】，再放一遍才总结。
+//      真因：摘要只有一条通道（pendingSummary），requestEpisodeSummary 抢不到就【静默放弃】；
+//      而 2026-10-23 新加的「此刻画面」实况每 30 秒就占一次这条通道，短剧一集才 1~2 分钟，
+//      播完那一刻正好撞上 → 这一集的单集剧情被扔了。失败时还会照样推进 seriesLastEp，
+//      状态条写着「看到第 N 集」而库里根本没有这一集。
+//      修法：单集总结改成【等】通道（最多 25 秒）；播完那一刻主动作废在途的「实况」让路；
+//      失败不推进 seriesLastEp，且记忆面板上显示「第 N 集没总结出来」。
+//   index.html 的 ?v=：modules/cinema-room.js 0.29.3 → 0.29.4、modules/cinema-live.js 1.9.7 → 1.9.8、
+//   modules/cinema-chat.js 0.0.1 → 0.0.2；cinema-sandbox/index.html 里那三个也一起对齐。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.84.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

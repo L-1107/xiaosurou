@@ -166,11 +166,57 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.41 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.41</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>影院里想聊天，一直报「主 API 没配好（地址 / API Key / 模型缺一个）」</strong> —— 不是你没配，是<strong>影院那一层根本拿不到你的主 API 配置</strong>：影院跑在一个单独的页面里，那个页面没有读取主 API 配置的能力，而你填好的地址和密钥从来没传进去。现在<strong>由外面把你的主 API 配置解析好再交给影院</strong>，影院里就能正常聊天了（外面换预设也照样生效）。</li>
+          <li><strong>一集短剧看完，第一次不总结单集剧情，再放一遍才总结</strong> —— 剧情总结只有一条通道，一次只能跑一个，而<strong>「此刻画面」那个每 30 秒写一句的小通道会占着它</strong>。短剧一集才一两分钟，<strong>正好播完那一刻被它占了，这一集就被悄悄扔了</strong>（界面上什么都不显示，但进度却已经算你看过了）。现在改成<strong>排队等它让出来</strong>，播完那一刻还会<strong>主动让「此刻画面」先歇一下</strong> —— 那个下一轮就会重写，单集剧情错过可就没了。</li>
+          <li><strong>这次没总结出来，记忆面板上会写出来</strong> —— 以前是<strong>完全没有提示</strong>：状态条照样写着「看到第 N 集」，但库里其实没这一集，你只能靠几集之后点「精炼」才发现少了。现在面板上会直接写「第 N 集没总结出来」，<strong>重播这一集就能补上</strong>；而没总结出来的那一集<strong>也不再算「看过」</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.40 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.40</span>
+        <span class="version-date">2026-10-27</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增</div>
+        <ul class="item-list">
+          <li><strong>桌宠菜单里能直接照顾了</strong> —— 点桌宠弹出来的菜单，现在有「喂食 / 摸摸 / 陪玩」三个按钮，<strong>不用再点进宠物屋</strong>。扣的还是同一份粮食，宠物照样会自己开口说一句。</li>
+          <li><strong>每只宠物每天都会换一次造型了</strong> —— 以前只有灵宠蛋孵出来的那只幻兽在换，而且<strong>一天只有「最早领养的那只」能换</strong>。现在<strong>鹦鹉、猫狗、幻兽，全都每天换</strong>。</li>
+          <li><strong>换装改成「衣服 + 道具一起换」</strong> —— 以前有时候只换衣服、没道具。现在每天必定一件衣服（旗袍、草帽、蝴蝶结…）<strong>加一件道具</strong>（热饮、小伞、音符…）；当天聊了什么就挑对应的道具，聊不到就按当天的种子兜底挑一个。</li>
+          <li>名册和照顾弹窗里<strong>能看见它今天这身了</strong>（以前鹦鹉只有品种和花纹，没有换装说明）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title optimize">优化</div>
+        <ul class="item-list">
+          <li><strong>全局提示弹窗整个换掉了</strong> —— 你的原话：「这个全局弹窗本来就很简陋我早就看不惯了，你能不能直接改这个全局弹窗，免得你单独去分离宠物屋的」。以前是顶部一条白色小胶囊、停 3 秒、<strong>超过 25 个字就砍成「…」</strong>（宠物自己说的话经常被砍掉半句）。现在：<strong>屏幕正中间、奶油渐变的宠物屋皮肤、停 5 秒、截断放宽到 140 字、按类型上色、深色模式也跟着变深</strong> —— 全应用的提示一起受益，不用单独给宠物屋开一套。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>「今天明明是抱着小水壶的兽，重新生图却还是没有小水壶」</strong> —— 真凶找到了：<strong>蜕变用的那段提示词把宠物的样子整个丢掉了</strong>，只让模型「只改这一处花纹」，模型压根不知道今天该穿什么，于是照抄旧图。现在当天的样子（物种、配色、衣服、道具）会<strong>原样写进请求里</strong>。</li>
+          <li><strong>界面上写的穿搭和画出来的对不上</strong> —— 界面用宠物编号算今天穿什么，提示词用它的种子算，<strong>算出来是两套</strong>。现在两边用同一个种子。</li>
+          <li><strong>六格图挤太紧，耳朵尾巴被切掉</strong> —— 提示词以前是叫模型「把每格塞满」，模型就把宠物顶到格子边缘画，耳朵尾巴直接画进隔壁格，本地切图只能削掉。现在改成<strong>宠物只占格子 75%、四周留白</strong>，切边时切到的只是留白。<strong>动作还是原来六个</strong>，一张没少。</li>
+          <li><strong>自动换装不再占用手动生图的名额</strong>（以前自动换装画满 3 张，手动「换个模样」就没次数了）。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.39 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.39</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-10-26</span>
       </div>
       <div class="section">
         <div class="section-title new">新增</div>

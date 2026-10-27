@@ -64,6 +64,17 @@
   var SERIES_OUTLINE_MAX_CHARS = 1500;    // 短剧: 攒够一批合并出的总纲
   var SUMMARY_REQUEST_TIMEOUT_MS = 45000;
 
+  // 🔴 2026-10-27: 单集剧情要等的【摘要通道】上限 (毫秒)。
+  //
+  //   起因: 摘要只有一条通道 (watchSession.pendingSummary)。原来 requestEpisodeSummary
+  //   抢不到就【静默放弃】(return ''), 而 2026-10-23 新加的「此刻画面」实况每 30 秒
+  //   就占一次这条通道 —— 短剧一集才 1~2 分钟, 播完那一刻正好撞上在途的实况,
+  //   这一集的单集剧情就被扔了 (用户实测: 第一次不总结, 再放一遍才总结)。
+  //
+  //   25 秒 = 实况通道自己的超时 (LIVE_NOW_TIMEOUT_MS 20s) + 阶段摘要超时的一部分,
+  //   够把正常的在途请求等完, 又不至于让用户干等太久。
+  var EPISODE_SUMMARY_WAIT_MS = 25000;
+
   // ---- 「此刻画面」实况 (2026-10-23) ----
   // 陪聊改走主 API 之后, 主 API 看不见画面 —— 它只能靠"剧情记忆"知道演了什么。
   // 剧情记忆的粒度是 5 分钟一段, 问"刚才是怎么了"会答得粗。
@@ -154,6 +165,10 @@
     //   原来落库失败只 logWarn 一句, 用户毫无察觉, 几集之后点「精炼」才发现
     //   "库里没有攒下的单集剧情"。失败必须【看得见】。
     persistErrors: [],
+    // 🔴 2026-10-27: 【根本没生成出来】的集 [{ ep, msg }] —— 跟 persistErrors 分开。
+    //   persistErrors = 生成了但没存进库; episodeErrors = 压根没生成出来 (通道被占/超时)。
+    //   这两种病不一样, 面板上的话也不能一样。
+    episodeErrors: [],
     // 🔴 2026-10-10 用户实测: 退出再进来播第3集, 总结写成"第一集"。
     //   nowPlayingEp = 宿主传来的【这次实际播的集号】(用户点的按钮),
     //   onVideoEnded 播完时直接用它, 不再用 seriesLastEp+1 去猜 ——
@@ -279,6 +294,7 @@
     watchSession.seriesLastEp = 0;
     watchSession.episodeMemories = [];
     watchSession.persistErrors = [];
+    watchSession.episodeErrors = [];
     watchSession.nowPlayingEp = 0;
     watchSession.segments = [];
     watchSession.segCount = 0;
@@ -952,9 +968,22 @@
         '）。精炼和导出仍会用这次看到的，但刷新页面会丢。</div>';
     }
 
+    // 🔴 2026-10-27: 【压根没总结出来】的集 —— 跟"没存进库"分开显示。
+    //   以前这一集是【静默】丢掉的: 界面上什么都没有, 状态条还写着"看到第 N 集",
+    //   用户根本不知道自己少了一集, 直到几集之后点「精炼」才发现素材不对。
+    var episodeWarnHtml = '';
+    if (watchSession.episodeErrors && watchSession.episodeErrors.length) {
+      var ee = watchSession.episodeErrors;
+      var eeEps = ee.map(function (x) { return x.ep; }).join('、');
+      episodeWarnHtml = '<div class="cinema-plot-text dim">⚠️ 第 ' + eeEps + ' 集没总结出来（' +
+        esc(ee[0].msg || '未知原因') +
+        '）。重播这一集就能补上。</div>';
+    }
+
     return '<div class="cinema-plot-label">前情提要（跨场保留 · 下次进影院自动带上）</div>' +
         recapHtml +
         persistWarnHtml +
+        episodeWarnHtml +
         refineBar +
         '<div class="cinema-plot-label">已攒 ' + eps.length + ' 集'
           + (watchSession.seriesLastEp ? ' · 看到第 ' + watchSession.seriesLastEp + ' 集' : '')
@@ -1754,6 +1783,7 @@
     }
     watchSession.episodeMemories.sort(function (a, b) { return a.ep - b.ep; });
     if (ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
+    clearEpisodeFail(ep);          // 这次总结出来了 → 面板上的红字撤掉
     log('📺 记下第 ' + ep + ' 集剧情 (累计 ' + watchSession.episodeMemories.length + ' 条)');
     renderPlotPanel();
     return true;
@@ -1825,6 +1855,31 @@
   }
 
   /**
+   * 记一条【压根没生成出来】的集 (面板上显示)。
+   *
+   * 🔴 2026-10-27: 跟 notePersistFail 分开。
+   *   persistFail = 生成了, 但没存进库 (表坏了/库关了) → 面板说"没存进库"。
+   *   episodeFail = 压根没生成 (通道被占 / 模型没回 / 太短) → 面板要说"没总结出来,
+   *   重播这一集就能补上"。两种病的话术不能混, 否则用户会去查错的东西。
+   */
+  function noteEpisodeFail(ep, msg) {
+    if (!watchSession.episodeErrors) watchSession.episodeErrors = [];
+    for (var i = 0; i < watchSession.episodeErrors.length; i++) {
+      if (watchSession.episodeErrors[i].ep === ep) {
+        watchSession.episodeErrors[i].msg = String(msg || '');
+        return;
+      }
+    }
+    watchSession.episodeErrors.push({ ep: ep, msg: String(msg || '') });
+  }
+
+  /** 某一集后来总结出来了 → 把它的失败记录撤掉。 */
+  function clearEpisodeFail(ep) {
+    if (!watchSession.episodeErrors || !watchSession.episodeErrors.length) return;
+    watchSession.episodeErrors = watchSession.episodeErrors.filter(function (x) { return x.ep !== ep; });
+  }
+
+  /**
    * 「库里那份」+「内存里这份」取并集, 按 ep 升序。
    *
    * 🔴 2026-10-21 用户实测的真事故:
@@ -1887,12 +1942,77 @@
     return true;
   }
 
+  /**
+   * 摘要通道空了吗?
+   *
+   * 两个条件都要满足:
+   *   ① 没有在途的摘要请求 (pendingSummary)
+   *   ② 没有【迟到文本静默窗口】(summaryGhostUntil) —— 那是上一个被作废的请求
+   *      的尾巴还在往回吐的时间窗, 这时候发新请求, 新请求的头几个字会被它吃掉
+   *      (单集记忆的开头"第 N 集，"就是这么丢的)。所以要等它过去。
+   */
+  function summaryChannelFree() {
+    if (watchSession.pendingSummary) return false;
+    if (watchSession.summaryGhostUntil && Date.now() < watchSession.summaryGhostUntil) return false;
+    return true;
+  }
+
+  /** 等摘要通道空出来。返回 true = 等到了; false = 等超时了。 */
+  function waitForSummaryChannel(maxMs) {
+    if (summaryChannelFree()) return Promise.resolve(true);
+    var waited = 0;
+    return new Promise(function (resolve) {
+      var iv = setInterval(function () {
+        waited += 200;
+        if (summaryChannelFree() || waited > maxMs) {
+          clearInterval(iv);
+          resolve(summaryChannelFree());
+        }
+      }, 200);
+    });
+  }
+
+  /**
+   * 播完一集 → 把在途的【此刻画面·实况】作废, 把摘要通道让给单集剧情。
+   *
+   * 🔴 2026-10-27 优先级: 单集剧情 > 实况。
+   *   实况是【可再生的快照】—— 下一轮 30 秒会重写, 丢一次无所谓;
+   *   单集剧情错过就没了 (错过 = 这一集白看, 库里永远缺这一集)。
+   *   所以播完这一刻, 宁可作废实况, 也要把通道空出来给单集剧情。
+   *
+   *   只作废 kind==='live' 的请求 —— 阶段摘要/手动精炼是别的语义, 不该在这里动。
+   */
+  function yieldChannelToEpisodeSummary() {
+    var p = watchSession.pendingSummary;
+    if (!p || p.kind !== 'live') return false;
+    abortPendingSummary('影片播完, 单集剧情优先');
+    return true;
+  }
+
   /** 一集播完 → 要一条单集记忆 */
   function requestEpisodeSummary(ep) {
     if (S._leaving) return Promise.resolve('');
     if (!S.client || !S.client.isReady()) return Promise.resolve('');
-    if (watchSession.pendingSummary) return Promise.resolve('');   // 单通道, 别并发
 
+    // 🔴 2026-10-27: 原来这里第三行是
+    //     if (watchSession.pendingSummary) return Promise.resolve('');
+    //   —— 抢不到通道就【静默放弃】: 没有日志, 没有重试, 界面上什么都看不出来,
+    //   而 onVideoEnded 还会照样推进 seriesLastEp (状态条显示"看到第 N 集"),
+    //   于是这一集在数据上"看过了", 库里其实根本没有。
+    //   撞上的元凶是 2026-10-23 新加的「此刻画面」实况 (每 30 秒占一次通道)。
+    //   现在改成【等】通道空出来再发, 最多等 EPISODE_SUMMARY_WAIT_MS。
+    return waitForSummaryChannel(EPISODE_SUMMARY_WAIT_MS).then(function (ok) {
+      if (!ok) {
+        logWarn('第 ' + ep + ' 集没总结: 摘要通道一直被占着');
+        noteEpisodeFail(ep, '摘要通道一直被占着, 没能生成出来');
+        return '';
+      }
+      return doRequestEpisodeSummary(ep);
+    });
+  }
+
+  /** 真去要一条单集记忆 (通道已经空出来了) */
+  function doRequestEpisodeSummary(ep) {
     var instruction = [];
     instruction.push('【【后台任务】】你刚刚看完了' + (watchSession.seriesTitle ? '《' + watchSession.seriesTitle + '》' : '这部短剧') + '的【第 ' + ep + ' 集】。');
     // 🔴 2026-10-10 用户实测: 不写集号, 模型会自己重新编号, 把第3集写成"第一集"。
@@ -1926,14 +2046,25 @@
     return requestSummary('episode', instruction.join('\n'))
       .then(function (text) {
         var t = (text || '').trim();
-        if (!t) { logWarn('第 ' + ep + ' 集没总结出内容'); return ''; }
+        if (!t) {
+          logWarn('第 ' + ep + ' 集没总结出内容');
+          noteEpisodeFail(ep, '模型这次什么都没说');
+          return '';
+        }
         // 🔴 2026-10-19: addEpisodeMemory 自己会卡长度下限, 返回 false 就当这次没总结出来。
         //   以前这里不看长度, 截断成三个字也照样收下并计入 seriesLastEp ——
         //   于是那一集在数据上"看过了", 但其实什么也没记下来。
-        if (!addEpisodeMemory(ep, t)) return '';
+        if (!addEpisodeMemory(ep, t)) {
+          noteEpisodeFail(ep, '这次只总结出几个字, 太短, 没存');
+          return '';
+        }
         return t;
       })
-      .catch(function (err) { logWarn('第 ' + ep + ' 集总结失败:', err.message); return ''; });
+      .catch(function (err) {
+        logWarn('第 ' + ep + ' 集总结失败:', err.message);
+        noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        return '';
+      });
   }
 
   /**
@@ -3759,14 +3890,23 @@
       stopStageSummary();
       log('第 ' + ep + ' 集播完, 记录剧情…');
       renderStatus('ready');
-      requestEpisodeSummary(ep).then(function () {
-        // 记完这集, "看过"才推进到本集
-        if (ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
+      // 🔴 2026-10-27: 单集剧情 > 实况 —— 在途的「此刻画面」直接作废, 把通道让出来。
+      //   实况是可再生的快照(下一轮 30 秒会重写), 单集剧情错过就是这一集白看。
+      //   不这么做的话, 播完那一刻正好撞上在途实况 → 这一集的单集剧情被静默丢掉
+      //   (用户实测: 第一次不总结, 再放一遍才总结)。
+      yieldChannelToEpisodeSummary();
+      requestEpisodeSummary(ep).then(function (text) {
+        // 🔴 2026-10-27: 只有【真的总结出来】才推进"看到第几集"。
+        //   以前这里不看结果直接推进 —— 于是这一集在数据上"看过了",
+        //   状态条也写着"看到第 N 集", 但库里根本没这一集, 用户自己都发现不了。
+        if (text && ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
         renderPlotPanel();
         // 攒够一批评分压成跨场提要 (失败不丢数据, 各集都在库里)
         return maybeMergeSeriesRecap();
       }).catch(function (err) {
         logWarn('第 ' + ep + ' 集记录失败:', err.message);
+        noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        renderPlotPanel();
       });
       return;
     }

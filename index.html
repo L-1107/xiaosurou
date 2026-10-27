@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-1.css?v=0.0.38">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
-  <link rel="stylesheet" href="css/features-3.css?v=0.0.36">
+  <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
   <link rel="stylesheet" href="update-notification.css?v=0.0.36">
   <link rel="stylesheet" href="structured-memory.css?v=0.0.36">
@@ -143,7 +143,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/asr-transcription.js?v=0.0.36" defer></script>
   <script src="modules/translations.js?v=0.0.36" defer></script>
   <!-- 第二层：UI 通用组件 -->
-  <script src="modules/ui-modals.js?v=0.0.36" defer></script>
+  <script src="modules/ui-modals.js?v=0.0.37" defer></script>
   <script src="modules/ui-loaders.js?v=0.0.36" defer></script>
   <!-- 第二层半：消息数据访问层（需先于聊天核心模块加载） -->
   <script src="modules/message-store.js?v=0.0.38" defer></script>
@@ -259,28 +259,28 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.29.3" defer></script>
+  <script src="modules/cinema-room.js?v=0.29.4" defer></script>
   <link rel="stylesheet" href="modules/cinema-room.css?v=0.38.1">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
-  <script src="modules/cinema-live.js?v=1.9.7" defer></script>
+  <script src="modules/cinema-live.js?v=1.9.8" defer></script>
   <!-- Cinema Room 的【陪聊】层 (2026-10-23)。
        陪聊改走【主聊天的主 API】: 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆,
        性格跟外面聊天一致。Live 只负责看画面 + 写剧情记忆。
        必须在 cinema-live.js 之后加载 —— 它要用 CinemaLive 暴露的气泡渲染和剧情记忆。 -->
-  <script src="modules/cinema-chat.js?v=0.0.1" defer></script>
+  <script src="modules/cinema-chat.js?v=0.0.2" defer></script>
   <!-- 宠物屋 (Cove 灵宠屋前端移植版, 2026-10-23)
        纯前端: 数据存本机 IndexedDB (独立库 PetNestDB), 不需要后端。
        规则与素材移植自 https://github.com/moonlin1213/cove-pet-nest (MIT)
        必须在 modules/message-store.js 之后 —— 它要包落库函数来按对话计量攒粮。 -->
-  <script src="modules/pet-nest.js?v=0.0.21" defer></script>
+  <script src="modules/pet-nest.js?v=0.0.23" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
-  <script src="modules/pet-image.js?v=0.0.3" defer></script>
+  <script src="modules/pet-image.js?v=0.0.4" defer></script>
   <!-- 宠物说话系统 (宠物自己开口)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.listPets() 和 rules.dimensionScores()。 -->
   <script src="modules/pet-speech.js?v=0.0.2" defer></script>
-  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.12">
+  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.13">
   <!-- 主入口（最后加载，调用 init） -->
   <script src="modules/init-and-state.js?v=0.0.84" defer></script>
   <!-- 第九层：DOMContentLoaded 外部的独立模块 -->
@@ -8999,6 +8999,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
 <div id="pn-desktop-pet" hidden>
   <div id="pn-desktop-pet-bubble" hidden></div>
   <div id="pn-desktop-pet-menu" class="pn-desktop-pet-menu" hidden>
+    <button id="pn-desktop-pet-feed" type="button" class="pn-menu-act">喂食</button>
+    <button id="pn-desktop-pet-comfort" type="button" class="pn-menu-act">摸摸</button>
+    <button id="pn-desktop-pet-play" type="button" class="pn-menu-act">陪玩</button>
+    <div class="pn-menu-sep"></div>
     <button id="pn-desktop-pet-enter" type="button">进入小屋</button>
     <button id="pn-desktop-pet-toggle" type="button">隐藏桌宠</button>
   </div>

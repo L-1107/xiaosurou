@@ -110,14 +110,27 @@
     }, 2000);
   }
 
-  // --- 新增：高端非侵入式通知 ---
-  function showToast(message, type = 'info', duration = 3000) {
+  // --- 全局通知 toast ---
+  // ⚠️【2026-10-26 用户改】「这个全局弹窗本来就很简陋我早就看不惯了」
+  //   → 整个全局 toast 统一改成：弹在【屏幕中央】+ 宠物屋的暖色皮肤 + 停 5 秒。
+  //   （不再单独给宠物屋做一套 —— 一套就够，全应用都受益。）
+  //   顺带修掉老毛病：以前超过 25 个字就被截成「…」，宠物说话经常被砍掉半句。
+  const TOAST_MAX_LEN = 140;
+  function showToast(message, type = 'info', duration = 5000) {
     let container = document.querySelector('.toast-container');
     if (!container) {
       container = document.createElement('div');
       container.className = 'toast-container';
       document.body.appendChild(container);
     }
+
+    // 暗黑模式：容器挂在 body 上（不在 #phone-screen 里），
+    // 所以深浅得自己判断一次，给容器加个 toast-dark
+    try {
+      const phone = document.getElementById('phone-screen');
+      const dark = !!(phone && phone.classList && phone.classList.contains('dark-mode'));
+      container.classList.toggle('toast-dark', dark);
+    } catch (e) { /* 忽略 */ }
 
     // 定义图标 (SVG)
     const icons = {
@@ -130,15 +143,21 @@
     const iconSvg = icons[type] || icons.info;
     const spinClass = type === 'loading' ? 'spinning' : '';
 
-    // 智能截断过长的消息
-    const displayMsg = message.length > 25 ? message.substring(0, 24) + '...' : message;
+    // 截断放宽到 140 字（以前 25 个字就砍，宠物说话经常被砍掉半句）
+    const raw = String(message == null ? '' : message);
+    const displayMsg = raw.length > TOAST_MAX_LEN ? raw.substring(0, TOAST_MAX_LEN - 1) + '…' : raw;
 
     const toast = document.createElement('div');
-    toast.className = 'toast-item';
-    toast.innerHTML = `
-        <div class="toast-icon ${spinClass}">${iconSvg}</div>
-        <span>${displayMsg}</span>
-    `;
+    // 类型进 class，样式才能按成功/失败上色
+    toast.className = 'toast-item toast-item-' + (type || 'info');
+    const iconEl = document.createElement('div');
+    iconEl.className = 'toast-icon ' + spinClass;
+    iconEl.innerHTML = iconSvg;              // 图标是固定字符串，安全
+    const textEl = document.createElement('span');
+    textEl.className = 'toast-text';
+    textEl.textContent = displayMsg;         // 正文走 textContent，别用 innerHTML
+    toast.appendChild(iconEl);
+    toast.appendChild(textEl);
 
     container.appendChild(toast);
 

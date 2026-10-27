@@ -13,6 +13,15 @@
  *                        ⚠️ 中转站是否透传这两个参数要实测（探针按钮就是干这个的）。
  *   /images/edits（multipart, 带参考图）→ 蜕变时保持同一只宠物。
  *
+ * 【⚠️ 2026-10-27 三处改动】
+ *   ① 蜕变提示词以前【收了 subject 却一次没用】→ 每日穿搭进不了请求（小水壶画不出来）。
+ *      现在 subject（身份 + 今天这身）正式写进提示词。
+ *   ② 提示词以前写的是「每格塞满那一个姿势」→ 模型把宠物顶到格边画，
+ *      耳朵尾巴画进隔壁格 → 本地只能切掉 → 耳朵尾巴被削 + 邻格碎片留成色块。
+ *      现在改成「每格只占 75%，四周留白，任何部位不许碰格边」（用户定的：还是六张）。
+ *   ③ 自动换装（每只宠物每天一张）跟手动「换个模样」【分开计数】，
+ *      自动换装不会把手动生图的名额吃掉。
+ *
  * 【透明兜底】
  *   通道不给透明时，本地抠图：多色背景 + 从画布四边做连通泛洪，
  *   泛洪时既比全局背景色、也比「刚才扩过来的那个像素」（局部参考）→ 渐变/柔光/影子也吃得掉；
@@ -40,7 +49,8 @@
     storeWidth: 768,             // 存库尺寸（每格 256×256，手机上绰绰有余）
     storeHeight: 512,
     snapshotSize: 256,           // 给 AI 看的单只截图
-    dailyLimit: 3,               // 每日生图上限（跟上游一致）
+    dailyLimit: 3,               // 手动「换个模样」每日上限
+    autoLookBudget: 0,           // 每日【自动换装】名额（0 = 按宠物数量算，每只 1 张）
     tolerance: 46,               // 抠图容差（多遍递增：1× → 1.8× → 2.6×）
     backgroundColorKeys: 3,      // 边框取几种背景色（渐变/柔光背景用得上）
     backgroundColorSpread: 2.6,  // 其余背景色离主背景色多远之内才算数（× 容差）
@@ -55,7 +65,11 @@
     model: 'openaiCompatImageModel',
     enabled: 'openaiCompatImageEnabled',
     dailyCount: 'petNestImageDailyCount',
-    dailyDay: 'petNestImageDailyDay'
+    dailyDay: 'petNestImageDailyDay',
+    // ⚠️【2026-10-27】自动换装和手动生图【分开计数】→
+    //   以前共用一个计数：自动换装画掉 3 张，手动「换个模样」就没名额了。
+    autoCount: 'petNestImageAutoCount',
+    autoDay: 'petNestImageAutoDay'
   };
 
   // ============================================================
@@ -89,22 +103,40 @@
     return d.toISOString().slice(0, 10);
   }
 
-  function todayCount() {
+  /**
+   * 今天用了几次
+   * @param counter 'manual' 手动生图（默认） / 'auto' 每日自动换装（分开算）
+   */
+  function todayCount(counter) {
+    const auto = counter === 'auto';
     try {
-      const day = localStorage.getItem(KEYS.dailyDay);
+      const day = localStorage.getItem(auto ? KEYS.autoDay : KEYS.dailyDay);
       if (day !== todayKey()) return 0;
-      return Number(localStorage.getItem(KEYS.dailyCount) || 0) || 0;
+      return Number(localStorage.getItem(auto ? KEYS.autoCount : KEYS.dailyCount) || 0) || 0;
     } catch (e) { return 0; }
   }
 
-  function bumpTodayCount() {
+  function bumpTodayCount(counter) {
+    const auto = counter === 'auto';
     try {
+      const dayName = auto ? KEYS.autoDay : KEYS.dailyDay;
+      const countName = auto ? KEYS.autoCount : KEYS.dailyCount;
       const day = todayKey();
-      const cur = localStorage.getItem(KEYS.dailyDay) === day
-        ? (Number(localStorage.getItem(KEYS.dailyCount) || 0) || 0) : 0;
-      localStorage.setItem(KEYS.dailyDay, day);
-      localStorage.setItem(KEYS.dailyCount, String(cur + 1));
+      const cur = localStorage.getItem(dayName) === day
+        ? (Number(localStorage.getItem(countName) || 0) || 0) : 0;
+      localStorage.setItem(dayName, day);
+      localStorage.setItem(countName, String(cur + 1));
     } catch (e) { /* 忽略 */ }
+  }
+
+  /** 这一轮最多能用几次（options.budget 优先；没给就用全局上限） */
+  function limitFor(options) {
+    const o = options || {};
+    if (o.budget != null && o.budget !== '') {
+      const b = Number(o.budget);
+      if (!isNaN(b) && b > 0) return b;
+    }
+    return Number(CFG.dailyLimit) || 3;
   }
 
   function loadImage(blobOrUrl) {
@@ -623,7 +655,9 @@
    * AI 画的六格没对齐，邻格宠物会越过格子边界 → 露在本格边缘。
    * 这一步把边缘一条切掉，越界的部分根本进不了这一格。
    * ⚠️ 每条边切多少，要看这一侧的宠物顶没顶到边：
-   *   宠物顶到边 → 那条边不切（提示词里写着 "each cell fully filled"，削宠物比留小块更难看）。
+   *   宠物顶到边 → 那条边少切（削宠物比留小块更难看）。
+   *   ⚠️【2026-10-27】提示词已经改成「宠物只占格子 75%、四周留白」→
+   *     模型不再把宠物顶到格边，所以这里切到的通常只是留白，不会碰到耳朵尾巴。
    */
   function zeroBorderBand(img, w, h, margins) {
     const left = margins.left | 0, top = margins.top | 0;
@@ -855,12 +889,19 @@
       || 'warm children\'s picture-book illustration, soft watercolor texture, warm afternoon sunlight, gentle muted palette, the same art style across all six cells';
     const poses = '1) sitting alert and looking at the viewer, 2) sitting with eyes closed content, 3) curled up asleep, 4) head lowered eating from a food bowl, 5) lying down looking up, 6) sitting with one front paw raised';
     const background = 'isolated on a fully transparent background, absolutely no ground shadow, no backdrop, no scenery, no text, no watermark, no border, no grid lines';
-    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, each cell fully filled by that one pose, no gaps';
+    // ⚠️【2026-10-27 用户定】「宠物只占格子 70-80% 的格子，还是六张」
+    //   原来写的是「每格塞满那一个姿势、格子之间不留缝」
+    //   → 等于叫模型把宠物顶到格子边缘画，耳朵尾巴直接画进隔壁格
+    //   → 本地切图只能把越界的部分切掉 → 耳朵/尾巴被削掉，
+    //     而且邻格串进来的碎片在本格留下多余色块。
+    //   → 改成「每格只占 75%，四周留白，任何部位都不许碰格边」，
+    //     切边时切到的就只是留白（不会碰到宠物），邻格也串不进来。
+    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, no gaps or borders between the cells, and in every cell the character is drawn SMALL and centered, filling only about 75% of that cell with a clear empty margin all around it, its ears, tail, paws and outfit staying completely inside the cell and never touching or crossing the cell edges';
     return [
       'A single ' + subject + '.',
-      'The SAME individual character in every cell — identical face, identical fur/skin colors, identical eye color, identical markings.',
+      'The SAME individual character in every cell — identical face, identical fur/skin colors, identical eye color, identical markings, identical outfit and accessories.',
       layout + '.',
-      'The six poses, in order: ' + poses + '.',
+      'The six poses, in order: ' + poses + '. Each pose is drawn small and centered inside its own cell, with the same empty margin around it.',
       'Style: ' + style + '.',
       background + '.'
     ].join('\n');
@@ -870,16 +911,29 @@
     const style = 'warm children\'s picture-book illustration, soft watercolor texture, warm afternoon sunlight, gentle muted palette, the same art style across all six cells';
     const poses = '1) sitting alert and looking at the viewer, 2) sitting with eyes closed content, 3) curled up asleep, 4) head lowered eating from a food bowl, 5) lying down looking up, 6) sitting with one front paw raised';
     const background = 'isolated on a fully transparent background, absolutely no ground shadow, no backdrop, no scenery, no text, no watermark, no border, no grid lines';
-    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, each cell fully filled by that one pose, no gaps';
-    return [
-      'Keep exactly the SAME character from the reference image — same face, same colors, same eye color.',
-      'Make ONLY this change: ' + change + '.',
-      layout + '.',
-      'The six poses, in order: ' + poses + '.',
-      'Style: ' + style + '.',
-      background + '.',
-      referenceNote || 'The reference image shows the same character in six poses.'
-    ].join('\n');
+    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, no gaps or borders between the cells, and in every cell the character is drawn SMALL and centered, filling only about 75% of that cell with a clear empty margin all around it, its ears, tail, paws and outfit staying completely inside the cell and never touching or crossing the cell edges';
+    const lines = [];
+    lines.push('Keep exactly the SAME character from the reference image — same face, same colors, same eye color, same markings.');
+    // ⚠️【2026-10-27 修 —— 这就是「小水壶画不出来」的真正根因】
+    //   原来这个函数【收了 subject 参数，却一次都没用】→ 发出去的提示词只有
+    //   「保持同一只角色… / 只改这一处：<阶段花纹>」，
+    //   模型压根不知道今天该穿什么 → 拿着旧参考图照抄 → 每日穿搭/道具永远画不出来，
+    //   而且每天白白烧掉一次生图额度。
+    //   → 现在把 subject（身份 + 今天这身：衣服 + 道具）正式写进提示词。
+    if (subject) {
+      lines.push('Redraw it exactly as described here: ' + subject + '.');
+    }
+    if (change) {
+      lines.push('Additional detail to add: ' + change + '.');
+    } else {
+      lines.push('Give it exactly the outfit and accessories described above, in all six cells.');
+    }
+    lines.push(layout + '.');
+    lines.push('The six poses, in order: ' + poses + '. Each pose is drawn small and centered inside its own cell, with the same empty margin around it.');
+    lines.push('Style: ' + style + '.');
+    lines.push(background + '.');
+    lines.push(referenceNote || 'The reference image shows the same character in six poses.');
+    return lines.join('\n');
   }
 
   /** 走 /images/generations（JSON，能直接用现有 openai-proxy 转发） */
@@ -1008,25 +1062,34 @@
 
   /** 生成新样貌（图集） */
   async function generateAtlas(subject, options) {
-    if (todayCount() >= CFG.dailyLimit) {
-      throw new Error('今天生图次数用完了（上限 ' + CFG.dailyLimit + ' 次），明天再说');
+    const o = options || {};
+    const counter = o.counter === 'auto' ? 'auto' : 'manual';
+    const limit = limitFor(o);
+    if (todayCount(counter) >= limit) {
+      throw new Error('今天生图次数用完了（上限 ' + limit + ' 次），明天再说');
     }
     const prompt = buildAtlasPrompt(subject, options);
-    const { blob } = await callGenerations(prompt, { quality: (options && options.quality) || 'medium' });
-    bumpTodayCount();
+    const { blob } = await callGenerations(prompt, { quality: o.quality || 'medium' });
+    bumpTodayCount(counter);
     const processed = await postprocess(blob, { cutout: true });
     return processed;
   }
 
-  /** 蜕变：带参考图重画 */
-  async function evolveAtlas(subject, change, referenceBlob) {
-    if (todayCount() >= CFG.dailyLimit) {
-      throw new Error('今天生图次数用完了（上限 ' + CFG.dailyLimit + ' 次），明天再说');
+  /**
+   * 蜕变：带参考图重画
+   * ⚠️【2026-10-27】subject 现在会真的写进提示词（以前收了不用 → 每日穿搭进不了请求）
+   */
+  async function evolveAtlas(subject, change, referenceBlob, options) {
+    const o = options || {};
+    const counter = o.counter === 'auto' ? 'auto' : 'manual';
+    const limit = limitFor(o);
+    if (todayCount(counter) >= limit) {
+      throw new Error('今天生图次数用完了（上限 ' + limit + ' 次），明天再说');
     }
     if (!referenceBlob) throw new Error('没有参考图，不能蜕变');
     const prompt = buildEvolvePrompt(subject, change);
     const { blob } = await callEdits(prompt, referenceBlob);
-    bumpTodayCount();
+    bumpTodayCount(counter);
     const processed = await postprocess(blob, { cutout: true });
     return processed;
   }

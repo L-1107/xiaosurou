@@ -670,7 +670,7 @@ section('接线：index.html / sw.js / 聊天渲染 / AI 上下文');
   check('sw.js 预缓存里有 pet-speech.js', sw.includes("'./modules/pet-speech.js'"));
   check('sw.js 的 fetch 拦截里有 pet-speech.js', sw.includes("url.includes('/modules/pet-speech.js')"));
   const cv = (sw.match(/const CACHE_VERSION = '([^']+)'/) || [])[1];
-  check('sw.js 的 CACHE_VERSION 已经 bump 到 v0.2.80.0', cv === 'v0.2.80.0', String(cv));
+  check('sw.js 的 CACHE_VERSION 已经 bump 到 v0.2.83.0', cv === 'v0.2.83.0', String(cv));
 
   // ③ 聊天框渲染
   check('chat-interface.js 认得 pet_say', /msg\.type === 'pet_say'/.test(chatSrc));

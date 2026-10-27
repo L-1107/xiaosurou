@@ -772,6 +772,24 @@ dialog.pn-dialog {
   background: #efe8d4;
 }
 
+/* 菜单里的三个快捷照顾（喂食 / 摸摸 / 陪玩）
+   —— 放最上面、字重更重，因为这是用户最常点的三个（用户 2026-10-26：
+   「进宠物屋才能照顾，太麻烦」）。下面用一条分隔线跟「进入小屋/隐藏桌宠」隔开。 */
+#pn-desktop-pet-menu .pn-menu-act {
+  font-weight: 600;
+  color: #6b4f2a;
+}
+
+#pn-desktop-pet-menu .pn-menu-act:hover {
+  background: #f3e3c4;
+}
+
+#pn-desktop-pet-menu .pn-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(122, 98, 62, .18);
+}
+
 @media (max-width: 480px) {
   #pet-nest-screen .pn-scene { border-radius: 0; }
   #pn-desktop-pet { width: 66px; bottom: 110px; }

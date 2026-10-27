@@ -2699,7 +2699,7 @@
   // 版本戳: 只为一眼确认「手机上跑的到底是哪一份代码」。
   // PWA 有 service worker 缓存, 用户看到的经常是旧版, 没有戳根本分不清。
   // 每次改动影院都顺手改这里。
-  global.__CINEMA_VER = '0.30.1';
+  global.__CINEMA_VER = '0.30.2';
 
   global.CinemaRoom = {
     open: open,
@@ -2787,6 +2787,61 @@
       vvRelay = null;
     }
 
+    // ============================================================
+    // 主 API 配置 → 交给沙盒 (2026-10-27)
+    //
+    // ⚠️ 为什么必须由宿主来解析:
+    //   影院跑在 iframe 沙盒 (cinema-sandbox/index.html) 里, 那个页面只加载了
+    //   dexie / live-client / cinema-storage / cinema-img / cinema-room /
+    //   cinema-live / cinema-chat 七个文件 —— 【没有 api-endpoint-presets.js】,
+    //   所以沙盒里没有 window.resolveApiSlotConfig; 沙盒自己的库是
+    //   CinemaSandboxDB, 里面也没有 db.apiPresets 表。
+    //   → 沙盒自己拿不到主 API 的 地址/Key/模型。
+    //
+    //   陪聊 (modules/cinema-chat.js) 必须要有这三样, 拿不到就抛
+    //   「主 API 没配好（地址 / API Key / 模型缺一个）」—— 用户实测就是这个报错。
+    //
+    // ⚠️ 不能直接读 state.apiConfig:
+    //   预设模式下 clearReferencedSlotStaticEndpoints() 会把里面的
+    //   proxyUrl / apiKey 清空 → 必须走 resolveApiSlotConfig('main') 实时解析。
+    // ============================================================
+    var _mainApiCfg = null;          // { proxyUrl, apiKey, model }
+    var _mainApiCfgPromise = null;
+
+    function resolveMainApiConfig() {
+      if (_mainApiCfg) return Promise.resolve(_mainApiCfg);
+      if (!_mainApiCfgPromise) {
+        _mainApiCfgPromise = Promise.resolve()
+          .then(function () {
+            if (typeof window.resolveApiSlotConfig !== 'function') return null;
+            return window.resolveApiSlotConfig('main');
+          })
+          .then(function (cfg) {
+            if (cfg && cfg.proxyUrl && cfg.apiKey && cfg.model) {
+              _mainApiCfg = {
+                proxyUrl: String(cfg.proxyUrl),
+                apiKey: String(cfg.apiKey),
+                model: String(cfg.model)
+              };
+            }
+            return _mainApiCfg;
+          })
+          .catch(function () { return null; });
+      }
+      return _mainApiCfgPromise;
+    }
+
+    /** 把解析好的主 API 配置发给沙盒 (沙盒写进 window.state.apiConfig) */
+    function pushMainApiConfig() {
+      if (!frame) return;
+      resolveMainApiConfig().then(function (cfg) {
+        if (!frame || !cfg) return;
+        try {
+          frame.contentWindow.postMessage({ type: 'cinema:apiConfig', apiConfig: cfg }, '*');
+        } catch (e) { /* noop */ }
+      });
+    }
+
     // ---- 把当前活跃聊天打包给沙盒(只要 Gemini Live 需要的那几项) ----
     function currentChatPayload() {
       try {
@@ -2797,6 +2852,9 @@
           id: c.id,
           name: c.name || '',
           originalName: c.originalName || c.name || '',
+          // 🔴 2026-10-27: 主 API 配置 (陪聊要用)。沙盒自己解析不了, 宿主解析完塞进来。
+          //   解析是异步的, 这一份可能还是 null —— 那就等 pushMainApiConfig() 补发。
+          apiConfig: _mainApiCfg || null,
           settings: {
             aiPersona: (c.settings && c.settings.aiPersona) || '',
             myPersona: (c.settings && c.settings.myPersona) || '',
@@ -2820,6 +2878,9 @@
       const payload = currentChatPayload();
       if (!payload || !frame) return;
       try { frame.contentWindow.postMessage({ type: 'cinema:init', chat: payload }, '*'); } catch (e) {}
+      // 🔴 2026-10-27: 顺带把主 API 配置也解出来给沙盒 (沙盒自己解析不了)。
+      //   解析是异步的, 所以 init 里那份可能是 null —— 这条消息是补发的, 两条都留着。
+      pushMainApiConfig();
     }
 
     function closeSandbox() {

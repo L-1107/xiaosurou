@@ -143,6 +143,17 @@
   //   记忆首页还显示 7 条, 点进去却一条都渲染不出来。
   var currentChat = null;
   var lastSentMemory = '';
+  // 🔴 2026-10-27: 宿主下发的主 API 配置 { proxyUrl, apiKey, model }。
+  //   沙盒自己解析不了 (没有 api-endpoint-presets.js, 自己的库里也没有 apiPresets 表),
+  //   陪聊 (modules/cinema-chat.js) 必须要有这三样, 所以由宿主解析后送过来。
+  var hostApiConfig = null;
+
+  function applyApiConfig(cfg) {
+    hostApiConfig = (cfg && cfg.proxyUrl && cfg.apiKey && cfg.model) ? cfg : null;
+    try {
+      if (window.state) window.state.apiConfig = hostApiConfig;
+    } catch (e) { /* noop */ }
+  }
   function extractMemoryText(c) {
     if (!c) return '';
     var mem = c.longTermMemory;
@@ -241,7 +252,8 @@
     if (booted) return;
     booted = true;
     currentChat = chat || fallbackChat();
-    window.state = { activeChatId: currentChat.id, chats: {} };
+    // apiConfig: 宿主下发的主 API 配置。沙盒自己解析不出来 (见 applyApiConfig 的说明)。
+    window.state = { activeChatId: currentChat.id, chats: {}, apiConfig: hostApiConfig };
     window.state.chats[currentChat.id] = currentChat;
 
     // ★ 让房间【不要】自己读 visualViewport。
@@ -266,7 +278,12 @@
   window.addEventListener('message', function (e) {
     var d = e.data || {};
     if (d.type === 'cinema:init' && d.chat) {
+      // 宿主可能已经把主 API 配置一起带过来了 (解析快的时候)
+      if (d.chat.apiConfig) applyApiConfig(d.chat.apiConfig);
       boot(d.chat);
+    } else if (d.type === 'cinema:apiConfig') {
+      // 🔴 2026-10-27: 宿主解析完主 API 配置后补发 (解析是异步的, 可能晚于 init)
+      applyApiConfig(d.apiConfig);
     } else if (d.type === 'cinema:vv') {
       // ★ 宿主转发的键盘视口。
       //   iframe 里的 window.visualViewport 不会反映 iOS 键盘(键盘压的是顶层视口),
@@ -360,10 +377,10 @@
 <script src="../modules/live-client.js?v=0.1.0"></script>
 <script src="../modules/cinema-storage.js?v=0.5.3"></script>
 <script src="../modules/cinema-img.js?v=0.1.0"></script>
-<script src="../modules/cinema-room.js?v=0.29.2"></script>
-<script src="../modules/cinema-live.js?v=1.9.7"></script>
+<script src="../modules/cinema-room.js?v=0.29.4"></script>
+<script src="../modules/cinema-live.js?v=1.9.8"></script>
 <!-- 2026-10-23 影院陪聊层 (陪聊改走主 API) -->
-<script src="../modules/cinema-chat.js?v=0.0.1"></script>
+<script src="../modules/cinema-chat.js?v=0.0.2"></script>
 
 </body>
 </html>

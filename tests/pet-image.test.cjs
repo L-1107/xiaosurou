@@ -132,6 +132,7 @@ section('生图契约: CFG');
     Math.abs((C.storeWidth / C.storeHeight) - (1536 / 1024)) < 1e-9);
   check('给 AI 看的单只截图 = 256', C.snapshotSize === 256, String(C.snapshotSize));
   check('每日生图上限 = 3（跟上游一致）', C.dailyLimit === 3, String(C.dailyLimit));
+  check('自动换装有独立名额（0 = 按宠物数量算）', C.autoLookBudget === 0, String(C.autoLookBudget));
   check('羽化遍数 = 2', C.featherPasses === 2, String(C.featherPasses));
   check('抠图容差 > 0', C.tolerance > 0, String(C.tolerance));
 }
@@ -144,7 +145,10 @@ section('生图契约: 图集提示词');
   const { api } = loadPetImage();
   const p = api.buildAtlasPrompt('a small white kitten');
   check('要 3 列 × 2 行六格', /3 columns by 2 rows/.test(p));
-  check('每格必须正方形且填满', /SQUARE cells/.test(p) && /fully filled/.test(p));
+  check('每格必须正方形', /SQUARE cells/.test(p));
+  check('宠物只占格子 75%、四周留白（用户 2026-10-27 定的：挤太紧耳朵尾巴会被切）',
+    /filling only about 75% of that cell/.test(p) && /never touching or crossing the cell edges/.test(p));
+  check('不再要求「每格塞满」（那等于叫模型把耳朵尾巴画进隔壁格）', !/fully filled/.test(p));
   check('必须透明底', /transparent background/.test(p));
   check('必须禁止文字/水印/网格线', /no text/.test(p) && /no watermark/.test(p) && /no grid lines/.test(p));
   check('必须写死"每一格是同一只"', /SAME individual character/.test(p));
@@ -161,9 +165,20 @@ section('生图契约: 蜕变提示词');
   const { api } = loadPetImage();
   const p = api.buildEvolvePrompt('a small white kitten', 'give it a grey patch over one eye');
   check('必须锁死"参考图里的同一只"', /SAME character from the reference image/.test(p));
-  check('必须只做这一个改动', /ONLY this change/.test(p) && /give it a grey patch over one eye/.test(p));
+  check('必须把【今天这身】写进去（以前收了 subject 却一次没用 → 小水壶永远画不出来）',
+    /Redraw it exactly as described here: a small white kitten/.test(p), p);
+  check('有具体改动时，写出那一处改动',
+    /Additional detail to add: give it a grey patch over one eye/.test(p));
   check('仍然要 3×2 六格', /3 columns by 2 rows/.test(p));
   check('仍然要透明底', /transparent background/.test(p));
+
+  // 每日换装（没有具体改动）→ 必须明确要求换上今天这身
+  const p2 = api.buildEvolvePrompt('a chubby baby dragon with pastel pink fur, holding a tiny watering can', '');
+  check('每日换装：提示词里必须出现那身衣服',
+    p2.indexOf('holding a tiny watering can') >= 0, p2);
+  check('每日换装：明确要求换上描述里那身',
+    /Give it exactly the outfit and accessories described above/.test(p2));
+  check('每日换装：不能再只让模型改一处（那样穿搭进不去）', !/ONLY this change/.test(p2));
 }
 
 // ============================================================
@@ -214,6 +229,30 @@ section('每日上限: 蜕变必须有参考图');
   let msg = '';
   try { await api.evolveAtlas('a kitten', 'a hat', null); } catch (e) { msg = e.message || String(e); }
   check('没有参考图 → 明确报错', /没有参考图/.test(msg), msg);
+}
+section('每日上限: 自动换装和手动生图分开算（2026-10-27）');
+{
+  const { api, store } = loadPetImage();
+  store.petNestImageDailyDay = todayKey();
+  store.petNestImageDailyCount = '3';      // 手动已经用满 3 张
+  store.petNestImageAutoDay = todayKey();
+  store.petNestImageAutoCount = '1';      // 自动只用了 1 张
+  check('手动计数 = 3', api.todayCount() === 3);
+  check('自动计数 = 1（跟手动不是一个数）', api.todayCount('auto') === 1);
+
+  let msg = '';
+  try { await api.generateAtlas('a kitten'); } catch (e) { msg = e.message || String(e); }
+  check('手动到顶 → 还是拦下来', /今天生图次数用完了/.test(msg), msg);
+
+  msg = '';
+  try { await api.generateAtlas('a kitten', { counter: 'auto', budget: 4 }); } catch (e) { msg = e.message || String(e); }
+  check('自动换装有自己的名额（不被手动用满挡住）→ 走到发请求那一步',
+    /还没配生图 API 地址/.test(msg), msg);
+
+  store.petNestImageAutoCount = '4';
+  msg = '';
+  try { await api.generateAtlas('a kitten', { counter: 'auto', budget: 4 }); } catch (e) { msg = e.message || String(e); }
+  check('自动名额也用满了 → 照样拦下来', /今天生图次数用完了/.test(msg), msg);
 }
 
 // ============================================================

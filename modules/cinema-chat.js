@@ -102,6 +102,35 @@
   // ⚠️ 铁律五: state.apiConfig 里的地址/密钥只是【启动时的快照】,
   //   换预设之后不会自动更新。所以这里必须走 resolveApiSlotConfig('main')
   //   实时解析, 拿不到才回落快照 —— 跟项目里其它功能一致。
+  //
+  // 🔴 2026-10-27: 影院跑在 iframe 沙盒里, 沙盒【没有】api-endpoint-presets.js,
+  //   也没有 db.apiPresets → 沙盒里 resolveApiSlotConfig 不存在, 只能靠宿主
+  //   解析后把 {proxyUrl, apiKey, model} 塞进 window.state.apiConfig。
+  //   宿主那条消息是异步的 (要读库), 用户可能比它先发消息 → 这里等一小会儿。
+  var API_CONFIG_WAIT_MS = 8000;
+
+  /** 等宿主把主 API 配置送过来 (沙盒场景)。返回 null = 等超时了。 */
+  function waitForApiConfig(maxMs) {
+    function cur() {
+      var st = getState();
+      var c = st && st.apiConfig;
+      return (c && c.proxyUrl && c.apiKey && c.model) ? c : null;
+    }
+    var first = cur();
+    if (first) return Promise.resolve(first);
+    var waited = 0;
+    return new Promise(function (resolve) {
+      var iv = setInterval(function () {
+        waited += 150;
+        var c = cur();
+        if (c || waited > maxMs) {
+          clearInterval(iv);
+          resolve(c);
+        }
+      }, 150);
+    });
+  }
+
   async function getMainApiConfig() {
     var st = getState();
     var cfg = null;
@@ -110,10 +139,15 @@
         cfg = await window.resolveApiSlotConfig('main');
       } catch (e) { logWarn('resolveApiSlotConfig 失败, 回落快照', e); }
     }
-    if (!cfg) cfg = (st && st.apiConfig) || {};
-    var proxyUrl = String(cfg.proxyUrl || '').trim();
-    var apiKey = String(cfg.apiKey || '').trim();
-    var model = String(cfg.model || '').trim();
+    if (!cfg) cfg = (st && st.apiConfig) || null;
+    // 沙盒场景: 配置可能还在路上 (宿主解析要读库) → 等一小会儿再判失败
+    if (!cfg || !cfg.proxyUrl || !cfg.apiKey || !cfg.model) {
+      var waited = await waitForApiConfig(API_CONFIG_WAIT_MS);
+      if (waited) cfg = waited;
+    }
+    var proxyUrl = String((cfg && cfg.proxyUrl) || '').trim();
+    var apiKey = String((cfg && cfg.apiKey) || '').trim();
+    var model = String((cfg && cfg.model) || '').trim();
     if (!proxyUrl || !apiKey || !model) {
       throw new Error('主 API 没配好（地址 / API Key / 模型缺一个）');
     }
@@ -723,7 +757,9 @@
     buildHistoryMessages: buildHistoryMessages,
     stripInstructionSystem: stripInstructionSystem,
     splitSections: splitSections,
-    userRefOf: userRefOf
+    userRefOf: userRefOf,
+    // 暴露给测试用: 主 API 配置是怎么拿到的 (沙盒场景靠宿主下发)
+    getMainApiConfig: getMainApiConfig
   };
 
   log('已加载 (影院陪聊走主 API; Gemini Live 只负责看画面 + 写剧情记忆)');

@@ -282,7 +282,7 @@ async function main() {
   {
     const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
     check('index.html 挂了 modules/cinema-chat.js', /modules\/cinema-chat\.js\?v=/.test(idx));
-    check('cinema-live.js 的 ?v= 已 bump', /modules\/cinema-live\.js\?v=1\.9\.7/.test(idx));
+    check('cinema-live.js 的 ?v= 已 bump', /modules\/cinema-live\.js\?v=1\.9\.8/.test(idx));
 
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     check('sw.js 预缓存了 modules/cinema-chat.js', /'\.\/modules\/cinema-chat\.js'/.test(sw));

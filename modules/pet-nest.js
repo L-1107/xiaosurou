@@ -105,11 +105,56 @@
       if (features.length >= 3) break;
     }
     // 当天聊的内容 → 现挑一个能物化的小装饰（用户要的「惊喜感」在这）
-    const icons = pickIconsFromText((texts || []).join(' \n'), 1);
+    let icons = pickIconsFromText((texts || []).join(' \n'), 1);
+    // ⚠️【2026-10-27 用户提】「换装最好是连道具和衣服一起换哈」
+    //   → 聊不到东西的那天只剩一件衣服，看着单薄 → 按「天 + 种子」兜底挑一个道具，
+    //     保证【每次换装 = 衣服 + 道具 一起换】。
+    if (!icons.length && ICON_LIBRARY.length) {
+      const hi = hash32(String(dayKeyStr || 'day') + ':icon:' + String(seed || ''));
+      icons = [ICON_LIBRARY[hi % ICON_LIBRARY.length]];
+    }
     // 当天穿搭：按「天 + 种子」定，同一天同一只永远同一套
     const h = hash32(String(dayKeyStr || 'day') + ':outfit:' + String(seed || ''));
     const outfit = BEAST_OUTFITS[h % BEAST_OUTFITS.length];
     return { features, icons, outfit, behaviors: list.slice() };
+  }
+
+  /**
+   * 今天这身（同步版）
+   * ⚠️ 生图提示词是【同步】拼的（主聊天组装也是同步路径，不能 await）→ 这里只能用缓存
+   */
+  function todayLookForSync(pet) {
+    return dailyLookFor(
+      cachedBehaviors(),
+      dayKey(Date.now()),
+      (pet && (pet.seed || pet.id)) || '',
+      cachedDayTexts()
+    );
+  }
+
+  /**
+   * 今日造型的中文说法：「一串小音符、抱着小水壶的」（道具 + 衣服一起）
+   * ⚠️ 20 件穿搭的中文名全都以「的」结尾（穿旗袍的 / 戴着白手套的…）
+   *   → 结尾没有「的」才补一个，别拼出「的的」
+   */
+  function todayLookCn(lk) {
+    const parts = [];
+    for (const i of (lk && lk.icons) || []) parts.push(i.cn);
+    for (const f of (lk && lk.features) || []) parts.push(f.cn);
+    if (lk && lk.outfit) parts.push(lk.outfit.cn);
+    if (!parts.length) return '';
+    const head = parts.join('、');
+    return /的$/.test(head) ? head : head + '的';
+  }
+
+  /**
+   * 猫狗没有盲盒物种/配色（它们天生就是猫狗）→ 按种子给一个固定配色。
+   * 同一只永远同一个颜色 —— 不然每天换装连「它自己」都不像同一只。
+   */
+  function petPaletteFor(pet) {
+    const seed = String((pet && (pet.seed || pet.id)) || 'pet');
+    const h = hash32(seed + ':palette');
+    return BEAST_PALETTES[h % BEAST_PALETTES.length] || null;
   }
 
   /**
@@ -201,15 +246,9 @@
   function beastDisplayName(app, look) {
     const species = (app && app.beastSpecies) || (app && app.identity) || '灵兽';
     const palette = (app && app.palette) || '';
-    const parts = [];
-    const lk = look || { features: [], icons: [], outfit: null };
-    for (const i of lk.icons || []) parts.push(i.cn);
-    for (const f of lk.features || []) parts.push(f.cn);
-    if (lk.outfit) parts.push(lk.outfit.cn);
-    const head = parts.length ? parts.join('、') : '';
     // ⚠️ 20 件穿搭的中文名全都以「的」结尾（穿旗袍的 / 戴着白手套的…），
     //    原来这里再补一个「的」→ 「穿着白手套的的星尘角兽」。补之前先看一句。
-    const tail = head && !/的$/.test(head) ? head + '的' : head;
+    const tail = todayLookCn(look);
     return (palette ? palette : '') + tail + species;
   }
 
@@ -1000,6 +1039,10 @@
       growth: round2(pet.growth || 0),
       stage: Number(pet.stage || 0),
       traits: pet.traits || temperament(pet.seed),
+      // ⚠️【2026-10-27 修】原来 petView【没带 seed】→
+      //   每日造型（穿搭/配色）是用 seed 算哈希的，界面用 id 算、提示词用 seed 算
+      //   → 界面上写着「抱着小水壶」，提示词里却是另一套。必须带上 seed。
+      seed: pet.seed || pet.id,
       appearance: pet.appearance || null,
       assetRef: pet.assetRef || null,
       needsRedraw: !!pet.needsRedraw,
@@ -1690,22 +1733,35 @@
 
   function formatPetAppearance(pet) {
     const a = pet.appearance;
+    const base = KINDS[pet.kind] ? KINDS[pet.kind].label : pet.kind;
     if (!a) {
-      const base = KINDS[pet.kind] ? KINDS[pet.kind].label : pet.kind;
       return base;
     }
+    // 今天它该长什么样（衣服 + 道具）
+    // ⚠️【2026-10-27 用户提】「鹦鹉没看见换装文字说明」→
+    //   以前只有灵宠蛋孵出来的幻兽才有这一段，鹦鹉/猫狗走下面的通用分支 → 只有品种和花纹。
+    //   现在【所有种类】都把今天这身写出来。
+    const lk = todayLookForSync(pet);
     // 灵宠蛋：说出它今天具体长什么样（AI 才好描述给用户听）
     if (pet.kind === 'egg' && a.kind === 'fantasy') {
-      const lk = dailyLookFor(cachedBehaviors(), dayKey(Date.now()), pet.seed || pet.id, cachedDayTexts());
       const parts = [beastDisplayName(a, lk)];
       if (a.marking) parts.push(a.marking);
       return parts.join('，');
     }
     const parts = [];
-    if (a.identity) parts.push(a.identity);
-    if (a.palette) parts.push(a.palette);
+    if (pet.kind === 'cat' || pet.kind === 'dog') {
+      // 猫狗没有盲盒配色 → 按种子定一个固定的（同一只永远同一个颜色）
+      const pal = petPaletteFor(pet);
+      if (pal) parts.push(pal.cn + (a.identity || base));
+      else if (a.identity) parts.push(a.identity);
+    } else {
+      if (a.identity) parts.push(a.identity);
+      if (a.palette) parts.push(a.palette);
+    }
     if (a.marking) parts.push(a.marking);
-    return parts.length ? parts.join('，') : (KINDS[pet.kind] ? KINDS[pet.kind].label : pet.kind);
+    const lookCn = todayLookCn(lk);
+    if (lookCn) parts.push(lookCn);
+    return parts.length ? parts.join('，') : base;
   }
 
   /** 注入提示词的「当前小窝状态」 */
@@ -1997,8 +2053,9 @@
     for (const pet of state.pets) {
       const b = document.createElement('button');
       b.type = 'button';
-      const tag = (pet.appearance && pet.appearance.identity)
-        || (KINDS[pet.kind] ? KINDS[pet.kind].label : pet.kind);
+      // ⚠️【2026-10-27 用户提】「鹦鹉没看见换装文字说明」→
+      //   名册里也把今天这身（衣服 + 道具）写出来，不然只能看名字和品种。
+      const tag = formatPetAppearance(pet);
       b.textContent = pet.name + ' · ' + tag;
       b.onclick = () => openCareDialog(pet.id);
       host.append(b);
@@ -2509,11 +2566,9 @@
     const dlg = el('pn-adopt-dialog');
     if (dlg && dlg.open) dlg.close();
     // 进小窝时补画：白天玩过但当时没画（页面关了 / 定时器没跑完）→ 现在换一次
+    // ⚠️【2026-10-27】原来只补画最早领养的那一只 → 现在每一只都补
     try {
-      openDb().then(async (d) => {
-        const first = await d.pets.orderBy('createdAt').first();
-        if (first) await maybeDailyRedraw(first, { silent: true });
-      }).catch(() => { /* 忽略 */ });
+      refreshAllDailyLooks({ silent: true }).catch(() => { /* 忽略 */ });
     } catch (e) { /* 忽略 */ }
   }
 
@@ -2745,6 +2800,55 @@
     renderDesktopPetContent(pet);
   }
 
+  /**
+ * 桌宠菜单的按钮 id → 照顾动作（纯函数，好测）
+ * ⚠️ 抽成函数不是为了好看 —— 是因为「哪个按钮对应哪个动作」如果只写在
+ *    三元表达式里，就只能靠正则查源码来测（改错了也测不出来）。
+ */
+function careActionForButton(btnId) {
+  if (btnId === 'pn-desktop-pet-feed') return 'feed';
+  if (btnId === 'pn-desktop-pet-comfort') return 'comfort';
+  if (btnId === 'pn-desktop-pet-play') return 'play';
+  return '';
+}
+
+/**
+   * 桌宠菜单里的快捷照顾（喂食 / 摸摸 / 陪玩）
+   *
+   * ⚠️【2026-10-26 用户提】「喂食、摸摸、陪玩还得点进宠物屋，太麻烦」
+   *   → 桌宠弹出来的菜单里直接加三个按钮，不进小屋也能照顾。
+   *
+   * 照顾的是【桌宠正在显示的那只】= pets[0]（按领养时间最早，跟攒粮口径一致）。
+   * 走的是同一份 care()，所以喂食照样扣粮食、照样有饱腹上限，
+   * 宠物也照样会自己开口说一句（care() 里已经接了 petSpeak）。
+   */
+  async function quickCare(action) {
+    const menu = el('pn-desktop-pet-menu');
+    if (menu) menu.hidden = true;          // 先把菜单收起来，别挡住桌宠的反应
+    let pet = currentDesktopPet();
+    if (!pet) {
+      // 桌宠状态还没加载过（刚进聊天页）→ 直接去库里按同样的口径取最早领养的那只
+      try {
+        const d = await openDb();
+        const rows = await d.pets.orderBy('createdAt').toArray();
+        pet = rows.length ? petView(rows[0], Date.now()) : null;
+      } catch (e) { pet = null; }
+    }
+    if (!pet) {
+      showToastSafe('小窝里还没有宝宝', 'warning');
+      return;
+    }
+    try {
+      const result = await care(action, { petIds: [pet.id], actor: 'user' });
+      const receipt = result.results[0] || {};
+      const msg = STATUS_TEXT[receipt.status] || '这次没什么反应';
+      showToastSafe(msg, receipt.status === 'no_food' ? 'warning' : 'success');
+      await refreshAll();
+    } catch (e) {
+      showToastSafe('照顾失败：' + (e.message || e), 'error');
+    }
+  }
+
   function initDesktopPet() {
     const wrap = el('pn-desktop-pet');
     if (!wrap || wrap.dataset.pnInit === '1') return;
@@ -2813,8 +2917,16 @@
     // 点击 → 菜单
     wrap.addEventListener('click', (e) => {
       if (moved) { moved = false; return; }
-      // 菜单里的两个按钮用【事件委托】处理，不给按钮自己绑 onclick ——
+      // 菜单里的按钮用【事件委托】处理，不给按钮自己绑 onclick ——
       // 委托在 wrap 上，只要 wrap 收到 click 就一定生效（按钮的 onclick 被谁覆盖了也不怕）
+      // ⚠️【2026-10-26】快捷照顾（喂食/摸摸/陪玩）要放在【菜单整体早退】之前 ——
+      //    早退那行会把菜单里的所有点击都吃掉，三个新按钮就点了没反应
+      const quickBtn = e.target.closest('#pn-desktop-pet-feed, #pn-desktop-pet-comfort, #pn-desktop-pet-play');
+      if (quickBtn) {
+        e.stopPropagation();
+        quickCare(careActionForButton(quickBtn.id));
+        return;
+      }
       const enterBtn = e.target.closest('#pn-desktop-pet-enter');
       if (enterBtn) {
         e.stopPropagation();
@@ -3095,8 +3207,16 @@
   }
 
   function subjectForPet(pet, lookOverride) {
-    const look = formatPetAppearance(pet);
     const app = pet.appearance || null;
+    // 今天这身：衣服 + 道具
+    // ⚠️【2026-10-27 用户定】「所有宠物都要每天能换装」→ 鹦鹉、猫狗也必须有。
+    // ⚠️ 生图提示词必须全英文 → 这里只取 look 里的 en（中文那套是给人看的）
+    const lk = lookOverride || todayLookForSync(pet);
+    const lookBits = [];
+    for (const i of lk.icons || []) lookBits.push(i.en);
+    for (const f of lk.features || []) lookBits.push(f.en);
+    if (lk.outfit) lookBits.push(lk.outfit.en);
+    const lookTail = lookBits.length ? ', ' + lookBits.join(', ') : '';
 
     // ⚠️【2026-10-25 用户定】「宠物的形象必须是Q版化的可爱形象哦，不能是真猛兽」
     //   → 所有分支都要带 ART_STYLE_LOCK（以前只有幻兽那支有，鹦鹉/羽化都没有，
@@ -3110,6 +3230,7 @@
       const beast = forms.find(b => b.key === app.beastKey) || forms[0];
       return 'a mythical ' + beast.en + ', ' + beast.colorEn
         + ', ornate glowing accents, a soft warm halo of light around it'
+        + lookTail
         + ', ' + ART_STYLE_LOCK + ', ' + DIVINE_STYLE_LOCK;
     }
 
@@ -3125,14 +3246,15 @@
     if (pet.kind === 'parrot') {
       const breed = PARROT_BREEDS.find(b => b.key === (app && app.breedKey)) || PARROT_BREEDS[0];
       const mark = app && app.markEn ? ', ' + app.markEn : '';
-      return 'a fluffy ' + breed.en + ' with ' + breed.colorEn + mark + ', ' + ART_STYLE_LOCK;
+      // ⚠️【2026-10-27 修】原来这条分支【完全不接今日造型】→ 鹦鹉永远不会换装
+      return 'a fluffy ' + breed.en + ' with ' + breed.colorEn + mark + lookTail
+        + ', ' + ART_STYLE_LOCK;
     }
 
     // 灵宠蛋：孵出来了 → 要画成那只幻兽。
     // （这里原来一直返回 "speckled magical egg"，孵出来的幻兽又被画回蛋，是个 bug）
     if (pet.kind === 'egg') {
       const mark = app && app.markEn ? app.markEn : '';
-      const lk = lookOverride || dailyLookFor(cachedBehaviors(), dayKey(Date.now()), pet.seed || pet.id, cachedDayTexts());
       if (app && app.beastSpeciesEn) {
         // 新幻兽：物种 + 配色 + 今天挑出来的小装饰 + 审美锁
         return beastPrompt(app, lk, mark);
@@ -3151,14 +3273,41 @@
       return beastPrompt({ beastSpeciesEn: speciesEn, beastPaletteEn: paletteEn }, lk, mark);
     }
 
+    // 猫狗：天生就是猫狗 → 物种 + 固定配色 + 今天这身
+    // ⚠️ 原来这里拼的是【中文】look（identity/palette/marking）→ 中文直接塞进英文提示词
     const kindText = {
       cat: 'fluffy cat', dog: 'fluffy puppy'
     }[pet.kind] || 'cute fantasy pet';
-    return kindText + (look ? ', ' + look : '') + ', ' + ART_STYLE_LOCK;
+    const pal = petPaletteFor(pet);
+    const bits = [kindText];
+    if (pal) bits.push('with ' + pal.en + ' fur');
+    for (const b of lookBits) bits.push(b);
+    return bits.join(', ') + ', ' + ART_STYLE_LOCK;
   }
 
-  /** 给这只宠物生成（或更新）样貌，并把新样子塞给 AI 看 */
-  async function generateNewLook(pet) {
+  /**
+   * 猫狗没有生图资产，但 starter 素材本身就是一张六格图集 → 拿它当参考图，
+   * 这样第一次「换装」是「在原来那只猫上加衣服」，不是「重新发明一只猫」。
+   * ⚠️ 蛋/鹦鹉的 starter 是蛋的图集 → 不能当参考（会把鹦鹉画成蛋）。
+   */
+  async function starterSpriteBlob(pet) {
+    const sprite = (KINDS[pet.kind] && KINDS[pet.kind].sprite) || null;
+    if (!sprite) return null;
+    if (pet.kind === 'egg' || pet.kind === 'parrot') return null;
+    try {
+      const res = await fetch('assets/pet-nest/' + sprite);
+      if (!res.ok) return null;
+      return await res.blob();
+    } catch (e) { return null; }
+  }
+
+  /**
+   * 给这只宠物生成（或更新）样貌，并把新样子塞给 AI 看
+   * @param opts.auto   true = 每日自动换装（走【自动】名额，跟手动生图分开算）
+   * @param opts.budget 这一轮最多画几张（自动换装按宠物数量算）
+   */
+  async function generateNewLook(pet, opts) {
+    const o = opts || {};
     const d = await openDb();
     const row = await d.pets.get(pet.id);
     if (!row) throw new Error('找不到这只宝宝');
@@ -3167,16 +3316,31 @@
     const stageRow = await d.stages.get(stageKey);
     const subject = subjectForPet(row, await buildTodayLook(row));
     const change = (stageRow && stageRow.marking) ? stageRow.marking : '';
+    const imgOpts = {
+      quality: 'medium',
+      // 自动换装和手动生图【分开算次数】→ 自动换装不会把手动「换个模样」的名额吃掉
+      counter: o.auto ? 'auto' : 'manual',
+      budget: o.auto ? o.budget : undefined
+    };
 
     let processed;
+    let refBlob = null;
     if (row.assetRef) {
       // 已经有样貌了 → 带参考图蜕变, 保持是同一只
       const refRow = await d.assets.get(row.assetRef);
-      const refBlob = refRow ? refRow.blob : null;
+      refBlob = refRow ? refRow.blob : null;
       if (!refBlob) throw new Error('找不到原来的样貌图，不能蜕变');
-      processed = await window.PetImage.evolveAtlas(subject, change || 'grow a little more mature and keep the same look', refBlob);
     } else {
-      processed = await window.PetImage.generateAtlas(subject, { quality: 'medium' });
+      // 猫狗：没有生图资产，但有 starter 图集 → 拿它当参考图（保证还是那只猫）
+      refBlob = await starterSpriteBlob(row);
+    }
+    if (refBlob) {
+      // ⚠️【2026-10-27 修】原来 change 写死成 'grow a little more mature and keep the same look'
+      //   → 蜕变提示词只让模型改这一点，【当日穿搭压根没进请求】（用户实测：小水壶画不出来）
+      //   → 现在 change 为空 = 「按上面写的今天这身重画」
+      processed = await window.PetImage.evolveAtlas(subject, change, refBlob, imgOpts);
+    } else {
+      processed = await window.PetImage.generateAtlas(subject, imgOpts);
     }
 
     const asset = await window.PetImage.saveAsset(pet.id, row.stage, processed.blob, {
@@ -3224,6 +3388,14 @@
   let autoLookRunning = false;
   let autoLookTimer = null;
 
+  /**
+   * 每只宠物「今天画过了」的标记前缀
+   * ⚠️【2026-10-27 用户定】「所有宠物都要每天能换装」
+   *   → 原来只有一个全局标记（petNestLastAutoLookDay）→ 一天只有一只能换，
+   *     而且永远是最早领养的那只。改成【一只一个】。
+   */
+  const AUTO_LOOK_DAY_PREFIX = 'petNestAutoLookDay::';
+
   async function maybeDailyRedraw(petOrId, opts) {
     if (autoLookRunning) return null;
     try {
@@ -3231,20 +3403,25 @@
       const pid = typeof petOrId === 'string' ? petOrId : (petOrId && petOrId.id);
       const row = await d.pets.get(pid);
       if (!row) return null;
-      if (row.kind !== 'egg') return null;              // 鹦鹉 / 猫狗走原来的手动逻辑
-      if (Number(row.stage || 0) <= 0) return null;     // 还没孵出来
+      // ⚠️【2026-10-27 用户定】「所有宠物都要每天能换装」
+      //   → 原来这里写死了「只给灵宠蛋，其余直接 return」→ 鹦鹉、猫狗永远不参与。
+      //   → 现在【所有种类】都参与。蛋类要等孵出来（stage > 0）才有身体可画；
+      //     猫狗天生就是活的，stage 0 也照画。
+      if (isHatchKind(row.kind) && Number(row.stage || 0) <= 0) return null;   // 还是颗蛋
       const day = dayKey(Date.now());
-      if (await getMeta('petNestLastAutoLookDay', '') === day) return null;  // 今天画过了
+      const guardKey = AUTO_LOOK_DAY_PREFIX + pid;
+      if (await getMeta(guardKey, '') === day) return null;   // 这只今天已经画过了
       const behaviors = await todayBehaviors(day);
       if (!behaviors.length) return null;               // 今天还没发生什么，先不画
       if (!window.PetImage || typeof window.PetImage.generateAtlas !== 'function') return null;
-      const used = Number(window.PetImage.todayCount ? window.PetImage.todayCount() : 0);
-      const limit = Number(window.PetImage.CFG && window.PetImage.CFG.dailyLimit) || 3;
-      if (used >= limit) return null;                   // 每日上限
-      await setMeta('petNestLastAutoLookDay', day);
+      // 自动换装走【自动】名额（跟手动生图分开算）→ 不会把手动「换个模样」卡住
+      const used = Number(window.PetImage.todayCount ? window.PetImage.todayCount('auto') : 0);
+      const limit = Number(opts && opts.budget) || autoLookLimit();
+      if (used >= limit) return null;                   // 今日自动换装的名额用完了
+      await setMeta(guardKey, day);
       autoLookRunning = true;
       try {
-        await generateNewLook(row);
+        await generateNewLook(row, { auto: true, budget: limit });
         if (!(opts && opts.silent)) showToastSafe('它今天的样子换好啦', 'success');
         return true;
       } catch (e) {
@@ -3259,15 +3436,45 @@
     }
   }
 
+  /** 自动换装每天的名额：没单独配就按全局上限 */
+  function autoLookLimit() {
+    const cfg = (window.PetImage && window.PetImage.CFG) || {};
+    const b = Number(cfg.autoLookBudget) || 0;
+    if (b > 0) return b;
+    return Number(cfg.dailyLimit) || 3;
+  }
+
+  /**
+   * 今天给【每一只】宠物换一次造型（用户 2026-10-27：「所有宠物都要每天能换装」）
+   * 名额 = 活着的宠物数（每只 1 张）；手动生图的名额另算，两边不互相卡。
+   */
+  async function refreshAllDailyLooks(opts) {
+    try {
+      const d = await openDb();
+      const rows = await d.pets.orderBy('createdAt').toArray();
+      const live = rows.filter(r => r.status === 'ready');
+      if (!live.length) return 0;
+      const budget = live.length;
+      let done = 0;
+      for (const row of live) {
+        const ok = await maybeDailyRedraw(row, { silent: true, budget });
+        if (ok) done++;
+      }
+      return done;
+    } catch (e) {
+      console.warn('[宠物屋] 每日换造型（全部）失败', e);
+      return 0;
+    }
+  }
+
   /** 攒一会儿再画 —— 让当天互动先积累一点，一次画到位 */
   function scheduleAutoLook() {
     if (autoLookTimer) return;
     autoLookTimer = setTimeout(async () => {
       autoLookTimer = null;
       try {
-        const d = await openDb();
-        const first = await d.pets.orderBy('createdAt').first();
-        if (first) await maybeDailyRedraw(first, { silent: true });
+        // ⚠️【2026-10-27】原来只画【最早领养的那一只】→ 现在每一只都轮到
+        await refreshAllDailyLooks({ silent: true });
       } catch (e) { /* 忽略 */ }
     }, 60000);
   }
@@ -3564,6 +3771,9 @@
       scheduleVisibilitySync,
       renderDesktopPet,
       renderDesktopPetContent,
+      // 桌宠菜单里的快捷照顾（喂食 / 摸摸 / 陪玩）
+      quickCare,
+      careActionForButton,
       // 幻兽（灵宠蛋孵出来的那只）
       beastSpeciesForSeed,
       dailyLookFor,
