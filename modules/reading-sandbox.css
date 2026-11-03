@@ -651,6 +651,30 @@ button { font-family: inherit; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* AI 消息的一行: 头像 + 气泡 (2026-11-03 加头像, 跟主聊天一个观感)
+   ⚠️ .rr-msg 自己是气泡本体, 这一层只负责横向排布, 别把气泡样式写在这 */
+.rr-msg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  align-self: flex-start;
+  max-width: 88%;   /* 头像+气泡整体的宽度上限, 跟用户气泡的 86% 大致对齐 */
+}
+.rr-msg-row .rr-msg-avatar {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--rr-paper-2);
+  border: 1px solid var(--rr-line-soft);
+  margin-top: 2px;
+}
+.rr-msg-row .rr-msg {
+  max-width: none;   /* 宽度由 row 控制, 不然头像+气泡会溢出 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .rr-msg.user {
   align-self: flex-end;
   background: linear-gradient(180deg, #b07f4c, #95653a);

@@ -854,6 +854,83 @@
 
   function resetBubble() { S.bubbleEl = null; bubbleStreamId++; }
 
+  /**
+   * 把一条 AI 回复按段落拆成多个气泡 (2026-11-03)
+   *
+   * 【为什么要拆】
+   *   主聊天框里 AI 一次回复会显示成【好几个独立气泡】(它返回 JSON 数组, 一条一个)。
+   *   影院陪聊是一条纯文字, renderGeminiBubble 一直覆盖更新【同一个】气泡
+   *   → 用户看到的是一大坨文字糊在一个框里, 跟主聊天完全不是一个观感。
+   *   → 流式过程保持"一个气泡里滚字"(流畅, 不跳), 结束时再按段落切开。
+   *
+   * 【怎么切】
+   *   先按空行切; 切不出来(模型没分段)再按单换行切; 还不行就整段一个气泡。
+   *   不按句子切 —— 那样会把一句话拦腰截断, 读起来更碎。
+   */
+  function splitReplyParagraphs(text) {
+    var t = String(text || '').trim();
+    if (!t) return [];
+    var parts = t.split(/\n\s*\n+/);
+    if (parts.length <= 1) parts = t.split(/\n+/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var s = String(parts[i] || '').trim();
+      if (s) out.push(s);
+    }
+    return out.length ? out : [t];
+  }
+
+  /**
+   * 收尾: 把已经流式打完的那个气泡按段落拆开重排。
+   * cinema-chat.js 在最终拿到全文后调它 (替代原来那次 renderAssistantBubble)。
+   */
+  function finalizeAssistantBubble(text) {
+    var box = getChatBox();
+    if (!box) return;
+    var full = String(text || '').trim();
+    if (!full) return;
+
+    var paras = splitReplyParagraphs(full);
+    var inner = (S.bubbleEl && box.contains(S.bubbleEl)) ? S.bubbleEl : null;
+
+    if (!inner) {
+      // 没有流式气泡 (非流式一次性返回) → 先老老实实渲染第一个
+      renderGeminiBubble(paras[0]);
+      inner = S.bubbleEl;
+    } else {
+      inner.textContent = paras[0];
+    }
+
+    // 后面几段各开一个 assistant 气泡, 紧跟在上一段后面
+    var prevWrap = inner ? inner.parentNode : null;
+    for (var i = 1; i < paras.length; i++) {
+      var wrap = document.createElement('div');
+      wrap.className = 'cinema-chat-msg assistant';
+      var avatar = getAvatarUrl();
+      if (avatar) {
+        var img = document.createElement('img');
+        img.className = 'cinema-chat-avatar';
+        img.src = avatar;
+        img.alt = '';
+        wrap.appendChild(img);
+      }
+      var b = document.createElement('div');
+      b.className = 'cinema-chat-bubble';
+      b.textContent = paras[i];
+      wrap.appendChild(b);
+
+      if (prevWrap && prevWrap.parentNode === box) {
+        box.insertBefore(wrap, prevWrap.nextSibling);
+      } else {
+        box.appendChild(wrap);
+      }
+      prevWrap = wrap;
+      inner = b;   // 让 S.bubbleEl 指向最后一段, 免得再被覆盖写
+    }
+    S.bubbleEl = inner;
+    box.scrollTop = box.scrollHeight;
+  }
+
   // ============================================================
   // 剧情记忆面板 (Cinema Room 自己的, 可查看 + 可编辑)
   // ⚠️ 只显示当前 session 的临时记忆, 绝不写 chat.longTermMemory
@@ -4363,6 +4440,7 @@
     // ---- 陪聊气泡 UI (由 cinema-chat.js 驱动) ----
     appendUserBubble: appendUserBubble,
     renderAssistantBubble: renderGeminiBubble,
+    finalizeAssistantBubble: finalizeAssistantBubble,
     resetBubble: resetBubble,
     appendSystemLine: appendSystemLine,
     recordAssistant: recordAssistantFinal,

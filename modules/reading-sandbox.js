@@ -548,10 +548,42 @@
   // ============================================================
   // 聊天窗口
   // ============================================================
+  /** 角色头像（没配就返回空，气泡就不显示头像） */
+  function aiAvatarUrl() {
+    try {
+      var s = (S.chat && S.chat.settings) || {};
+      return String(s.aiAvatar || '');
+    } catch (e) { return ''; }
+  }
+
   function appendMsg(role, text) {
     if (!el.rrChatBody) return null;
     var d = document.createElement('div');
     d.className = 'rr-msg ' + (role === 'user' ? 'user' : (role === 'sys' ? 'sys' : 'ai'));
+
+    // AI 气泡带角色头像 (2026-11-03, 用户要求"可以加显示 AI 头像", 跟主聊天一个观感)。
+    // ⚠️ 头像要放在【气泡外面】的同一行里 —— 所以 AI 那条多一层 .rr-msg-row 包着,
+    //    .rr-msg 自己仍然是气泡本体 (下面的 textContent 一律操作它)。
+    if (role === 'ai') {
+      var row = document.createElement('div');
+      row.className = 'rr-msg-row';
+      var av = aiAvatarUrl();
+      if (av) {
+        var img = document.createElement('img');
+        img.className = 'rr-msg-avatar';
+        img.src = av;
+        img.alt = '';
+        row.appendChild(img);
+      }
+      var bubble = document.createElement('div');
+      bubble.className = 'rr-msg ai';
+      bubble.textContent = String(text || '');
+      row.appendChild(bubble);
+      el.rrChatBody.appendChild(row);
+      el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
+      return bubble;   // 返回气泡本体, 调用方照旧往里写文字
+    }
+
     d.textContent = String(text || '');
     el.rrChatBody.appendChild(d);
     el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
@@ -604,13 +636,63 @@
     if (el.rrChatBody) el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
   }
 
+  /**
+   * 把一条 AI 回复按段落拆成多个气泡 (2026-11-03)
+   *
+   * 【为什么要拆】
+   *   主聊天框里 AI 一次回复会显示成【好几个独立气泡】(它返回 JSON 数组, 一条一个)。
+   *   读书屋这边是一条纯文字, 整段全塞进一个气泡 → 用户看到的是一大坨文字糊在
+   *   一个框里, 跟主聊天完全不是一个观感。
+   *   → 回复结束后按段落切开, 一段一个气泡, 观感就跟主聊天一致了。
+   *
+   * 【怎么切】
+   *   先按空行切; 切不出来(模型没分段)再按单换行切; 还不行就整段一个气泡。
+   *   不按句子切 —— 那样会把一句话拦腰截断, 读起来更碎。
+   */
+  function splitReplyParagraphs(text) {
+    var t = String(text || '').trim();
+    if (!t) return [];
+    var parts = t.split(/\n\s*\n+/);
+    if (parts.length <= 1) parts = t.split(/\n+/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var s = String(parts[i] || '').trim();
+      if (s) out.push(s);
+    }
+    return out.length ? out : [t];
+  }
+
+  /** 气泡本体 → 它在外层的那个"行"容器 (AI 气泡外面多套一层 .rr-msg-row, 见 appendMsg) */
+  function rowOf(node) {
+    if (!node) return null;
+    var p = node.parentNode;
+    if (p && p.classList && p.classList.contains('rr-msg-row')) return p;
+    return node;
+  }
+
   function onChatDone(d) {
     setChatBusy(false);
     var text = String(d.text || '').trim();
+    var finalText = text || (S.lastAiBubble ? S.lastAiBubble.textContent : '');
     if (S.lastAiBubble) {
-      S.lastAiBubble.textContent = text || S.lastAiBubble.textContent;
+      // 流式过程一直在同一个气泡里追加; 结束后按段落拆开重排 (见 splitReplyParagraphs)
+      var paras = splitReplyParagraphs(finalText);
+      S.lastAiBubble.textContent = paras[0];
+      var prevBubble = S.lastAiBubble;
+      for (var i = 1; i < paras.length; i++) {
+        var extra = appendMsg('ai', paras[i]);
+        // ⚠️ 要按【行】插, 不能按气泡插 —— AI 气泡的 parentNode 是 .rr-msg-row,
+        //   直接 insertBefore(extra, bubble.nextSibling) 会插到那一行【里面】。
+        var prevRow = rowOf(prevBubble);
+        var extraRow = rowOf(extra);
+        if (extraRow && prevRow && prevRow.parentNode) {
+          prevRow.parentNode.insertBefore(extraRow, prevRow.nextSibling);
+        }
+        prevBubble = extra;
+      }
     } else if (text) {
-      appendMsg('ai', text);
+      var ps = splitReplyParagraphs(text);
+      for (var j = 0; j < ps.length; j++) appendMsg('ai', ps[j]);
     }
     S.lastAiBubble = null;
     if (el.rrChatBody) el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;

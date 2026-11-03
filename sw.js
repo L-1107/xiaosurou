@@ -937,7 +937,7 @@
 //   index.html 的 ?v=：reading-sandbox/index.html 里的
 //   reading-sandbox.css 0.1.3 → 0.1.4、reading-sandbox.js 0.1.2 → 0.1.3。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.106.0';
+const CACHE_VERSION = 'v0.2.108.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

@@ -166,11 +166,66 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.61 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.61</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">AI 回复：要求它分段、不要时间戳、不要名字前缀</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「AI 一开始没有加换行符，还是一整段输出，我提示他加换行符才分了气泡」。</li>
+          <li><strong>为什么上一版没生效</strong> —— 上一版只是把回复<strong>按段切开</strong>，但模型自己不分段的话，切出来还是一整段。提示词里没要求它分段。</li>
+          <li><strong>现在</strong> —— 提示词里明确写了：<strong>要说两层以上意思时，每层单独一段、段与段之间空一行</strong>（不用列表符号，就像说话一样自然分段）。这样它一开口就是分成几段的，界面自然拆成几个气泡。</li>
+          <li><strong>时间戳和名字也去掉了</strong> —— 之前你看到每句都带 <code>(2026-11-03 20:43) 名字: </code>，那是因为<strong>聊天记录里给 AI 看的格式就是这样</strong>，它照着模仿。主聊天那边靠"必须输出 JSON"把这种模仿挡住了，而书屋和影院是纯文字，只能在提示词里明说 —— 现在明说了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书屋的 AI 气泡加上了角色头像</div>
+        <ul class="item-list">
+          <li>书屋聊天里 AI 说的话，左边会显示你给这个角色配的头像（跟主聊天一个观感）。影院本来就有。</li>
+          <li>没配头像的话就不显示，不会出现破图。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修一个真 bug：宠物说的话被当成了「你」说的</div>
+        <ul class="item-list">
+          <li><strong>怎么发现的</strong> —— 你问「主聊天记录里有宠物的语言，图书馆 AI 能不能区分」。查下来：<strong>不能</strong>。</li>
+          <li><strong>原因</strong> —— 宠物的话在数据库里存成一种特殊类型（系统消息 + 标记），主聊天里是有专门处理的，会转成「[宠物 啾啾] 内容」；而书屋和影院用的那份历史整理逻辑<strong>漏了这个判断</strong>，宠物的话直接落进"其他"→ 被当成了你说的。</li>
+          <li><strong>影响</strong> —— AI 会把宠物说的话算在你头上，还可能出现"你怎么又说了一遍"这种错乱。</li>
+          <li><strong>现在</strong> —— 宠物的话会明确标成「[宠物 啾啾] 」，旁白之类的系统消息也会标「[系统]」，不再冒充你。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.60 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.60</span>
+        <span class="version-date">2026-11-03</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">读书屋和影院的 AI 回复，改成一段一个气泡</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「影院和书屋聊天有一个共同的问题是气泡没有像主聊天框里一样一个一个的渲染，是所有话混在一个框里的」。</li>
+          <li><strong>原因</strong> —— 主聊天那边 AI 一次回复会返回好几条消息，所以显示成好几个独立气泡；而书屋和影院的 AI 返回的是一整段纯文字，程序就把它全塞进<strong>同一个气泡</strong>里 → 看起来就是一坨。</li>
+          <li><strong>现在</strong> —— 回复结束后按<strong>段落</strong>切开，一段一个气泡，跟主聊天一个观感。打字过程中还是在一个气泡里滚动（这样不会跳），打完才拆分。</li>
+          <li><strong>怎么判定分段</strong> —— 优先按空行切；模型没分段的话按换行切；实在没分段就还是一整段。不会按句子硬切，免得一句话被拦腰截断。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋：AI 现在知道你在读哪本书了</div>
+        <ul class="item-list">
+          <li><strong>一直是个小疏漏</strong> —— 读书屋其实把书名传给程序了，但组提示词的时候<strong>没把它读进去</strong>，所以 AI 只能看到"第几页、哪一章、这一页写了什么"，<strong>不知道书名</strong>。</li>
+          <li><strong>现在补上</strong> —— 提示词里会写「（书：《二十四史》）」，它就能说"《二十四史》这段…"，而不是泛泛而谈。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.59 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.59</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-03</span>
       </div>
       <div class="section">
         <div class="section-title feat">书架卡片：只留封面，字数挪到顶栏</div>

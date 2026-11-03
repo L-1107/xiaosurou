@@ -518,6 +518,16 @@
     lines.push('');
     lines.push('· 像坐在沙发上一起看剧时随口聊天那样，用【普通文字】说话。');
     lines.push('· 一次说一两句就好，不要长篇大论，不要分条罗列。');
+    // 2026-11-03 用户实测: "AI 一开始没有加换行符, 还是一整段输出"。
+    //   界面是【按空行把回复拆成多个气泡】的 (见 cinema-live.js 的 finalizeAssistantBubble),
+    //   模型不分段就只能挤在一个气泡里。所以这里必须明确要它分段。
+    lines.push('· 【要分段】如果要说的话有两层以上的意思，每层单独一段，段与段之间空一行。');
+    lines.push('  （不要用 1. 2. 3. 或 - 这类列表符号，是像说话一样自然分段。）');
+    // 2026-11-03 用户实测: "我不需要 AI 每句都输出时间戳"。
+    //   历史是 "(2026-11-03 20:43) 名字: 内容" 这种格式, 模型会照着模仿。
+    //   主聊天靠"必须输出 JSON"把这种模仿挡住了; 这边是纯文字, 只能在提示词里明说。
+    lines.push('· 【不要加时间戳】不要输出 "(2026-11-03 20:43)" 这类时间，也不要写「名字: 内容」这种前缀。');
+    lines.push('  你在聊天窗里说话，不是在填通话记录 —— 直接说你说的话就行。');
     lines.push('· 你不知道画面细节的时候直说不知道，别编。');
     lines.push('');
     return lines.join('\n');
@@ -650,6 +660,30 @@
       if (!m) continue;
       // 只取纯文字 —— 多模态数组在影院里用不上
       if (typeof m.content !== 'string' || !m.content.trim()) continue;
+
+      // 🔴 2026-11-03 修一个真 bug: 宠物说的话被当成了"用户"说的。
+      //   宠物消息是 role='system' + type='pet_say' (见 modules/pet-speech.js 的 persistToChat),
+      //   而下面原来只判 assistant / 其他, role='system' 直接落到 else →
+      //   sender 取 myNickname → 宠物的话在 AI 眼里变成了【用户说的】。
+      //   主聊天 (ai-response.js) 是有专门处理的, 这里漏了 → 这里必须跟主聊天一个口径:
+      //   转成「[宠物 啾啾] 内容」, role 给 user (主聊天也是这么给)。
+      if (m.type === 'pet_say') {
+        var petWho = m.petName || m.senderName || '宠物';
+        out.push({
+          role: 'user',
+          content: formatTs(m.timestamp) + ' [宠物 ' + petWho + '] ' + m.content
+        });
+        continue;
+      }
+      // 其余 system 消息 (旁白/系统提示) 也标出来, 别让它冒充用户
+      if (m.role === 'system') {
+        out.push({
+          role: 'user',
+          content: formatTs(m.timestamp) + ' [系统] ' + m.content
+        });
+        continue;
+      }
+
       var role = (m.role === 'assistant') ? 'assistant' : 'user';
       var sender = (role === 'assistant')
         ? (m.senderName || chat.name)
@@ -1019,7 +1053,13 @@
       full = String(answer || full || '').trim();
       if (!full) throw new Error('主 API 返回了空内容');
 
-      if (ui && typeof ui.renderAssistantBubble === 'function') ui.renderAssistantBubble(full);
+      // 收尾渲染: 优先走 finalizeAssistantBubble —— 它会把整段按段落拆成多个气泡,
+      // 观感跟主聊天一致 (主聊天 AI 一次会显示好几条)。没有就回退原来的单气泡。
+      if (ui && typeof ui.finalizeAssistantBubble === 'function') {
+        ui.finalizeAssistantBubble(full);
+      } else if (ui && typeof ui.renderAssistantBubble === 'function') {
+        ui.renderAssistantBubble(full);
+      }
       if (ui && typeof ui.recordAssistant === 'function') ui.recordAssistant(full);
 
       await persistToMainChat(chat, {
