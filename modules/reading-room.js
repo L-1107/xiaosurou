@@ -153,12 +153,19 @@
     var c = chat || currentChatObject();
     return Promise.resolve()
       .then(function () {
-        var main = null;
+        // ⚠️ 2026-11-02 用户实测「找不到配置的 API，没法跟 AI 讨论」。
+        //   这里以前写的是:
+        //       return global.resolveApiSlotConfig('main').then(function (cfg) { main = cfg; });
+        //   那个回调【没有 return】→ 整条 Promise 链 resolve 成 undefined,
+        //   下一级 .then(function (main) {...}) 收到的 main 就是 undefined →
+        //   一律走 `if (!main) return null` → 报「主 API 没配好」。
+        //   也就是说: 跟用户怎么配 API 完全无关, 读书屋永远问不了 AI。
+        //   (Node 实测: resolved value = undefined)
+        //   修法: 直接把 Promise 往下传, 别在回调里赋值。
         if (typeof global.resolveApiSlotConfig === 'function') {
-          return global.resolveApiSlotConfig('main').then(function (cfg) { main = cfg; });
+          return global.resolveApiSlotConfig('main');
         }
-        main = (typeof state !== 'undefined' && state && state.apiConfig) || null;
-        return main;
+        return (typeof state !== 'undefined' && state && state.apiConfig) || null;
       })
       .then(function (main) {
         if (!main) return null;
@@ -405,7 +412,43 @@
     } catch (e) {
       logError('读书架失败:', e);
     }
+    // ⚠️ 封面【单独查一次】, 不塞进 listBooks() ——
+    //   listBooks 的铁律是只搬元数据 (开书架要快), 一本书的封面是 20~50KB base64,
+    //   塞进去等于开一次书架把所有封面搬一遍 (跟当年"整本书塞一条记录"同一个坑)。
+    var covers = {};
+    try {
+      if (global.ReadingStorage) covers = await global.ReadingStorage.listCovers();
+    } catch (e) { /* noop */ }
+    for (var i = 0; i < books.length; i++) {
+      books[i].cover = covers[books[i].id] || null;
+    }
     replyToSandbox({ type: 'reading:books', books: books });
+  }
+
+  /**
+   * 换封面 (2026-11-02)
+   *
+   * ⚠️ 只写 readingCovers 那一行 —— 书名/页数/正文/阅读进度/讨论记录/书籍ID 一个都不动。
+   */
+  async function handleSetCover(d) {
+    var bookId = d && d.bookId;
+    var cover = d && d.cover;
+    if (bookId === undefined || bookId === null) return;
+    try {
+      if (!global.ReadingStorage) throw new Error('存储层没加载');
+      var ok = await global.ReadingStorage.setCover(bookId, cover);
+      if (!ok) {
+        replyToSandbox({ type: 'reading:coverError', bookId: bookId, error: '封面没存上' });
+        return;
+      }
+    } catch (e) {
+      logError('换封面失败:', e);
+      replyToSandbox({ type: 'reading:coverError', bookId: bookId, error: (e && e.message) || String(e) });
+      return;
+    }
+    // 存好了 → 把最新书架发回去, 卡片上的封面当场就换了
+    await handleNeedBooks();
+    replyToSandbox({ type: 'reading:coverDone', bookId: bookId });
   }
 
   async function handleRequestPage(d) {
@@ -967,6 +1010,9 @@
         break;
       case 'reading:deleteBook':
         handleDeleteBook(d);
+        break;
+      case 'reading:setCover':
+        handleSetCover(d);
         break;
       case 'reading:importFile':
         handleImportFile(d);

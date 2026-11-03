@@ -155,6 +155,11 @@ button { font-family: inherit; }
   color: var(--rr-ink-faint);
   font-variant-numeric: tabular-nums;
 }
+/* 字数(#rr-book-stat) 和页码(#rr-page-label) 之间留一点空, 别挤在一起。
+   字数是 2026-11-03 加的 (书架卡片说明区去掉后, 字数挪到顶栏)。 */
+.rr-topbar #rr-book-stat:not(:empty) {
+  margin-right: 10px;
+}
 .rr-topbar .rr-back {
   flex: 0 0 auto;
   display: inline-flex;
@@ -200,7 +205,11 @@ button { font-family: inherit; }
   border: 1px solid var(--rr-line);
   background: rgba(255, 252, 244, 0.88);
   color: var(--rr-ink);
-  font-size: 14px;
+  /* ⚠️ 必须是 16px: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+     (而且 iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+     → 用户实测"只要点击输入框, 屏幕就会异常放大"。
+     主聊天那边 (css/chat-ui.css) 的输入框早就是 16px, 这里跟上。 */
+  font-size: 16px;
   outline: none;
 }
 .rr-search:focus { border-color: var(--rr-accent); }
@@ -225,6 +234,16 @@ button { font-family: inherit; }
   grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   gap: 12px;
 }
+/* ============================================================
+ * 书籍卡片 (2026-11-03 调整过)
+ *
+ * 以前: 上面 104px 封面 (cover 铺满裁切) + 下面一块白底说明区
+ *       (书名 / 字数·页数 / 进度条)。用户反馈"封面图占全部不好看",
+ *       而且竖版封面被 cover 裁掉两边。
+ * 现在: 卡片【只留封面图】, 说明区去掉 (阅读页顶栏本来就有书名和页码),
+ *       封面改成 contain —— 【整张封面完整显示, 不裁切】。
+ *       代价: 图和卡片的比例不一样时四周会留白 (这是"不裁切"的必然结果)。
+ * ============================================================ */
 .rr-book-card {
   position: relative;
   border-radius: 14px;
@@ -235,74 +254,180 @@ button { font-family: inherit; }
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  min-height: 172px;
   transition: transform 0.12s ease;
 }
 .rr-book-card:active { transform: scale(0.975); }
 .rr-book-card .rr-cover {
-  height: 104px;
-  background-size: cover;
+  /* 整张图都看得见 → contain。contain 的前提是容器有确定的高宽比,
+     所以这里用 aspect-ratio 定成 3:4 (常见的书籍开本比例),
+     竖版封面几乎填满, 横版封面上下留白但一条边都不裁。 */
+  aspect-ratio: 3 / 4;
+  width: 100%;
+  background-size: contain;
   background-position: center;
+  background-repeat: no-repeat;
   background-color: var(--rr-paper-2);
   border-bottom: 1px solid var(--rr-line-soft);
 }
-.rr-book-card .rr-meta {
-  padding: 9px 11px 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.rr-book-card .rr-name {
-  font-family: var(--rr-serif);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rr-ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rr-book-card .rr-stat {
-  font-size: 11px;
-  color: var(--rr-ink-faint);
-  font-variant-numeric: tabular-nums;
-}
-.rr-book-card .rr-bar {
-  height: 3px;
-  border-radius: 2px;
-  background: var(--rr-line-soft);
-  overflow: hidden;
-  margin-top: 2px;
-}
-.rr-book-card .rr-bar i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, var(--rr-accent), var(--rr-accent-gold));
-}
-.rr-book-card .rr-del {
+/* ⚠️ 2026-11-03: 卡片说明区(书名/字数/页数/进度条)按用户要求去掉了,
+   所以 .rr-meta / .rr-name / .rr-stat / .rr-bar 这几条规则已经没有对应元素,
+   全部删掉 —— 留着就是死代码。
+   书名和页码在阅读页顶栏, 字数也补到顶栏了 (见 .rr-topbar .rr-sub)。 */
+/* ============================================================
+ * 卡片菜单 (2026-11-02)
+ *
+ * 以前卡片右上角常驻一个 🗑, 现在换成 ⋯ 三点按钮 (CSS 画的, 不用素材),
+ * 点开是一张羊皮纸小卷轴, 里面只有两项: 更换封面 / 删除书籍。
+ * ============================================================ */
+.rr-book-card .rr-card-menu-btn {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(48, 38, 30, 0.62);
-  color: #fff;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  /* ⚠️ 2026-11-02 用户反馈"书架上的书没有删除选项" ——
-     原来这里是 display:none, 只在 .show-del 时才显示, 而代码从来没加过那个 class
-     → 按钮压根没渲染出来, 用户当然找不到。
-     现在【常驻显示】, 放右上角, 点一下就删。 */
-  display: flex;
+  border: 1px solid rgba(122, 90, 58, 0.3);
+  /* 浅色圆底 + 深咖啡色的点 → 封面是深色照片时也照样看得清 */
+  background: rgba(250, 244, 230, 0.88);
+  color: var(--rr-ink);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 3px;
+  cursor: pointer;
   z-index: 3;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 2px 8px rgba(60, 40, 20, 0.24);
 }
-.rr-book-card .rr-del:active { background: rgba(150, 40, 40, 0.85); }
+.rr-book-card .rr-card-menu-btn i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.rr-book-card .rr-card-menu-btn.on {
+  background: var(--rr-accent);
+  border-color: rgba(122, 90, 58, 0.45);
+  color: #fff8ec;
+}
+
+/* 羊皮纸菜单本体
+ * ⚠️ 素材 420×502 → 这里的 164×196 是同一个比例 (164/420*502 ≈ 196),
+ *   再配 background-size: contain → 怎么缩放都不会把卷轴拉变形。
+ * ⚠️ 文字全部在素材【外面】用 HTML 渲染 —— 素材里一个字的没有。 */
+.rr-card-menu {
+  position: fixed;
+  z-index: 2147483000;
+  width: 164px;
+  height: 196px;
+  background-image: url("../assets/reading-room/menu-scroll.webp");
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: contain;
+}
+/* 文字区: 绝对定位的内层容器
+ * ⚠️ 千万别用百分比 padding 来定位文字 —— 百分比永远按【包含块的宽度】算,
+ *   菜单挂在 body 上时包含块是整个视口 (500 多像素),
+ *   padding 会把菜单整个撑成 200 多像素宽 (实测 202×242)。
+ *   内层容器是绝对定位, 它的百分比才是相对菜单自己算的。 */
+.rr-card-menu-items {
+  position: absolute;
+  left: 27%;
+  right: 16%;
+  top: 30%;
+  bottom: 18%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.rr-card-menu-item {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  font-family: var(--rr-serif);
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  color: var(--rr-ink);        /* 默认深咖啡色 */
+  padding: 10px 4px;
+  width: 100%;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.rr-card-menu-item:hover,
+.rr-card-menu-item:active {
+  color: var(--rr-accent);     /* 悬停/按住 → 古铜色高亮 */
+  background: rgba(154, 107, 63, 0.12);
+}
+
+/* ============================================================
+ * 换封面 · 预览框 (2026-11-02)
+ * ============================================================ */
+.rr-cover-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(48, 38, 30, 0.55);
+  padding: 20px;
+}
+.rr-cover-preview.on { display: flex; }
+.rr-cover-preview-card {
+  width: min(300px, 86vw);
+  background: var(--rr-paper);
+  border: 1px solid var(--rr-line);
+  border-radius: 14px;
+  box-shadow: var(--rr-shadow);
+  padding: 16px;
+  text-align: center;
+}
+.rr-cover-preview-tip {
+  font-family: var(--rr-serif);
+  font-size: 15px;
+  color: var(--rr-ink);
+  margin-bottom: 12px;
+}
+.rr-cover-preview-card img {
+  display: block;
+  width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--rr-line-soft);
+  background: var(--rr-paper-2);
+}
+.rr-cover-preview-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.rr-cover-pbtn {
+  flex: 1 1 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--rr-line);
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--rr-ink);
+  font-family: var(--rr-serif);
+  /* ⚠️ 按钮不是输入框 —— 15px 不会触发 iOS 的聚焦自动放大 */
+  font-size: 15px;
+  padding: 10px 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.rr-cover-pbtn.primary {
+  background: linear-gradient(180deg, #b07f4c, #95653a);
+  border-color: rgba(122, 90, 58, 0.45);
+  color: #fff;
+}
 
 .rr-empty {
   text-align: center;
@@ -568,7 +693,11 @@ button { font-family: inherit; }
   border: 1px solid var(--rr-line);
   background: #fffdf7;
   color: var(--rr-ink);
-  font-size: 14px;
+  /* ⚠️ 必须是 16px: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+     (而且 iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+     → 用户实测"只要点击输入框, 屏幕就会异常放大"。
+     主聊天那边 (css/chat-ui.css) 的输入框早就是 16px, 这里跟上。 */
+  font-size: 16px;
   line-height: 1.5;
   padding: 9px 14px;
   outline: none;

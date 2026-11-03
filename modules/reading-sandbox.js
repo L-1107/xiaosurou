@@ -60,12 +60,15 @@
     var ids = [
       'rr-boot', 'rr-boot-msg', 'rr-root', 'rr-hall', 'rr-hall-close', 'rr-search',
       'rr-import-btn', 'rr-file-input', 'rr-grid', 'rr-empty',
-      'rr-reader', 'rr-back', 'rr-book-title', 'rr-page-label',
+      'rr-reader', 'rr-back', 'rr-book-title', 'rr-book-stat', 'rr-page-label',
       'rr-page-area', 'rr-page-card', 'rr-chapter', 'rr-page-text', 'rr-picked',
       'rr-pick-fab', 'rr-prev', 'rr-next', 'rr-page-num',
       'rr-splitter', 'rr-chat', 'rr-chat-toggle', 'rr-chat-hint', 'rr-chat-body',
       'rr-chat-input', 'rr-send-btn', 'rr-toast', 'rr-import', 'rr-import-title',
-      'rr-import-bar', 'rr-import-sub'
+      'rr-import-bar', 'rr-import-sub',
+      // 换封面 (2026-11-02)
+      'rr-cover-input', 'rr-cover-preview', 'rr-cover-preview-img',
+      'rr-cover-cancel', 'rr-cover-confirm'
     ];
     for (var i = 0; i < ids.length; i++) {
       el[ids[i].replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); })] =
@@ -133,46 +136,66 @@
     if (el.rrEmpty) el.rrEmpty.style.display = list.length ? 'none' : 'block';
 
     for (var i = 0; i < list.length; i++) {
-      var b = list[i];
-      var card = document.createElement('div');
-      card.className = 'rr-book-card';
-      card.setAttribute('data-book-id', String(b.id));
-
-      var pct = b.pageCount > 0
-        ? Math.min(100, Math.round(((b.currentPage || 0) + 1) / b.pageCount * 100))
-        : 0;
-      var chars = b.charCount > 10000
-        ? (b.charCount / 10000).toFixed(1) + ' 万字'
-        : (b.charCount || 0) + ' 字';
-
-      card.innerHTML =
-        '<div class="rr-cover"></div>' +
-        '<button class="rr-del" title="从书架移除">🗑</button>' +
-        '<div class="rr-meta">' +
-          '<div class="rr-name"></div>' +
-          '<div class="rr-stat"></div>' +
-          '<div class="rr-bar"><i></i></div>' +
-        '</div>';
-      // 书名用 textContent —— 避免书名里的尖括号把 HTML 撑坏
-      card.querySelector('.rr-name').textContent = b.title || '未命名';
-      card.querySelector('.rr-stat').textContent =
-        chars + ' · ' + (b.pageCount || 0) + ' 页' + (pct > 0 ? ' · 已读 ' + pct + '%' : '');
-      var bar = card.querySelector('.rr-bar i');
-      if (bar) bar.style.width = pct + '%';
-      card.querySelector('.rr-cover').style.backgroundImage =
-        'url("../assets/reading-room/reading-hall-bg-thumb.webp")';
-
-      card.addEventListener('click', function (e) {
-        if (e.target && e.target.classList && e.target.classList.contains('rr-del')) return;
-        openBook(b.id);
-      });
-      card.querySelector('.rr-del').addEventListener('click', function (e) {
-        e.stopPropagation();
-        confirmDelete(b);
-      });
-
-      el.rrGrid.appendChild(card);
+      el.rrGrid.appendChild(buildBookCard(list[i]));
     }
+  }
+
+  /**
+   * 字数格式化 (2026-11-03 提出来共用)
+   *
+   * 以前只在卡片上用; 卡片说明区去掉后, 阅读页顶栏也要显示字数 → 共用这一个。
+   */
+  function formatCharCount(n) {
+    n = Number(n) || 0;
+    return n > 10000 ? (n / 10000).toFixed(1) + ' 万字' : n + ' 字';
+  }
+
+  /**
+   * 造一张书卡片
+   *
+   * ⚠️ 2026-11-02 修掉一个老 bug:
+   *   以前整段是直接写在 renderHall 的 for 循环里的 ——
+   *   `var b = list[i]` + 闭包里引用 b, 而 var 是【函数级】的,
+   *   循环跑完 b = 列表里【最后一本】, 所有卡片的点击回调拿到的都是它
+   *   → 【点哪本书都打开最后那一本书】。
+   *   (用户那边一直只有一本书, 所以没人发现)
+   *   现在每张卡单独一个函数, book 是形参 → 每张卡只认自己那本书。
+   *
+   * ⚠️ 2026-11-03 用户反馈"封面图占全部不好看, 下面那行说明文字不要了":
+   *   卡片现在【只留封面图】, 说明区(书名/字数/页数/进度条)整个去掉,
+   *   封面也改成 contain —— 整张图完整显示不裁切 (见 reading-sandbox.css)。
+   *   书名和页码阅读页顶栏本来就有, 字数也补到顶栏了 (见 openBook)。
+   */
+  function buildBookCard(b) {
+    var card = document.createElement('div');
+    card.className = 'rr-book-card';
+    card.setAttribute('data-book-id', String(b.id));
+
+    card.innerHTML =
+      '<div class="rr-cover"></div>' +
+      // ⚠️ 2026-11-02: 原来这里是常驻的 🗑 按钮, 现在换成 ⋯ 三点菜单
+      //   (菜单里才是"更换封面 / 删除书籍"), 见下面的 showCardMenu()。
+      //   三个点是 CSS 画的 (三个 <i>), 不用另外准备素材。
+      '<button class="rr-card-menu-btn" title="更多" aria-label="更多"><i></i><i></i><i></i></button>';
+    // 2026-11-02: 自定义封面优先, 没有就还是默认那张书架背景。
+    //   (dataURL 是 base64, 不含引号/括号, 直接塞进 url() 不会有注入问题)
+    card.querySelector('.rr-cover').style.backgroundImage = b.cover
+      ? 'url(' + JSON.stringify(b.cover) + ')'
+      : 'url("../assets/reading-room/reading-hall-bg-thumb.webp")';
+
+    card.addEventListener('click', function (e) {
+      if (e.target && e.target.classList && e.target.classList.contains('rr-card-menu-btn')) return;
+      openBook(b.id);
+    });
+    var menuBtn = card.querySelector('.rr-card-menu-btn');
+    if (menuBtn) {
+      menuBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        showCardMenu(menuBtn, b);
+      });
+    }
+
+    return card;
   }
 
   function confirmDelete(b) {
@@ -180,6 +203,172 @@
       post({ type: 'reading:deleteBook', bookId: b.id });
       toast('已移除');
     }
+  }
+
+  // ============================================================
+  // 卡片菜单 (2026-11-02)
+  //
+  // 以前每张卡片右上角常驻一个 🗑, 现在换成一个 ⋯:
+  //   点 ⋯ → 弹一张羊皮纸小卷轴 → 里面只有两项: 更换封面 / 删除书籍。
+  //
+  // 规矩:
+  //   · 同一时间只允许展开一个菜单 (openMenu 是全局唯一那个)
+  //   · 点菜单外面 / 滑动页面 = 关掉
+  //   · 删除走【原有的 confirmDelete】, 不重写一套删除机制
+  // ============================================================
+  var openMenu = null;    // 当前展开的菜单元素
+  var openMenuBtn = null; // 当前展开的菜单是哪个按钮点的
+
+  function closeCardMenu() {
+    if (openMenu && openMenu.parentNode) openMenu.parentNode.removeChild(openMenu);
+    openMenu = null;
+    if (openMenuBtn) {
+      openMenuBtn.classList.remove('on');
+      openMenuBtn = null;
+    }
+    document.removeEventListener('pointerdown', onMenuOutside, true);
+    document.removeEventListener('scroll', closeCardMenu, true);
+  }
+
+  function onMenuOutside(e) {
+    var t = e.target;
+    if (openMenu && openMenu.contains(t)) return;
+    // ⋯ 按钮本身不算"外面" —— 让它自己处理开/关 (否则会先关再开)
+    if (openMenuBtn && openMenuBtn.contains(t)) return;
+    closeCardMenu();
+  }
+
+  function showCardMenu(btn, book) {
+    var wasOpen = (openMenuBtn === btn);
+    closeCardMenu();
+    if (wasOpen) return;   // 再点一下同一个 ⋯ = 收起
+
+    var menu = document.createElement('div');
+    menu.className = 'rr-card-menu';
+    // 文字放在内层容器里 (绝对定位) —— 见 reading-sandbox.css 里 .rr-card-menu-items
+    // 那段注释: 百分比 padding 会按整个视口算, 把菜单撑变形。
+    var box = document.createElement('div');
+    box.className = 'rr-card-menu-items';
+
+    var itemCover = document.createElement('button');
+    itemCover.className = 'rr-card-menu-item';
+    itemCover.textContent = '更换封面';
+
+    var itemDel = document.createElement('button');
+    itemDel.className = 'rr-card-menu-item';
+    itemDel.textContent = '删除书籍';
+
+    // ⚠️ 文字全部用 textContent —— 羊皮纸素材里没有字, 字都是这儿渲染的
+    box.appendChild(itemCover);
+    box.appendChild(itemDel);
+    menu.appendChild(box);
+    document.body.appendChild(menu);
+
+    openMenu = menu;
+    openMenuBtn = btn;
+    btn.classList.add('on');
+
+    // 定位: 贴在按钮下面; 屏幕装不下就翻到上面; 左右不许出屏
+    var r = btn.getBoundingClientRect();
+    var mw = menu.offsetWidth || 164;
+    var mh = menu.offsetHeight || 196;
+    var left = r.left + r.width / 2 - mw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
+    var top = r.bottom + 6;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+    menu.style.left = Math.round(left) + 'px';
+    menu.style.top = Math.round(top) + 'px';
+
+    itemCover.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeCardMenu();
+      pickCover(book);
+    });
+    itemDel.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeCardMenu();
+      confirmDelete(book);   // ← 沿用原有的删除逻辑 (二次确认 + reading:deleteBook)
+    });
+
+    document.addEventListener('pointerdown', onMenuOutside, true);
+    document.addEventListener('scroll', closeCardMenu, true);
+  }
+
+  // ============================================================
+  // 换封面 (2026-11-02)
+  //
+  // 【分工】沙盒做"选图 + 压缩 + 预览", 宿主做"保存"。
+  //   沙盒不碰 IndexedDB (同源开同一个库会撞 versionchange, 见文件头说明),
+  //   所以压缩后的图交给宿主写进 readingCovers 表。
+  //
+  // 【为什么要压】手机相册一张照片 3~8MB, 直接存进 IndexedDB,
+  //   十几本书就能堆掉上百 MB → 手机上迟早出问题。
+  //   缩到最长边 420px (卡片才 136px 宽, 3 倍屏够用) + JPEG 0.8 → 一张约 20~40KB。
+  // ============================================================
+  var coverBook = null;   // 正在换封面的那本书
+  var coverData = '';     // 压好待确认的 dataURL
+
+  function pickCover(book) {
+    if (!book) return;
+    if (!el.rrCoverInput) { toast('这个浏览器不支持选图'); return; }
+    coverBook = book;
+    coverData = '';
+    el.rrCoverInput.value = '';   // 清空 → 连续选同一张也能触发 change
+    try {
+      el.rrCoverInput.click();
+    } catch (e) {
+      logWarn('打开相册失败:', e);
+      toast('打不开相册');
+    }
+  }
+
+  function closeCoverPreview() {
+    if (el.rrCoverPreview) el.rrCoverPreview.classList.remove('on');
+    coverBook = null;
+    coverData = '';
+    if (el.rrCoverPreviewImg) el.rrCoverPreviewImg.removeAttribute('src');
+  }
+
+  function compressCoverImage(file, maxSide, quality) {
+    maxSide = maxSide || 420;
+    quality = quality || 0.8;
+    return loadImageBitmap(file).then(function (src) {
+      var w = src.width || src.naturalWidth;
+      var h = src.height || src.naturalHeight;
+      if (!w || !h) throw new Error('图片尺寸异常');
+      var scale = Math.min(1, maxSide / Math.max(w, h));
+      var cw = Math.max(1, Math.round(w * scale));
+      var ch = Math.max(1, Math.round(h * scale));
+      var cv = document.createElement('canvas');
+      cv.width = cw;
+      cv.height = ch;
+      var ctx = cv.getContext('2d');
+      // ⚠️ 先铺一层纸色 —— 透明的 PNG 转 JPEG 时不铺底会变成黑块
+      ctx.fillStyle = '#fffdf7';
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.drawImage(src, 0, 0, cw, ch);
+      if (src && typeof src.close === 'function') { try { src.close(); } catch (e) { /* noop */ } }
+      return cv.toDataURL('image/jpeg', quality);
+    });
+  }
+
+  function loadImageBitmap(file) {
+    // 优先 createImageBitmap: 它按 EXIF 摆正 (手机竖拍的照片不会躺倒)
+    if (typeof createImageBitmap === 'function') {
+      return createImageBitmap(file, { imageOrientation: 'from-image' })
+        .catch(function () { return loadImageElement(file); });
+    }
+    return loadImageElement(file);
+  }
+
+  function loadImageElement(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('图片解码失败')); };
+      img.src = url;
+    });
   }
 
   // ============================================================
@@ -268,6 +457,8 @@
     S.selected = '';
     S.pickedText = '';
     if (el.rrBookTitle) el.rrBookTitle.textContent = book.title || '未命名';
+    // 字数显示在顶栏 (2026-11-03): 书架卡片的说明区去掉后, 字数信息挪到这儿。
+    if (el.rrBookStat) el.rrBookStat.textContent = formatCharCount(book.charCount);
     showView('reader');
     requestPage(S.pageNo);
   }
@@ -590,6 +781,14 @@
         onChatError(d);
         break;
 
+      // 换封面 (2026-11-02)
+      case 'reading:coverDone':
+        toast('封面换好了');
+        break;
+      case 'reading:coverError':
+        toast('⚠️ ' + String(d && d.error ? d.error : '封面没存上'));
+        break;
+
       case 'reading:vv':
         // 宿主转发的真实可视视口 (iOS 键盘) + 状态栏高度
         if (typeof d.height === 'number' && d.height > 0) {
@@ -636,6 +835,40 @@
         var f = e.target.files && e.target.files[0];
         e.target.value = null;
         if (f) startImport(f);
+      });
+    }
+
+    // ---- 换封面 (2026-11-02) ----
+    if (el.rrCoverInput) {
+      el.rrCoverInput.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        e.target.value = null;
+        if (!f) return;
+        compressCoverImage(f).then(function (dataUrl) {
+          coverData = dataUrl;
+          if (el.rrCoverPreviewImg) el.rrCoverPreviewImg.src = dataUrl;
+          if (el.rrCoverPreview) el.rrCoverPreview.classList.add('on');
+        }).catch(function (err) {
+          logWarn('封面图片处理失败:', err);
+          toast('这张图片打不开，换一张试试');
+        });
+      });
+    }
+    if (el.rrCoverConfirm) {
+      el.rrCoverConfirm.addEventListener('click', function () {
+        if (!coverBook || !coverData) { closeCoverPreview(); return; }
+        // ⚠️ 只发 bookId + 封面本身 —— 书的内容/进度/讨论记录/ID 宿主那边一个都不碰
+        post({ type: 'reading:setCover', bookId: coverBook.id, cover: coverData });
+        closeCoverPreview();
+      });
+    }
+    if (el.rrCoverCancel) {
+      el.rrCoverCancel.addEventListener('click', closeCoverPreview);
+    }
+    if (el.rrCoverPreview) {
+      // 点遮罩 = 取消 (别让人以为卡住了)
+      el.rrCoverPreview.addEventListener('click', function (e) {
+        if (e.target === el.rrCoverPreview) closeCoverPreview();
       });
     }
 

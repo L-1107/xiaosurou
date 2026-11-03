@@ -166,11 +166,103 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.59 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.59</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书架卡片：只留封面，字数挪到顶栏</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「感觉这个封面图不能占全部好看啊，那个下面的说明文字是否可以不要？」</li>
+          <li><strong>封面现在整张都看得见</strong> —— 以前是"铺满裁切"，竖着的封面会被<strong>切掉两边</strong>，只能看到中间一截。现在改成<strong>完整显示，一条边都不裁</strong>；卡片按 3:4 的开本比例留位，图和卡片比例不一样时四周会留一点白（这是"不裁切"必然的代价）。</li>
+          <li><strong>下面那块白底说明区整个去掉了</strong> —— 书名、字数页数、那条细进度条，都不再挤在封面底下。卡片现在干干净净，<strong>就是一张封面图</strong>，右上角还是那个 ⋯。</li>
+          <li><strong>字数没丢，挪到阅读页顶栏了</strong> —— 顶栏现在是「书名 · <strong>字数</strong> · 页码」，比如「477.7 万字」。进书就能看到，在书架上则是一张干净的封面。</li>
+          <li><strong>顺带修掉一条老红字</strong> —— 代码里有一处用了 <code>Dexie.Table</code>，但实际加载的那个 Dexie 4 里<strong>根本没有这个属性</strong>，所以每次启动都会抛一次错。功能不受影响，但很容易在排查时把人带偏。现在改成没有就安静跳过。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.58 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.58</span>
+        <span class="version-date">2026-11-03</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">紧急修复：整个应用白屏、怎么刷新都进不去</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「就是起不来了，我开文件版刷新之后也是到现在都没打开」。</li>
+          <li><strong>是我上一版的锅，跟你电脑、跟你数据都没关系</strong> —— 上一版为了给书加封面，往<strong>主数据库</strong>上加了一个新版本号。数据库这东西有个死规矩：<strong>只要还有一个旧连接开着（哪怕是一个卡住的旧标签页），这次升级就要无限期排队等着</strong>。等不到就不报错、也不失败，就那么干等着 —— 于是启动流程卡在"打开数据库"这一步，首页永远出不来，<strong>控制台还一条红字都没有</strong>。</li>
+          <li><strong>为什么特别难查</strong> —— 控制台里所有脚本都加载完了，看起来"一切正常"，只是没动静。没有红字可看，所以既看不出是数据库的问题，也看不出是哪个文件的问题。我是用无头浏览器 + 调试协议把"升级请求被挡住"这个状态复现出来，才敢下结论的。</li>
+          <li><strong>现在怎么修的</strong> —— 封面<strong>不再放进主数据库</strong>，改成单独一个小库（跟项目里宠物屋、观影厅各自一个库一个道理）。<strong>主数据库的版本号退回原样，一个数字都没动</strong> —— 不需要升级，就不可能被卡住，这个病根直接没了。没换过封面的人，手机里连这个小库都不会出现。</li>
+          <li><strong>顺手加了两道保险</strong> —— ① 以后再遇到"升级被别的页面挡住"，控制台会明确告诉你是被挡住了；② 打开数据库超过 20 秒还没好，屏幕上<strong>会直接弹提示 + 一个「重新加载」按钮</strong>，不再让你对着白屏干等。</li>
+          <li><strong>顺带清掉一条会误导排查的老红字</strong> —— 代码里有一处用了 <code>Dexie.Table</code>，但实际加载的那个 Dexie 4 里<strong>根本没有这个属性</strong>，所以每次启动都会抛一次错、留一条红字。功能其实不受影响，但下次再出"打不开"的问题，它会把你带偏。现在改成没有就安静跳过。（反过来这也是个证据：你之前的控制台里<strong>没有</strong>这条红字，说明数据库从头到尾就没打开过。）</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.57 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.57</span>
+        <span class="version-date">2026-11-02</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书架上的那个垃圾桶，变成了一张羊皮纸小菜单</div>
+        <ul class="item-list">
+          <li><strong>以前</strong> —— 每本书右上角常驻一个醒目的 🗑，删书就靠它。</li>
+          <li><strong>现在</strong> —— 换成一个不抢戏的 <strong>⋯ 三点按钮</strong>（深咖啡色，三个点是 CSS 画的，没另外做素材）。点开是一张<strong>羊皮纸小卷轴</strong>，里面只有两项：<strong>更换封面</strong>、<strong>删除书籍</strong>。</li>
+          <li><strong>卷轴上没有一个字是画出来的</strong> —— 你给的素材只有卷轴本身（白底已经抠成透明），两个选项都是页面上的文字，居中排好；手指按住或鼠标划上去时字会变色。</li>
+          <li><strong>细节</strong> —— 点菜单外面就关掉；同一时间只会有一个菜单开着；卷轴贴着你点的那个按钮，手机上也不会跑出屏幕。</li>
+          <li><strong>删除还是原来那个删除</strong> —— 照样弹二次确认，确认了才真删，取消什么都不发生。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">新功能：自己给书换封面</div>
+        <ul class="item-list">
+          <li><strong>怎么用</strong> —— 点 ⋯ → <strong>更换封面</strong> → 从相册里挑一张 → 会先给你看一眼预览 → 按「确认更换」才真的换。</li>
+          <li><strong>只换封面，别的什么都不碰</strong> —— 书的内容、读到第几页、聊天里的讨论记录、这本书的编号，<strong>全都原样不动</strong>，也不用重新导入这本书。</li>
+          <li><strong>存哪儿</strong> —— 封面单独存一个<strong>独立的小数据库</strong>（不跟正文混在一起，也不动你原本那个大数据库）。开书架还是只读书的元数据，速度跟以前一样。</li>
+          <li><strong>怕占手机内存</strong> —— 选完图会自动缩到<strong>最长边 420 像素</strong>再存（书架上那本书才 136 像素宽，够清楚了），一张大约 <strong>20~40KB</strong>；手机竖拍的照片还会自动摆正。刷新页面、关掉再开，封面都还在。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">顺手修掉一个老毛病：点哪本书都打开最后一本</div>
+        <ul class="item-list">
+          <li><strong>症状</strong> —— 书架上有多本书时，点第一本、第二本，打开的<strong>都是列表里最后那一本</strong>。</li>
+          <li><strong>原因</strong> —— 卡片那段代码写在一个循环里，循环里用 <code>var</code> 声明的变量是<strong>整个函数共用一个</strong>，循环跑完它就只剩最后一个值 → 所有卡片的点击回调拿到的都是最后一本书。</li>
+          <li><strong>为什么之前没发现</strong> —— 你书架上一直只有一本书，所以看不出来。现在每张卡片单独生成，<strong>点哪本开哪本</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.56 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.56</span>
+        <span class="version-date">2026-11-02</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋说"找不到配置的 API"，问不了 AI（已修）</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「共读发现两个问题，图1显示找不到配置的API，没法跟AI讨论」。</li>
+          <li><strong>这不是你配置的问题</strong> —— 读书屋去拿 API 配置的那段代码里有个<strong>自己跟自己过不去的错</strong>：它把"拿到的配置"存进一个变量里，却<strong>没把这个变量交出去</strong>，于是下一层拿到的<strong>永远是空的</strong> → 一律报「地址 / API Key / 模型缺一个」。所以不管你 API 配得多对，读书屋都问不了。</li>
+          <li><strong>改成把结果直接往下传</strong> —— 现在<strong>站点预设、直填地址、角色独立 API</strong>四种配法都实测能正常解析出来（每种都单测了一遍，不是靠猜）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋一点输入框，整个屏幕就放大了（已修）</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「图二，只要点击输入框，屏幕就会异常放大」。</li>
+          <li><strong>原因</strong> —— iPhone 上的 Safari 有个规矩：<strong>你点的输入框，字号小于 16 像素，它就会自动把整个页面放大</strong>好让你看清（而且 iOS 10 以后，它<strong>不认</strong>网页里写的"禁止缩放"，拦都拦不住）。读书屋里的输入框和搜索框当时都只有 <strong>14 像素</strong> → 一碰就放大。</li>
+          <li><strong>改成 16 像素</strong> —— 现在两个输入框都是 16 像素了，跟<strong>主聊天那边的输入框一样大</strong>，放大这件事就不会发生了。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.55 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.55</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-01</span>
       </div>
       <div class="section">
         <div class="section-title feat">「一起读书」改成独立的读书屋了（不是小浮窗）</div>

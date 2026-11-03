@@ -699,6 +699,13 @@
     try {
       await d.readingPages.where('bookId').equals(bookId).delete();
       await d.readingBooks.delete(bookId);
+      // 封面在独立库里, 顺手删掉, 别留孤儿数据。
+      // ⚠️ 封面库可能压根不存在 (没换过封面的人) → 任何异常都忽略,
+      //    绝对不能因为"封面没删掉"就让删书失败。
+      try {
+        var cd = getCoverDb();
+        if (cd) await cd.readingCovers.delete(Number(bookId));
+      } catch (e) { /* noop */ }
       return true;
     } catch (e) {
       logError('删书失败:', e);
@@ -713,6 +720,133 @@
       await d.readingBooks.update(bookId, { title: String(title || '未命名') });
       return true;
     } catch (e) { return false; }
+  }
+
+  // ============================================================
+  // 封面 (独立数据库 ReadingCoversDB, 2026-11-03)
+  //
+  // 【铁律: 换封面只碰这一行】
+  //   书名 / 页数 / currentPage / 正文 / 讨论记录 / 书籍 ID —— 一个都不动。
+  //   也不重新导入, 不碰 readingBooks 和 readingPages。
+  //
+  // 【为什么封面放独立库, 不放在主库(330 的 GeminiChatDB)里】
+  //   ⚠️ 这是 2026-11-03 踩出来的血泪教训, 别再改回去:
+  //   第一版是 `db.version(73).stores({ readingCovers })` —— 加到主库上。
+  //   结果用户一刷新就是【整个 app 白屏, 控制台一条红字都没有】。
+  //   根因: IndexedDB 里「只要还有别的连接开着旧版本, 本次升版就无限期排队」,
+  //        而那个旧连接可能是同一个浏览器里卡住的旧标签页, 甚至旧 Service Worker。
+  //        升级一被挡住, db.open() 就【既不成功也不失败】(pending),
+  //        启动链里 `await loadAllDataFromDB()` 永远等不到库 →
+  //        showScreen('home-screen') 永远不执行 → 白屏。
+  //        而 pending 不算 error, 所以控制台干净得跟没事一样, 极难查。
+  //   复现证据: _reports/reading-room-test/diag-boot4.cjs (无头 Edge + CDP)
+  //        B 标签页 idbLog 里【没有】GeminiChatDB 的 upgradeneeded/open-success,
+  //        indexedDB.databases() 一直显示 720, dbReady 90 秒都到不了 true。
+  //
+  //   ⇒ 所以: 主库一个版本号都别动 (停在 72, 跟加封面之前完全一样)。
+  //     封面单独一个库, 跟项目里现有的 PetNestDB / XSocialDB / CinemaSandboxDB
+  //     一个路子 —— 各管各的, 它怎么建、建没建成功, 都不会影响 app 能不能打开。
+  //   ⇒ 而且这个库是【懒建】的: 没换过封面的人, IndexedDB 里根本不会有它。
+  // ============================================================
+
+  var COVER_DB_NAME = 'ReadingCoversDB';
+  var COVER_STORE = 'readingCovers';
+  var coverDb = null;
+  var coverDbBroken = false;
+
+  /**
+   * 拿封面库 (第一次调用才建连接, 真正建库是在第一次读写时)
+   * @returns {object|null} Dexie 实例; Dexie 没加载或库坏了就 null
+   */
+  function getCoverDb() {
+    if (coverDbBroken) return null;
+    if (coverDb) return coverDb;
+    var DexieCtor = global.Dexie;
+    if (typeof DexieCtor !== 'function') {
+      // 主库能用的前提下 Dexie 一定是有的; 真没有就让封面功能安静失效,
+      // 绝对不能因此把书架也搞挂。
+      logWarn('Dexie 不在, 封面功能不可用');
+      coverDbBroken = true;
+      return null;
+    }
+    try {
+      coverDb = new DexieCtor(COVER_DB_NAME);
+      coverDb.version(1).stores({
+        readingCovers: 'bookId'    // { bookId, data: dataURL, updatedAt }
+      });
+      return coverDb;
+    } catch (e) {
+      logError('封面库初始化失败:', e);
+      coverDbBroken = true;
+      return null;
+    }
+  }
+
+  /**
+   * 换封面
+   * @param {number|string} bookId
+   * @param {string} dataUrl 已经压缩过的 dataURL (jpeg, 20~50KB)
+   */
+  async function setCover(bookId, dataUrl) {
+    var d = getCoverDb();
+    if (!d) return false;
+    var data = String(dataUrl || '');
+    if (!data) return false;
+    // ⚠️ bookId 必须转成数字 —— readingBooks 是 ++id (数字主键),
+    //   而沙盒那边 data-book-id 属性是字符串, 直接拿字符串当主键会多存一行 ('1' 和 1 两条)
+    var key = Number(bookId);
+    if (!isFinite(key)) return false;
+    try {
+      await d.readingCovers.put({
+        bookId: key,
+        data: data,
+        updatedAt: Date.now()
+      });
+      return true;
+    } catch (e) {
+      logError('存封面失败:', e);
+      return false;
+    }
+  }
+
+  /** 取某本书的封面 (没有就是 null) */
+  async function getCover(bookId) {
+    var d = getCoverDb();
+    if (!d) return null;
+    var key = Number(bookId);
+    if (!isFinite(key)) return null;
+    try {
+      var row = await d.readingCovers.get(key);
+      return (row && row.data) || null;
+    } catch (e) { return null; }
+  }
+
+  /**
+   * 书架列表用的封面表: { bookId: dataURL }
+   *
+   * ⚠️ 单独查一次, 【不塞进 listBooks()】——
+   *   listBooks() 的铁律是只搬元数据 (开书架要快), 一本书的封面 20~50KB base64,
+   *   塞进去等于开一次书架把所有封面搬一遍 (跟当年"整本书塞一条记录"同一个坑)。
+   *
+   * ⚠️ 去重名表里拿 (独立库), 而且【别让它的失败影响书架】:
+   *   库里一条封面都没有时这里会去建库/开库, 慢一点也得忍着,
+   *   但任何异常都必须吞掉 —— 封面读不出来顶多没封面, 书架不能因此打不开。
+   */
+  async function listCovers() {
+    var d = getCoverDb();
+    if (!d) return {};
+    try {
+      var rows = await d.readingCovers.toArray();
+      var out = {};
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r && r.bookId != null && r.data) out[r.bookId] = r.data;
+      }
+      return out;
+    } catch (e) {
+      logError('读封面失败:', e);
+      return {};
+    }
   }
 
   // ============================================================
@@ -808,6 +942,9 @@
     setProgress: setProgress,
     deleteBook: deleteBook,
     renameBook: renameBook,
+    setCover: setCover,
+    getCover: getCover,
+    listCovers: listCovers,
     migrateLegacy: migrateLegacy,
     legacyCount: legacyCount,
     // 读

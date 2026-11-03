@@ -853,7 +853,91 @@
 //
 //   index.html 的 ?v=：modules/pet-image.js 0.0.8 → 0.0.9。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.102.0';
+//
+// ============================================================
+// v0.2.103.0 —— 读书屋真机两个 bug (2026-11-02)
+//   ① 「找不到配置的 API，没法跟 AI 讨论」
+//      根因: modules/reading-room.js 的 resolveMainApiConfig() 里
+//            return global.resolveApiSlotConfig('main').then(function (cfg) { main = cfg; });
+//      那个回调【没有 return】→ 整条 Promise 链 resolve 成 undefined →
+//      下一级 .then(function (main) {...}) 收到 undefined → 一律 return null
+//      → 报「主 API 没配好（地址 / API Key / 模型缺一个）」。
+//      跟用户怎么配 API 完全无关 → 读书屋永远问不了 AI。
+//      修法: 直接把 Promise 往下传, 别在回调里赋值。
+//   ② 「只要点击输入框，屏幕就会异常放大」
+//      根因: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+//            (iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+//      读书屋沙盒里 #rr-chat-input / #rr-search 都是 14px → 必触发。
+//      修法: 两个输入框字号 14px → 16px (跟主聊天 css/chat-ui.css 一致)。
+//
+//   index.html 的 ?v=：modules/reading-room.js 0.1.1 → 0.1.2；
+//   reading-sandbox/index.html 里的 reading-sandbox.css 0.1.1 → 0.1.2。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ============================================================
+// v0.2.104.0 —— 书架 UI 局部改造 (2026-11-02)
+//   ① 卡片右上角常驻的 🗑 → ⋯ 三点菜单 (CSS 画的点, 不用素材)
+//      点开是一张羊皮纸小卷轴, 里面只有两项: 更换封面 / 删除书籍
+//      (删除沿用原有的 confirmDelete, 没重写删除逻辑)
+//   ② 新增「更换封面」: 选图 → 压到最长边 420px 的 JPEG → 预览 → 确认 → 存进
+//      新表 readingCovers (db v73) → 卡片封面当场更新, 刷新后还在
+//      ⚠️ 封面单独一张表, 不塞进 readingBooks —— 那张表只放元数据, 塞 base64 会
+//         让"开书架"把所有封面搬一遍 (跟当年"整本书塞一条记录"同一个坑)
+//
+//   index.html 的 ?v=：modules/reading-storage.js 0.1.2 → 0.1.3、
+//   modules/init-db-schema.js 0.0.45 → 0.0.46、modules/init-data-protection.js 0.0.36 → 0.0.38；
+//   modules/reading-room.js 0.1.3、reading-sandbox 那两个版本号不变。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ============================================================
+// v0.2.105.0 —— 修「整个 app 白屏起不来」(2026-11-03)
+//
+//   🔴 病根: v0.2.104.0 把封面表加成了主库的 db.version(73)。
+//      给主库加版本号 = 触发一次 IndexedDB 升级。而 IndexedDB 的规矩是
+//      「只要还有别的连接开着旧版本，本次升级就无限期排队」。
+//      升级一被挡住，db.open() 就【既不成功也不失败】(pending)，
+//      启动链里 await loadAllDataFromDB() 永远等不到库 →
+//      showScreen('home-screen') 永远不执行 → 白屏。
+//      pending 不算 error，所以控制台一条红字都没有，极难查。
+//      实证: _reports/reading-room-test/diag-boot4.cjs
+//            (无头 Edge + CDP，B 标签页 indexedDB 一直停在 720，dbReady 90 秒到不了 true)
+//
+//   ✅ 修法: 封面改到【独立数据库 ReadingCoversDB】(跟 PetNestDB / XSocialDB 一个路子)。
+//           主库版本退回 72，这次的改动对它【零影响】—— 不升级，就不可能被挡住。
+//           那个库还是懒建的: 没换过封面的人，IndexedDB 里根本不会有它。
+//
+//   🛟 顺手加了三道保险 (以后再遇到同类问题不会是纯白屏):
+//       · init-db-schema.js: 监听 blocked → 控制台明确报「被别的页面挡住了」
+//       · init-data-protection.js: 开库超过 20 秒没好 → 屏幕上弹提示 + 「重新加载」按钮
+//       · init-data-protection.js: 磁盘上的库版本比代码新时自动跟进(否则 Dexie 抛 VersionError)
+//
+//   🧨 同一批里还修了个我自己刚引入的致命错误:
+//      init-data-protection.js 里写了 global.markDbBlocked —— 这个文件里根本没有 global
+//      这个标识符(它是别的文件 IIFE 的形参)，会直接 ReferenceError，一样白屏。
+//      已改成 window.markDbBlocked。
+//
+//   🩹 顺手修掉一条会误导排查的老红字:
+//      init-data-protection.js 的 wrapDatabaseOperations() 用了 Dexie.Table.prototype，
+//      但 Dexie 4 的 CDN 构建里【没有 Dexie.Table】(实测那份文件里连这个字符串都搜不到)
+//      → 每次启动都抛 TypeError，控制台留一条红字。功能不受影响，但下次排查"起不来"
+//      会被它带偏。已改成没有 Table 就安静跳过。
+//      (顺带: 用户旧控制台里【没有】这条红字，反证了 dbReady 从没变 true —— 即库没打开过)
+//
+// ============================================================
+// v0.2.106.0 —— 书架卡片只留封面 (2026-11-03)
+//
+//   用户看真机截图后说: "封面图占全部不好看, 下面那行说明文字是否可以不要"。
+//   ① 卡片去掉说明区(书名/字数·页数/进度条) → 整张卡片只剩封面图
+//   ② 封面从 background-size:cover 改成 contain → 【整张封面完整显示, 不裁切】
+//      (以前竖版封面被裁掉两边; 代价是图和卡片比例不同时四周会留白)
+//      容器高度用 aspect-ratio: 3/4 定住 (常见书籍开本比例)
+//   ③ 顶栏补上字数统计 —— 卡片说明区去掉后, 字数信息挪到阅读页顶栏
+//      (新元素 #rr-book-stat, 挨着页码)
+//
+//   index.html 的 ?v=：reading-sandbox/index.html 里的
+//   reading-sandbox.css 0.1.3 → 0.1.4、reading-sandbox.js 0.1.2 → 0.1.3。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.106.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -942,7 +1026,10 @@ const URLS_TO_CACHE = [
   './assets/reading-room/reading-hall-bg.webp',
   './assets/reading-room/reading-page-bg.webp',
   './assets/reading-room/reading-hall-bg-thumb.webp',
-  './assets/reading-room/reading-page-bg-thumb.webp'
+  './assets/reading-room/reading-page-bg-thumb.webp',
+  // v0.2.104.0 新增: 卡片菜单的羊皮纸卷轴 (45KB)。
+  // 不预缓存的话, 第一次点 ⋯ 会有一下白闪 (菜单底图是异步拉的)。
+  './assets/reading-room/menu-scroll.webp'
 ];
 
 self.addEventListener('install', event => {

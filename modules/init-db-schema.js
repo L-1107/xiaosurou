@@ -331,4 +331,58 @@ db.version(72).stores({
   readingPages: '++id, [bookId+pageNo], bookId'             // { id, bookId, pageNo, text, chapterTitle }
 });
 
+// ⚠️⚠️ 这里【故意没有】v73 —— 书籍封面没放主库, 放的是独立数据库
+//
+// 【2026-11-03 血泪教训: 主库一个版本号都别动】
+//   本来封面表是加在这儿的 (db.version(73).stores({ readingCovers })), 结果
+//   用户一刷新就是【整个 app 白屏、控制台一条红字都没有】。
+//
+//   根因 (无头浏览器已复现, 见 _reports/reading-room-test/diag-boot4.cjs):
+//     IndexedDB 的规矩是「还有别的连接开着旧版本, 本次升级就无限期排队」。
+//     主库从 720 升 730 的请求一旦被挡住:
+//       db.open() 既不 resolve 也不 reject (pending)
+//       → init-event-bindingsA.js 的 await loadAllDataFromDB() 永远等不到库
+//       → showScreen('home-screen') 永远不执行
+//       → 白屏, 而且 pending 不算 error, 控制台干净得像没事一样。
+//     复现实测: B 标签页 idbLog 里【没有】GeminiChatDB 的 upgradeneeded/open-success,
+//     indexedDB.databases() 一直显示 720, dbReady 90 秒都到不了 true。
+//
+//   ⇒ 结论: 只要动主库版本号, 就等于给「整个 app 能不能打开」上了一道
+//     取决于"别的页面关没关"的赌注。为了一个新功能冒这个险, 不值。
+//
+//   ⇒ 现在的做法: 封面放【独立数据库 ReadingCoversDB】(见 reading-storage.js),
+//     跟项目里现有的 PetNestDB / XSocialDB / CinemaSandboxDB 一样, 各管各的。
+//     主库版本停在 72, 这次的改动对它【零影响】—— 不需要升级, 就不可能被挡住。
+//     而且那个库是懒建的: 没换过封面的人, 根本不会有这个库。
+
 window.db = db;
+
+// ============================================================
+// 🛑 数据库升级被挡住时的处理 (2026-11-02)
+//
+// 【为什么加这个】
+//   用户实测「app 白屏起不来」: 控制台里脚本全加载完了, 但【没有】
+//   "数据库已完全初始化并打开" 这条日志, 也没有 "数据库打开失败" ——
+//   说明 db.open() 一直【pending】(既没成功也没失败)。
+//
+// 【为什么 pending 会让整个 app 白屏】
+//   IndexedDB 的规则: 还有别的连接开着旧版本时, 本页的升级请求会一直等。
+//   而 db.open() 一旦不 resolve, 启动链就断了 ——
+//   init-event-bindingsA.js 的 `await loadAllDataFromDB()` 永远等不到库 →
+//   showScreen('home-screen') 永远不执行 → 白屏, 而且控制台一条报错都没有。
+//
+// 【这两句干什么】
+//   ① versionchange: 别的页面要升级时, 本页主动关库让路。
+//      (Dexie 自己也会关, 这里再显式来一次 —— 万一将来换了 Dexie 版本也不会失效)
+//   ② blocked: 本页的升级被挡住了 → 立刻告诉用户「关掉别的 330 页面」,
+//      而不是让人对着白屏猜半天。
+// ============================================================
+db.on('versionchange', function () {
+  console.warn('[DB] 别的页面要升级数据库, 本页主动让路(关库)');
+  try { db.close({ disableAutoOpen: false }); } catch (e) { /* ignore */ }
+});
+db.on('blocked', function () {
+  console.error('[DB] 升级被挡住: 还有别的 330 页面/窗口开着旧版本, 请全部关掉再打开');
+  // ⚠️ 这个文件里没有 global 这个标识符 (它是别的文件 IIFE 的形参), 必须用 window.xxx
+  if (typeof window.markDbBlocked === 'function') window.markDbBlocked();
+});

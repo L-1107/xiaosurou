@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>读书屋</title>
-<link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.1">
+<link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.4">
 <!--
   ============================================================================
   读书屋 · iframe 沙盒 (2026-11-01)
@@ -25,16 +25,18 @@
   和宿主的通信 (postMessage):
     宿主 → 本页  { type:'reading:init', chat:{...} }
               { type:'reading:apiConfig', apiConfig }
-              { type:'reading:books', books:[...] }
+              { type:'reading:books', books:[...] }        ← 2026-11-02: 每本多了 cover(dataURL|null)
               { type:'reading:page', bookId, pageNo, text, chapterTitle, pageCount }
               { type:'reading:importProgress' | 'reading:importDone' | 'reading:importError' }
               { type:'reading:chatDelta' | 'reading:chatDone' | 'reading:chatError' }
+              { type:'reading:coverDone' | 'reading:coverError' }
     本页 → 宿主  { type:'reading:needChat' | 'reading:ready' }
               { type:'reading:needBooks' }
               { type:'reading:requestPage', bookId, pageNo }
               { type:'reading:saveProgress', bookId, pageNo }
               { type:'reading:importFile', file, title }
               { type:'reading:deleteBook', bookId }
+              { type:'reading:setCover', bookId, cover }    ← 2026-11-02: 换封面 (只写封面, 不动书)
               { type:'reading:chat', requestId, text, selected, pageContext }
               { type:'reading:pageState', ... }
               { type:'reading:closed' }
@@ -84,6 +86,13 @@
     <div class="rr-topbar">
       <button class="rr-back" id="rr-back">‹ 书架</button>
       <span class="rr-title" id="rr-book-title">未选择书籍</span>
+      <!--
+        字数统计 (2026-11-03):
+        书架卡片的说明区(书名/字数/页数/进度条)按用户要求去掉了,
+        整张卡片只留封面图。但字数这个信息不能跟着消失 ——
+        阅读页顶栏补上, 跟页码挨着。
+      -->
+      <span class="rr-sub" id="rr-book-stat"></span>
       <span class="rr-sub" id="rr-page-label">— / —</span>
     </div>
 
@@ -129,12 +138,29 @@
 
 <div id="rr-toast"></div>
 
+<!--
+  换封面 (2026-11-02)
+  · 选图 → 沙盒里压成小图 → 弹预览 → 确认后交给宿主存进 readingCovers
+  · 沙盒不碰 IndexedDB, 所以"选图/预览"在沙盒, "保存"在宿主
+-->
+<input type="file" id="rr-cover-input" accept="image/*" hidden>
+<div id="rr-cover-preview" class="rr-cover-preview">
+  <div class="rr-cover-preview-card">
+    <div class="rr-cover-preview-tip">用这张当封面？</div>
+    <img id="rr-cover-preview-img" alt="新封面预览">
+    <div class="rr-cover-preview-actions">
+      <button id="rr-cover-cancel" class="rr-cover-pbtn">取消</button>
+      <button id="rr-cover-confirm" class="rr-cover-pbtn primary">确认更换</button>
+    </div>
+  </div>
+</div>
+
 <div id="rr-import">
   <div class="t" id="rr-import-title">正在导入…</div>
   <div class="bar"><i id="rr-import-bar"></i></div>
   <div class="s" id="rr-import-sub">正在切页…</div>
 </div>
 
-<script src="../modules/reading-sandbox.js?v=0.1.1"></script>
+<script src="../modules/reading-sandbox.js?v=0.1.3"></script>
 </body>
 </html>
