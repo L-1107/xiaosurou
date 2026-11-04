@@ -1168,7 +1168,17 @@
 //   反向验证: _reports/cinema-test/reverse-verify-json-override.cjs (2 个用例全报红)
 //   index.html 的 ?v=：modules/cinema-chat.js 0.2.3 → 0.2.4 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.116.0';
+// v0.2.117.0 —— 删掉影院聊天那笔临时分段计时 (2026-11-05)
+//
+//   上一版 (v0.2.115.0 / a58f188) 为了定位"影院聊天慢"临时加了一段计时:
+//   回复超过 8 秒就在聊天区打一行「⏱ 取上下文 x s ／ 建提示词 x s ／ API x s」。
+//   后来定位到真因是【提示词里两条打架的指令】(v0.2.116.0 / 7d7cde2),
+//   计时没用了 —— 用户要求删掉, 不留多余代码。
+//   本次只删代码, 不改任何行为。
+//
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.4 → 0.2.5 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.117.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
