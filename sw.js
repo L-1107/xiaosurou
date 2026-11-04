@@ -937,7 +937,35 @@
 //   index.html 的 ?v=：reading-sandbox/index.html 里的
 //   reading-sandbox.css 0.1.3 → 0.1.4、reading-sandbox.js 0.1.2 → 0.1.3。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.108.0';
+// ============================================================
+// v0.2.109.0 —— 修「竖屏在线短剧: 一集播完没总结 / 播一半 Live 重连 / 总结只有半截」(2026-11-04)
+//
+//   用户 2026-11-03 晚上实测 (家庭影院 → 在线短剧):
+//   "这次的短剧是竖屏的, 一集播完第一次没总结剧情, 第二次播一半观影API重连,
+//    最后总结的剧情就只有半截; 测试了一下, 好像横屏的在线短剧又可以正常总结剧情"
+//
+//   真因不是竖屏/横屏, 是【一集长度 vs 2 分钟的摘要间隔】:
+//   短剧模式下长剧式的「每 2 分钟一段」阶段摘要一直在跑, 它同时干三件事:
+//     ① 抢那条唯一的摘要通道 → 一集播完那一刻正好撞上在途请求 → 这一集白看
+//     ② 和「每集单集剧情」写同一张表、同一个主键 (id="<剧名>#<ep>") →
+//        段号跟集号都是 1,2,3… → 短集时段落摘要在集后发, 把这一集顶成半截
+//     ③ 每次阶段摘要后 S._needFreshSession=true → 帧循环里 resetSession()
+//        → Live 断线重连 → 会话里累积的画面全没了 → 这一集只剩尾巴
+//   长集时阶段摘要在集中间发, 单集剧情后写能盖回来 → 看着就正常 (所以"横屏没事")。
+//
+//   修法 (modules/cinema-live.js):
+//     · 短剧一律不跑长剧式阶段摘要 (scheduleStageSummary / tickStageSummary /
+//       看门狗 三处都挡) —— 短剧的载体本来就只有「每集一条」
+//     · 短剧改成【每集播完换干净会话】—— 换在集与集之间, 不在一集中间,
+//       这一集的全部画面都在它自己那个会话里 → 总结完整
+//     · 段落记忆在短剧模式下不落库 (最后一道保险)
+//     · 单集总结失败 (Live 没连上) 不再静默丢弃 → 记忆页上显示红字
+//   长剧一行没动 (阶段摘要照旧)。
+//
+//   新增回归: tests/cinema-series-summary.test.cjs (19 条)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.1 → 2.4.2 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.109.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

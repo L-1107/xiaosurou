@@ -92,7 +92,7 @@ function makeLiveSandbox(opts) {
     nowPlayingEp: 0,
     seriesTitle: '某部短剧'
   };
-  const calls = { requestSummary: [], addEpisodeMemory: [], abort: [], warns: [] };
+  const calls = { requestSummary: [], addEpisodeMemory: [], abort: [], warns: [], resetSession: [] };
 
   const sandbox = {
     console: console,
@@ -146,6 +146,10 @@ function makeLiveSandbox(opts) {
       watchSession.pendingSummary = null;
       watchSession.summaryGhostUntil = Date.now() + 3000;
       return true;
+    },
+    // 🔴 2026-11-04: 一集播完会【换干净会话】(短剧专用) —— 这里是假的, 只记一下
+    resetSessionAfterEpisode: function (ep) {
+      calls.resetSession.push(ep);
     }
   };
   sandbox.window = sandbox;
