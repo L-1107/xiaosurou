@@ -1114,7 +1114,31 @@
 //   反向验证: _reports/cinema-test/reverse-verify-deskpet-choice.cjs (4 个用例全报红)
 //   index.html 的 ?v=：modules/pet-nest.js 0.0.35 → 0.0.36、modules/pet-speech.js 0.0.3 → 0.0.4。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.114.0';
+// v0.2.115.0 —— 影院聊天「慢/收不到回复」: 加分段计时, 先定位再改 (2026-11-05)
+//
+//   用户实测: "在影院里聊天非常慢, 好多次都没有等到回复; 但同样的 API 出来影院回复就很快;
+//             同样的网络条件和 API 渠道; 以前都聊得好好的, 今天改完才变"
+//   还有一次: "回复了没显示在影院聊天里, 但出去落在了外面聊天框里"
+//
+//   【已经查清 / 排除的】(都是逐字对比真代码, 不是推测)
+//     · 影院和外面的【请求体完全一致】: model / messages / temperature / top_p /
+//       presence_penalty / frequency_penalty / stream:false —— 逐字段对过
+//     · 外面也不是流式 (enableStreaming 默认 false, 用户也没开)
+//     · 外面也不是走谷歌原生 (用户用的是官方 DeepSeek + OpenAI 兼容路径)
+//     · 影院也没有走服务端代理 (沙盒里没有 ai-response.js, useProxy 恒 false; 外面也没开)
+//     · 发请求之前的等待都有上限: 取宿主上下文最多 2.5s, 取配置有快照就立刻返回
+//   → 也就是说【从代码静态对比里，找不到"影院比外面慢"的依据】。
+//
+//   【所以这一步只加计时，不改行为】—— 再猜下去就是瞎改。
+//   每条回复如果【超过 8 秒】，聊天区会多一行:
+//     ⏱ 这次等了 12.3s ｜ 取上下文 0.3s ／ 建提示词 0.1s ／ 准备配置 0.0s ／ API 11.9s
+//     （提示词 3210 字, 历史 20 条）
+//   正常快的时候不打印, 不刷屏。这一行能直接分开三种可能:
+//     ① 取上下文慢 ② 建提示词慢 ③ API 本身慢
+//
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.2 → 0.2.3 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.115.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

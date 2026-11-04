@@ -985,12 +985,23 @@
 
     try {
       var ui = window.CinemaLive;
+      // 🔴 2026-11-05: 【慢在哪一段】计时。
+      //   用户实测: "在影院里半天收不到回复, 主聊天里嗖嗖的, 同样的网络条件和 API 渠道"。
+      //   已经把两边的请求体逐字段比过了 —— model / messages / temperature / top_p /
+      //   presence_penalty / frequency_penalty / stream:false 完全一致,
+      //   所以不可能是"影院发的请求不一样"。剩下三种可能, 靠猜分不出来:
+      //     ① 取宿主上下文慢   ② 建提示词慢   ③ API 本身慢
+      //   这里把三段分开计时, 只在【超过 8 秒】时打一行到聊天区 ——
+      //   正常快的时候不打扰, 慢的时候一眼看出是哪一段。
+      var T0 = Date.now();
+      var tCtx = 0, tPrompt = 0, tPre = 0;
       if (ui && typeof ui.resetBubble === 'function') ui.resetBubble();
       if (ui && typeof ui.appendUserBubble === 'function') ui.appendUserBubble(msg);
 
       // ① 先问宿主要一份最新的上下文 (外面聊天框的历史 + 长期记忆 + 提示词)
       //    沙盒自己算不了这些 —— message-store / memory-summary 都不在沙盒里。
       var hostCtx = await requestHostContext(msg);
+      tCtx = Date.now() - T0;
 
       // ⚠️ 顺序很重要: 先读历史, 再落库。
       //   反过来的话, 刚落库的那句会在历史里出现一次, 我们又手动拼一次 → 重复。
@@ -998,10 +1009,12 @@
       var memoryCtx = await buildMemoryContext(chat, msg, hostCtx);
       var cinemaCtx = getCinemaContext();
       var systemPrompt = await buildSystemPrompt(chat, memoryCtx, cinemaCtx, hostCtx);
+      tPrompt = Date.now() - T0 - tCtx;
 
       await persistToMainChat(chat, { role: 'user', content: msg, timestamp: Date.now() });
 
       var cfg = await getMainApiConfig();
+      tPre = Date.now() - T0 - tCtx - tPrompt;
       var messages = history.concat([{ role: 'user', content: msg }]);
 
       // 🔴 2026-10-29: 附上【最近一段剧情结束时的那张画面】(阅后即焚)。
@@ -1052,6 +1065,19 @@
 
       full = String(answer || full || '').trim();
       if (!full) throw new Error('主 API 返回了空内容');
+
+      // 🔴 2026-11-05: 慢的话把三段耗时打出来 —— 一眼看出是"取上下文"、"建提示词"
+      //   还是"API 本身"。正常快 (<8s) 不打，不刷屏。
+      var tAll = Date.now() - T0;
+      if (tAll >= 8000 && ui && typeof ui.appendSystemLine === 'function') {
+        var tApi = tAll - tCtx - tPrompt - tPre;
+        ui.appendSystemLine('⏱ 这次等了 ' + (tAll / 1000).toFixed(1) + 's ｜ ' +
+          '取上下文 ' + (tCtx / 1000).toFixed(1) + 's ／ ' +
+          '建提示词 ' + (tPrompt / 1000).toFixed(1) + 's ／ ' +
+          '准备配置 ' + (tPre / 1000).toFixed(1) + 's ／ ' +
+          'API ' + (tApi / 1000).toFixed(1) + 's' +
+          '（提示词 ' + systemPrompt.length + ' 字, 历史 ' + history.length + ' 条）');
+      }
 
       // 收尾渲染: 优先走 finalizeAssistantBubble —— 它会把整段按段落拆成多个气泡,
       // 观感跟主聊天一致 (主聊天 AI 一次会显示好几条)。没有就回退原来的单气泡。
