@@ -142,6 +142,8 @@ function makeFakeElement(id) {
 //   failStageCount 前 N 次阶段摘要返回「太短的正文」(模拟模型没写出来)
 //   failEpisodeCount 前 N 次单集总结【不回话】(模拟 API 抽风)
 //   waitAfterEpMs 一集播完之后等多久才开下一集 (决定自动重试来不来得及)
+//   localFiles     本地文件路线: 每个文件多少秒 (数组)。给了就走本地文件那条路
+//                   (从头到尾不调 setSeries → watchSession.kind 恒为 'film')
 async function runScene(cfg) {
   const o = Object.assign({
     epLenSec: 90, eps: 4, turnLatencyMs: 8000, isSeries: true,
@@ -334,6 +336,26 @@ async function runScene(cfg) {
       // ⚠️ 失败重试那条路要等: 90 秒超时 → 再等 60 秒 → 重试 → 出结果 ≈ 160 秒,
       //   所以 waitAfterEpMs 得给够, 否则集与集之间会先把重试取消掉。
       await pump(o.waitAfterEpMs);
+    }
+  } else if (o.localFiles && o.localFiles.length) {
+    // 本地文件路线: 每个文件播多少秒 → 播完 onVideoEnded → 换下一个文件。
+    //   (从头到尾不调 setSeries → watchSession.kind 恒为 'film')
+    for (let f = 0; f < o.localFiles.length; f++) {
+      if (f > 0) {
+        // 换下一个本地文件: 换片 → Live 重连 → 视频 play 事件 (resumeFrames)
+        video.ended = false; video.paused = false;
+        CL.onVideoSourceChanged();
+        let p2 = null;
+        try { p2 = CL.enable(); } catch (e) { /* */ }
+        if (p2 && p2.catch) p2.catch(() => {});
+        await pump(1500);
+        CL.resumeFrames('模拟 video play 事件');
+      }
+      video.duration = o.localFiles[f];      // 告诉它这个文件本身有多长
+      await pump(o.localFiles[f] * 1000);
+      video.ended = true;
+      CL.onVideoEnded();
+      await pump(20000);                     // 等补记那一段跑完
     }
   } else {
     // 长剧: 一口气播 6 分钟 (跨过 2 分钟那条线)
@@ -579,6 +601,57 @@ section('⑧ 短剧 · 换集早于失败被察觉 → 直接放弃重试');
   const eps = st.saved.map(s => s.ep).sort((a, b) => a - b);
   check('第 1 集没落库', eps.indexOf(1) === -1, '落库集号=' + JSON.stringify(eps));
   check('第 2 集照常落库', eps.indexOf(2) !== -1, '落库集号=' + JSON.stringify(eps));
+}
+
+// ---------------------------------------------------------------------------
+// ⑨ 本地上传的短剧文件 (一集一个文件, 不到 2 分钟) —— 2026-11-04
+// ---------------------------------------------------------------------------
+// 【用户问的】"如果本地上传路径传的是不到两分钟一集的短剧, 那播放结束的时候会总结剧情吗"
+// 【旧写法的问题】(实测 _reports/cinema-test/probe-local-file-summary.cjs)
+//   · 40 秒的文件 → 落【0 段】—— "低于 60 秒门槛"把这一整集丢掉了, 一集白看
+//   · 3 个 90 秒的文件连着放 → 落【4 段】, 边界全跨集:
+//       段1 = 文件1 全部(91 帧)  段2 = 文件2 的前 30 秒(27 帧)
+//       段3 = 文件2 的后 51 秒  段4 = 文件3 的前 55 秒, 文件3 最后 35 秒直接丢了
+//   根因: 2 分钟窗口的起点 lastSummaryStartedAt 只有 tickStageSummary 的收尾会更新,
+//   而"影片播完补记最后一段"走的是 runStageSummary 直调, 绕过了那个收尾。
+section('⑨ 本地上传的短剧文件 → 每集各成一段, 不跨集、不丢尾巴');
+{
+  {
+    const r = await runScene({ isSeries: false, localFiles: [90] });
+    const segs = r.stat.saved;
+    check('90 秒的本地文件播完 → 落了一段剧情', segs.length === 1, '落库段数=' + segs.length);
+    check('这一段是「段落」不是「集」',
+      segs.length === 1 && !/第\s*\d+\s*集/.test(segs[0].text));
+    const f = r.stat.turns.filter(t => t.kind === 'stage').map(t => t.framesInSession);
+    check('这一段看到的是整集的画面 (90 帧左右)', f.length === 1 && f[0] >= 85,
+      '帧数=' + JSON.stringify(f));
+  }
+  {
+    // 🔴 40 秒那种短集: 旧写法低于 60 秒门槛 → 整集丢掉
+    const r = await runScene({ isSeries: false, localFiles: [40] });
+    check('40 秒的本地文件播完 → 也要总结 (不能整集丢掉)', r.stat.saved.length === 1,
+      '落库段数=' + r.stat.saved.length);
+    const f = r.stat.turns.filter(t => t.kind === 'stage').map(t => t.framesInSession);
+    check('这一段看到的是整集的画面 (40 帧左右)', f.length === 1 && f[0] >= 35,
+      '帧数=' + JSON.stringify(f));
+  }
+  {
+    // 3 个 90 秒的文件连着放 → 3 段, 各覆盖自己那一集
+    const r = await runScene({ isSeries: false, localFiles: [90, 90, 90] });
+    const eps = r.stat.saved.map(s => s.ep);
+    check('3 个本地文件 → 3 段, 编号 1/2/3', JSON.stringify(eps) === '[1,2,3]',
+      '段号=' + JSON.stringify(eps));
+    // 每段只看得到自己那一集 (~90 帧); 跨集的话会变成 27/51/55 这种
+    const f = r.stat.turns.filter(t => t.kind === 'stage').map(t => t.framesInSession);
+    check('每段只看得到自己那一集的画面 (没跨集)',
+      f.length === 3 && f.every(n => n >= 85), '各段帧数=' + JSON.stringify(f));
+  }
+  {
+    // 长文件 (≥ 2 分钟) → 老规矩照旧: 2 分钟一段 + 播完补一段
+    const r = await runScene({ isSeries: false, localFiles: [200] });
+    check('200 秒的本地文件 → 2 段 (2 分钟一段 + 播完补一段)', r.stat.saved.length === 2,
+      '落库段数=' + r.stat.saved.length);
+  }
 }
 
 // ---------------------------------------------------------------------------

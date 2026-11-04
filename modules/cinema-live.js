@@ -4686,9 +4686,50 @@
     // 用户原话: "不足五分钟的剧情结束的时候总结一次"。
     // 播完这一刻 Live 还连着、帧还在发, 是唯一还能看到画面的时候;
     // 下一轮再播时, 这不到五分钟的内容就永远没人记得了。
-    if (gapMs >= 60000) {
-      runStageSummary({ reason: '影片播完, 补记最后一段', minGapMs: 60000 })
-        .then(function (ok) { if (ok) renderPlotPanel(); })
+    //
+    // ⚠️ 2026-11-04 (用户问的「本地上传一集一个文件的短剧, 播放结束会总结吗」):
+    //   判据要用【这个文件本身有多长】, 不能一刀切 60 秒。
+    //   · 文件本身 < 2 分钟 → 这一轮【就是】一集】→ 播完【必须】总结一次
+    //     (哪怕这一集只有 40 秒 —— 原来的 60 秒门槛会把这种文件整集丢掉, 一集白看)
+    //   · 文件 ≥ 2 分钟 → 长剧那套照旧: 每 2 分钟一段, 播完剩下那一截够 60 秒才补记
+    //
+    //   实测 (_reports/cinema-test/probe-local-file-summary.cjs):
+    //     90 秒 × 1 个文件 → 1 段 (91 帧, 覆盖整集)
+    //     40 秒 × 1 个文件 → 0 段  ← 旧写法 (低于 60 秒门槛, 整集丢掉)
+    var fileMs = 0;
+    try {
+      var vEnd = getVideo();
+      if (vEnd && vEnd.duration && isFinite(vEnd.duration)) fileMs = vEnd.duration * 1000;
+    } catch (e) { /* noop */ }
+    var isShortFile = fileMs > 0 && fileMs < WATCH_SUMMARY_INTERVAL_MS;
+    var needFinal = isShortFile ? gapMs > 0 : gapMs >= 60000;
+    if (needFinal) {
+      runStageSummary({
+        reason: isShortFile ? '短文件播完, 记这一集' : '影片播完, 补记最后一段',
+        minGapMs: isShortFile ? 0 : 60000
+      })
+        .then(function (ok) {
+          if (!ok) return;
+          // ⚠️ 2026-11-04: 补记成功后, 把【2 分钟窗口的起点】重置到现在。
+          //
+          // 【不重置会怎样】(实测 _reports/cinema-test/probe-local-file-summary.cjs)
+          //   本地上传一集一个文件的短剧 (每集 90 秒), 连着放 3 个文件:
+          //     旧写法 → 落【4 段】, 边界全跨集:
+          //       段1 = 文件1 全部(91 帧)
+          //       段2 = 文件2 的前 30 秒(27 帧)   ← 跟文件1 混在一段里
+          //       段3 = 文件2 的后 51 秒(51 帧)
+          //       段4 = 文件3 的前 55 秒(55 帧)
+          //       而且文件3 最后那 35 秒【直接丢了】—— 因为"离上次总结不到 60 秒",
+          //       播完不补记 (门槛 60 秒是当初为长剧定的)。
+          //   根因: 2 分钟窗口的起点 lastSummaryStartedAt 只有 tickStageSummary 的
+          //   收尾才会更新, 而"影片播完补记最后一段"走的是 runStageSummary 直调,
+          //   绕过了那个收尾 → 上一个文件的时长一直算进下一个文件的窗口里。
+          //
+          // 【重置之后】每个文件从零起算 → 一个文件正好一段, 互不跨集, 尾巴也不丢。
+          //   (长剧那套"每 2 分钟一段"照旧 —— 只是每次补记之后窗口重新起算。)
+          watchSession.lastSummaryStartedAt = totalPlayedMs();
+          renderPlotPanel();
+        })
         .catch(function (e) { logWarn('补记最后一段失败:', e && e.message); });
     } else if (gapMs > 0) {
       log('这一轮只看了 ' + Math.round(gapMs / 1000) + 's, 没什么可补记的');

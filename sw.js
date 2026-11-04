@@ -1021,7 +1021,37 @@
 //   反向验证: _reports/cinema-test/reverse-verify-episode-retry.cjs (6 个用例全报红)
 //   index.html 的 ?v=：modules/cinema-live.js 2.4.3 → 2.4.4 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.111.0';
+// v0.2.112.0 —— 本地上传的短剧「一集一个文件」: 每集各成一段 (2026-11-04)
+//
+//   用户问: "如果本地上传路径传的是不到两分钟一集的短剧, 那播放结束的时候会总结剧情吗"
+//   用户定的规则: "多于两分钟的两分钟一总结, 低于两分钟的结束的时候一总结"
+//
+//   实测 (探针 _reports/cinema-test/probe-local-file-summary.cjs, 真模块 + 假时钟):
+//   旧写法 (走长剧路线, 播完一刀切 60 秒门槛, 且补记后不重置 2 分钟窗口):
+//     · 40 秒 × 1 个文件 → 落【0 段】(低于 60 秒门槛 → 整集丢掉, 一集白看)
+//     · 90 秒 × 3 个文件 → 落【4 段】, 边界全跨集:
+//         段1 = 文件1 全部(91 帧)   段2 = 文件2 的前 30 秒(27 帧)
+//         段3 = 文件2 的后 51 秒     段4 = 文件3 的前 55 秒
+//         且文件3 最后那 35 秒【直接丢了】
+//   根因: 2 分钟窗口的起点 lastSummaryStartedAt 只有 tickStageSummary 的收尾会更新,
+//     而"影片播完补记最后一段"走的是 runStageSummary 直调, 绕过了那个收尾
+//     → 上一个文件的时长一直算进下一个文件的窗口里。
+//
+//   修法 (modules/cinema-live.js, onVideoEnded 的长剧分支):
+//     · 判据改成看【这个文件本身有多长】, 不再一刀切 60 秒:
+//         文件 < 2 分钟  → 这一轮就是一集 → 播完【必须】总结一次 (哪怕只有 40 秒)
+//         文件 ≥ 2 分钟 → 长剧那套照旧: 每 2 分钟一段 + 播完剩下一截够 60 秒才补记
+//     · 补记成功后重置 2 分钟窗口的起点 → 每个文件从零起算
+//       → 一个文件正好一段, 互不跨集, 尾巴也不丢
+//
+//   新写法实测: 40 秒 × 1 → 1 段(41 帧)  |  90 秒 × 3 → 3 段(各 90/91 帧)  |  200 秒 × 1 → 2 段
+//   长剧那套一行没动: 120 秒 × 4 → stage@120/240/360/480, 4 段落库。
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑨ 组 (8 条, 共 53 条)
+//   反向验证: _reports/cinema-test/reverse-verify-local-file.cjs (2 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.4 → 2.4.5 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.112.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
