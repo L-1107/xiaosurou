@@ -1138,7 +1138,37 @@
 //
 //   index.html 的 ?v=：modules/cinema-chat.js 0.2.2 → 0.2.3 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.115.0';
+// v0.2.116.0 —— 影院聊天「模型回 I'm having a hard time fulfilling your request」 (2026-11-05)
+//
+//   用户实测: 影院里要么等不来回复, 要么回一句
+//     "I'm having a hard time fulfilling your request. Can I help you with something else instead?"
+//     一出去（主聊天）聊就正常; 不需要播剧、不需要图。
+//
+//   【对照出来的原因】(跟读书屋横向比出来的)
+//     读书屋复用影院同一份 stripInstructionSystem (reading-room.js:621),
+//     所以"预设里的 JSON 指令剥不干净"两边风险一样。
+//     但读书屋在提示词【最末尾】追加了「输出要求（必须遵守）」, 里面明写
+//     "用普通段落说话…不要用 JSON、代码块或列表符号开头" (reading-room.js:648)
+//     → 残留的 JSON 要求被压住 → 书屋正常。
+//     影院原来只在场景块里说「用普通文字说话」, 【从没提过 JSON】→ 压不住。
+//
+//   【链条】预设里那句「必须输出 JSON 数组」没被剥干净（DROP_LINE_PATTERNS 只认
+//     「严格遵守 JSON / thought_chain / "type": / ```json」这几种写法, 换个说法就漏）
+//     → 模型同时收到「必须输出 JSON 数组」和「用普通文字说话」两条打架的指令
+//     → 它直接放弃, 回那句英文。这也解释了为什么不是"卡", 而是很快回一句废话。
+//
+//   【修法 A】(用户 2026-11-05 选定)
+//     ① DROP_LINE_PATTERNS 补上常见说法（必须…JSON / JSON 数组 / 输出…JSON /
+//        按…格式输出 等）—— 反向验证: 退回旧名单时 5 种常见写法漏 4 种
+//     ② buildSystemPrompt 在【所有块之后】追加「输出要求（必须遵守）」,
+//        声明「覆盖上面的一切格式要求」「那些 JSON 要求一律作废」
+//        —— 跟读书屋同一个做法, 最后一句说了算
+//
+//   新增回归: tests/cinema-chat.test.cjs ②-b / ②-c (7 条, 共 97 条)
+//   反向验证: _reports/cinema-test/reverse-verify-json-override.cjs (2 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.3 → 0.2.4 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.116.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

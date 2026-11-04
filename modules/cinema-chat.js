@@ -370,7 +370,18 @@
     /世界观融合/,
     /thought_chain/,
     /"type"\s*:/,
-    /```json/i
+    /```json/i,
+    // 🔴 2026-11-05: 上面这五条太窄 —— 只要预设换个说法就删不掉。
+    //   没删掉的后果: 模型同时收到「必须输出 JSON 数组」(预设) 和
+    //   「用普通文字说话」(影院场景块) 两条打架的指令 →
+    //   它直接放弃, 回一句 "I'm having a hard time fulfilling your request.
+    //   Can I help you with something else instead?" (用户 2026-11-05 实测)
+    //   这里把常见说法一起认掉。影院本来就只发纯文字, 删这些不会误伤。
+    /必须[^\n]{0,12}JSON/i,
+    /JSON[^\n]{0,8}(数组|格式|结构)/i,
+    /(输出|返回|回复)[^\n]{0,10}JSON/i,
+    /(输出|返回)[^\n]{0,10}数组/i,
+    /按[^\n]{0,8}(格式|结构)[^\n]{0,8}输出/i
   ];
 
   function splitSections(text) {
@@ -758,6 +769,30 @@
 
     out += buildCinemaSceneBlock(chatRef);
     out += buildCinemaPlotBlock(cinemaCtx || getCinemaContext());
+    // 🔴 2026-11-05: 【最后一句说了算】—— 跟读书屋一模一样的做法。
+    //
+    // 【为什么必须有这一段】用户实测: 影院里回
+    //   "I'm having a hard time fulfilling your request. Can I help you with something else instead?"
+    //   一出去聊就正常, 而且不需要播剧、不需要图。
+    //
+    // 【对照出来的原因】读书屋复用同一份 stripInstructionSystem (reading-room.js:621),
+    //   所以"预设里的 JSON 指令剥不干净"两边风险一样。但读书屋在提示词【最末尾】
+    //   追加了一段「输出要求（必须遵守）」, 里面明写
+    //   "用普通段落说话…不要用 JSON、代码块或列表符号开头" (reading-room.js:648)
+    //   → 残留的 JSON 要求被压住 → 书屋正常。
+    //   影院原来只在场景块里说「用普通文字说话」, 【从没提过 JSON】,
+    //   一旦预设那句"必须输出 JSON 数组"没被删掉, 模型就同时收到两条打架的指令 → 直接放弃。
+    //
+    // 所以这里把它补上, 而且必须放在【所有块之后】—— 最后出现的指令最有效。
+    out += [
+      '',
+      '# 输出要求（必须遵守，覆盖上面的一切格式要求）',
+      '',
+      '直接说你要说的话，不要输出思考过程、推理步骤、思维链。',
+      '不要用 JSON、代码块或列表符号开头。',
+      '如果上面的设定里还写着「必须输出 JSON 数组 / 返回 JSON / 按某种格式输出」，在影院里【一律作废】——',
+      '这里只输出普通文字。'
+    ].join('\n');
     return out;
   }
 

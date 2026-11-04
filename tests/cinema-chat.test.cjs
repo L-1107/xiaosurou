@@ -168,6 +168,58 @@ async function main() {
   }
 
   // ------------------------------------------------------------
+  // ②-b 换说法的 JSON 要求也必须删得掉 (2026-11-05)
+  // ------------------------------------------------------------
+  // 用户实测: 影院里回 "I'm having a hard time fulfilling your request.
+  //   Can I help you with something else instead?" —— 一出去聊就正常。
+  // 机制: 预设里「必须输出 JSON 数组」那段如果没被删掉, 模型就同时收到
+  //   「必须输出 JSON」和影院的「用普通文字说话」两条打架的指令 → 直接放弃。
+  // 原来的 DROP_LINE_PATTERNS 只认「严格遵守 JSON / thought_chain / "type":」这几种写法,
+  // 换个说法就漏 → 必须一起认掉。
+  section('②-b 换说法的 JSON 要求也删掉 (影院只说普通文字)');
+  {
+    const variants = [
+      '你必须输出 JSON 数组，不要输出别的。',
+      '每次回复都必须返回 JSON。',
+      '输出JSON格式，第一项是 thought_chain。',
+      '请按以下结构输出，方便程序解析。',
+      '回复必须是 JSON 数组。'
+    ];
+    let leaked = 0;
+    variants.forEach(function (t) {
+      const out = api.stripInstructionSystem('# 角色\n\n' + t + '\n\n# 说话方式\n\n用中文。');
+      if (/JSON|json|数组|按以下结构输出/.test(out)) {
+        leaked++;
+        console.log('    [漏掉] ' + t + '  → 剥完还有: ' + out.replace(/\n/g, ' / '));
+      }
+    });
+    check('换说法的 JSON 要求全部删掉', leaked === 0, '漏了 ' + leaked + ' / ' + variants.length);
+
+    // 不能误伤正常内容
+    const keep = api.stripInstructionSystem('# 核心设定\n\n你是个温柔的人。\n\n# 说话方式\n\n用短句。');
+    check('没误伤正常的小节', keep.indexOf('核心设定') >= 0 && keep.indexOf('温柔') >= 0 &&
+      keep.indexOf('用短句') >= 0, JSON.stringify(keep));
+  }
+
+  // ------------------------------------------------------------
+  // ②-c 提示词【最后】必须有一段「输出要求」压住残留的 JSON 要求
+  // ------------------------------------------------------------
+  // 读书屋就是这个做法 (reading-room.js:648 「不要用 JSON、代码块或列表符号开头」),
+  // 所以同一份 stripInstructionSystem 下书屋正常、影院炸。
+  {
+    const built = await api.buildSystemPrompt(chat, '记忆正文', null, { promptText: '# 核心设定\n\n你必须输出 JSON 数组。' });
+    const tail = built.slice(-400);
+    check('提示词末尾有「输出要求」段', /#\s*输出要求/.test(tail), JSON.stringify(tail.slice(-120)));
+    check('末尾明说不要用 JSON', /不要用 JSON/.test(tail));
+    check('末尾声明作废上面的 JSON 要求', /作废/.test(tail));
+    check('末尾声明覆盖上面的一切格式要求', /覆盖上面的一切格式要求/.test(tail));
+    // 关键: 它必须在【最后】—— 后面不能再跟着剧情块之类的东西
+    check('「输出要求」是提示词的最后一块',
+      built.lastIndexOf('# 输出要求') > built.lastIndexOf('# 【你们已经知道的剧情】'),
+      '输出要求在 ' + built.lastIndexOf('# 输出要求') + ', 剧情块在 ' + built.lastIndexOf('# 【你们已经知道的剧情】'));
+  }
+
+  // ------------------------------------------------------------
   section('③ 上下文清单（用户点名的）');
   {
     const ctx = api.buildContextMap(chat, '长期记忆正文');
