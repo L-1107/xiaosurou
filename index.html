@@ -311,14 +311,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
              没有参考图(首次生成) → 照旧写盲盒配色。羽化(终形态)例外，本就该换配色。
        index.html 的 ?v=：modules/pet-nest.js 0.0.25 → 0.0.26。
        ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
-  <script src="modules/pet-nest.js?v=0.0.35" defer></script>
+  <script src="modules/pet-nest.js?v=0.0.36" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
   <script src="modules/pet-image.js?v=0.0.9" defer></script>
   <!-- 宠物说话系统 (宠物自己开口)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.listPets() 和 rules.dimensionScores()。 -->
-  <script src="modules/pet-speech.js?v=0.0.3" defer></script>
-  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.19">
+  <script src="modules/pet-speech.js?v=0.0.4" defer></script>
+  <link rel="stylesheet" href="css/pet-nest.css?v=0.0.20">
   <!-- 主入口（最后加载，调用 init） -->
   <script src="modules/init-and-state.js?v=0.0.84" defer></script>
   <!-- 第九层：DOMContentLoaded 外部的独立模块 -->
@@ -8914,6 +8914,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
       <button class="pn-btn pn-btn-primary" type="button" data-pn-action="feed">喂食</button>
     </div>
     <div class="pn-actions">
+      <!-- 🔴 2026-11-04: 聊天框上显示哪一只 (以前写死第一只, 养两只换不了) -->
+      <button class="pn-btn" type="button" id="pn-deskpet-btn">让它当桌宠</button>
       <button class="pn-btn" type="button" id="pn-evolve-btn">换个模样</button>
       <button class="pn-btn" type="button" data-pn-close>关上</button>
     </div>

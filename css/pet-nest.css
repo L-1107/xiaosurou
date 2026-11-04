@@ -473,6 +473,17 @@
   background: #63584a;
 }
 
+/* 🔴 2026-11-04: 「让它当桌宠」已经在当的时候会禁用 —— 必须有【看得见】的样子,
+   不然用户一直点、以为按钮坏了（跟 2026-10-26 那两个说话开关同一类问题）。 */
+#pet-nest-screen .pn-btn:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+#pet-nest-screen .pn-btn:disabled:hover {
+  background: #efe8d4;
+}
+
 #pet-nest-screen .pn-events {
   list-style: none;
   padding: 0;

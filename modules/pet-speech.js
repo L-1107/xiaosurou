@@ -601,28 +601,37 @@
       });
 
       // 气泡先冒省略号（用户定的）
-      if (!o.silent) showBubble('…');
+      // 🔴 2026-11-04: 只有【聊天框上那只】才有资格把泡泡画在自己头上。
+      //   以前桌宠固定是第一只, 所以"谁说话都往同一个身上画"看着还凑合;
+      //   现在用户能自己选桌宠了 —— 如果小花的台词冒在小花头上、小白的台词
+      //   也冒在小花头上, 就是张冠李戴。不是它说的话 → 走 toast (跟桌宠藏起来时一样)。
+      const speakerIsDeskPet = !window.PetNest || typeof window.PetNest.isDesktopPet !== 'function'
+        ? true
+        : window.PetNest.isDesktopPet(petRow.id);
+      const canBubble = !o.silent && speakerIsDeskPet;
+      if (canBubble) showBubble('…');
 
       let text = '';
       try {
         text = await callModel(prompt, { temperature: 0.95, maxTokens: 120 });
       } catch (e) {
         console.warn('[宠物说话] 生成失败（忽略，不影响别的功能）:', (e && e.message) || e);
-        if (!o.silent) hideBubble();
+        if (canBubble) hideBubble();
         return null;
       }
       text = String(text || '').trim();
       if (!text) {
-        if (!o.silent) hideBubble();
+        if (canBubble) hideBubble();
         return null;
       }
       // 别让它说太长
       if (text.length > 120) text = text.slice(0, 120);
 
-      if (!o.silent) showBubble(text);
+      if (canBubble) showBubble(text);
 
-      // 桌宠不在聊天页 → 气泡看不见 → 补一个 toast，别让这句话白说
-      if (!o.silent && !desktopPetVisible()) {
+      // 气泡看不见 → 补一个 toast，别让这句话白说
+      //   两种情况: ① 桌宠不在聊天页 ② 说话的这只不是聊天框上那只
+      if (!o.silent && (!canBubble || !desktopPetVisible())) {
         toastSafe(((pet && pet.name) || '宠物') + '：' + text);
       }
 

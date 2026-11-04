@@ -975,7 +975,14 @@
     desktopPetPos: 'petNestDesktopPetPos',
     petNestEnabled: 'petNestEnabled',
     // 🔴 2026-10-29: 选了哪套房间背景 (存 id, 图片是内置的不用存)
-    roomBackground: 'petNestRoomBackground'
+    roomBackground: 'petNestRoomBackground',
+    // 🔴 2026-11-04: 聊天框上那只桌宠是【哪一只】(存 pet id)。
+    //   用户 2026-11-04 问: "我养两只宠物, 可不可以自己选一只显示在聊天框上做桌宠,
+    //   现在好像是默认第一只显示" —— 以前 currentDesktopPet() 写死 pets[0]
+    //   (按 createdAt 排, 就是最早领养的那只), 养了两只也换不了。
+    //   存 localStorage 而不是 pets 表: 这是【显示偏好】不是宠物数据,
+    //   换设备/重装 App 丢了也只是回落到第一只, 不该为它升 db 版本。
+    desktopPetId: 'petNestDesktopPetId'
   };
 
   // ============================================================
@@ -3106,11 +3113,38 @@
       evolveBtn.classList.toggle('pn-btn-glow', want);
       evolveBtn.textContent = want ? (pet.needsRedraw ? '✨ 换个新模样' : '✨ 换个模样') : '换个模样';
     }
+    // 🔴 2026-11-04: 「让它当桌宠」—— 是不是已经在当, 一眼看得出来
+    const deskBtn = el('pn-deskpet-btn');
+    if (deskBtn) {
+      const isEggPet = isHatchKind(pet.kind) && Number(pet.stage || 0) <= 0;
+      const already = isDesktopPet(pet.id);
+      deskBtn.textContent = already ? '✔ 聊天框里就是它' : '让它当桌宠';
+      deskBtn.disabled = already || isEggPet;
+      deskBtn.title = isEggPet
+        ? '它还是颗蛋，没有模样可以显示在聊天框上'
+        : (already ? '现在聊天框上显示的就是它' : '把它放到聊天框上当桌宠');
+      deskBtn.onclick = function () { chooseDesktopPet(pet.id); };
+    }
     const actions = el('pn-care-actions');
     if (actions) actions.hidden = pet.status !== 'ready';
     const dlg = el('pn-care-dialog');
     if (dlg && !dlg.open) dlg.showModal();
     dlg.dataset.petId = petId;
+  }
+
+  /**
+   * 把某只宠物放到聊天框上当桌宠 (2026-11-04, 用户要求)
+   * 只改显示偏好, 不动宠物数据; 换完立刻重画, 不用退出宠物屋。
+   */
+  async function chooseDesktopPet(petId) {
+    if (!petId) return;
+    const pet = (uiState ? uiState.pets : []).find(p => p.id === petId);
+    if (!pet) return;
+    setDesktopPetId(petId);
+    const dlg = el('pn-care-dialog');
+    if (dlg && dlg.open) dlg.close();
+    showToastSafe(pet.name + ' 现在是聊天框上的桌宠了', 'success');
+    try { await refreshAll(); } catch (e) { /* 刷新失败也已经把选择存下了 */ }
   }
 
   async function doCare(action) {
@@ -3559,9 +3593,56 @@
   // 最近一次拿到的 state —— 让「桌宠刚显示出来」的时候能补画 sprite
   let desktopPetState = null;
 
+  /**
+   * 从宠物列表里挑出「该当桌宠」的那一只 (纯函数, 方便测)
+   * @param pets   按 createdAt 排好的宠物数组
+   * @param wantId 用户选的那只 (空 = 没选过)
+   * 规则: 选过且那只还在 → 就是它; 否则回落第一只 (= 最早领养的那只, 老行为)。
+   */
+  function pickDesktopPet(pets, wantId) {
+    const list = Array.isArray(pets) ? pets : [];
+    if (!list.length) return null;
+    if (wantId) {
+      const hit = list.find(p => p && p.id === wantId);
+      if (hit) return hit;
+    }
+    return list[0];
+  }
+
   function currentDesktopPet() {
     const st = desktopPetState;
-    return st && st.pets && st.pets.length ? st.pets[0] : null;
+    if (!st || !st.pets || !st.pets.length) return null;
+    // 🔴 2026-11-04: 用户在宠物屋里选过哪一只, 就显示哪一只 (以前写死 pets[0])。
+    const want = desktopPetId();
+    const pet = pickDesktopPet(st.pets, want);
+    // 选的那只不在了 (饿满 3 天被删 / 清过数据) → 把失效的记录清掉, 免得每次白查。
+    if (want && (!pet || pet.id !== want)) setDesktopPetId('');
+    return pet;
+  }
+
+  /** 用户选中当桌宠的那只 (空 = 没选过, 走默认的第一只) */
+  function desktopPetId() {
+    try { return localStorage.getItem(STORAGE_KEYS.desktopPetId) || ''; }
+    catch (e) { return ''; }
+  }
+
+  function setDesktopPetId(id) {
+    try {
+      if (id) localStorage.setItem(STORAGE_KEYS.desktopPetId, String(id));
+      else localStorage.removeItem(STORAGE_KEYS.desktopPetId);
+    } catch (e) { /* 忽略 */ }
+  }
+
+  /**
+   * 这只宠物现在是不是聊天框上那只桌宠?
+   * pet-speech.js 用它决定「这句话的泡泡该不该挂在桌宠身上」——
+   * 不挂在这只身上还硬往桌宠身上画, 就是【张冠李戴】:
+   * 用户明明把小花设成桌宠, 结果小白的台词冒在小花头上。
+   */
+  function isDesktopPet(petId) {
+    if (!petId) return false;
+    const cur = currentDesktopPet();
+    return !!(cur && cur.id === petId);
   }
 
   /** 只画内容（sprite / 名字 / 气泡），不管可见性 */
@@ -4640,6 +4721,9 @@ function careActionForButton(btnId) {
       refreshAll();
     },
     desktopPetEnabled,
+    // 🔴 2026-11-04: 聊天框上那只桌宠是谁 —— 用户可以在宠物屋里自己选
+    desktopPetId: desktopPetId,
+    isDesktopPet: isDesktopPet,
     // 所有宠物（pet-speech.js 巡视时要用）
     listPets,
     // 每天自动换一次造型（手动也可以调）
@@ -4651,6 +4735,8 @@ function careActionForButton(btnId) {
       grainsFor,
       // 桌宠命中判定 (纯函数, 测试直接验算)
       petHitTest,
+      // 🔴 2026-11-04: 「该显示哪一只当桌宠」纯函数 (测试直接验算)
+      pickDesktopPet,
       temperament,
       growthTarget,
       currentSatiety,

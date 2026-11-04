@@ -1090,7 +1090,31 @@
 //   index.html 的 ?v=：cinema-live.js 2.4.5 → 2.4.6 / cinema-room.js 0.34.0 → 0.34.1
 //                  / cinema-room.css 0.38.2 → 0.38.3 / cinema-storage.js 0.5.3 → 0.5.4
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.113.0';
+// v0.2.114.0 —— 宠物屋: 养了两只可以自己选哪只当桌宠 (2026-11-04)
+//
+//   用户问: "项目里有个宠物屋, 如果我养两只宠物, 可不可以自己选择一只宠物
+//            显示在聊天框上做桌宠, 现在好像是默认第一只显示"
+//   → 是的, 原来写死了。currentDesktopPet() 里就是 `st.pets[0]`,
+//     而 pets 是 orderBy('createdAt') 排的 → 永远是【最早领养的那只】。
+//
+//   【改法】
+//     · 存一个「选中的 pet id」(localStorage `petNestDesktopPetId`) ——
+//       这是显示偏好不是宠物数据, 丢了也只是回落第一只, 不该为它升 db 版本
+//     · 抽出纯函数 pickDesktopPet(pets, wantId): 选过且还在 → 那只;
+//       否则回落第一只 (= 老行为)。选的那只被删了(饿满 3 天)会顺手清掉失效记录
+//     · 照顾弹窗(点宠物打开)加一个按钮「让它当桌宠」——
+//       已经是桌宠时变成「✔ 聊天框里就是它」并禁用; 还是颗蛋的不给选
+//       (没有模样, 选了桌宠就是个空壳)
+//
+//   【顺带修一个「张冠李戴」】pet-speech.js 说话时不管是谁, 泡泡都画在
+//   唯一那只桌宠身上。以前桌宠固定第一只, 看着还凑合; 现在能换了不判就是
+//   「小白的台词冒在小花头上」。现在只有桌宠本人才冒泡泡, 别的改走 toast。
+//
+//   新增回归: tests/pet-nest.test.cjs 新增一节 (20 条, 共 564 条)
+//   反向验证: _reports/cinema-test/reverse-verify-deskpet-choice.cjs (4 个用例全报红)
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.35 → 0.0.36、modules/pet-speech.js 0.0.3 → 0.0.4。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.114.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

@@ -2707,9 +2707,87 @@ section('桌宠菜单快捷照顾（喂食 / 摸摸 / 陪玩）');
       /image\/png/.test(imgSrc4));
   }
 
+  // ============================================================
+  // 桌宠: 养了两只能自己选显示哪一只 (2026-11-04)
+  // ============================================================
+  // 【用户原话】"如果我养俩只宠物, 可不可以自己选择一只宠物显示在聊天框上做桌宠,
+  //             现在好像是默认第一只显示"
+  // 【原来】currentDesktopPet() 里写死 `st.pets[0]` —— pets 按 createdAt 排,
+  //   所以永远是【最早领养的那只】, 养了第二只也换不了。
+  // 【现在】存一个「选中的 pet id」(localStorage, 显示偏好不落宠物表),
+  //   选了就用选的那只; 那只不在了(饿死删掉/清数据)就回落第一只。
+  section('桌宠: 养了两只可以自己选显示哪一只 (2026-11-04)');
+  {
+    const nestSrc = read('modules/pet-nest.js');
+    const htmlSrc = read('index.html');
+    const speechSrc = read('modules/pet-speech.js');
+    const R = loadRules();
+    const pick = R.pickDesktopPet;
+
+    // ---- 纯函数: 该显示哪一只 ----
+    const A = { id: 'a', name: '小白' };   // 先领养
+    const B = { id: 'b', name: '小花' };   // 后领养
+    check('pickDesktopPet 暴露给测试了', typeof pick === 'function');
+    if (typeof pick === 'function') {
+      check('没选过 → 第一只(= 最早领养的那只, 老行为不变)',
+        pick([A, B], '') === A, '拿到了 ' + (pick([A, B], '') || {}).name);
+      check('选了第二只 → 就是第二只',
+        pick([A, B], 'b') === B, '拿到了 ' + (pick([A, B], 'b') || {}).name);
+      check('选回第一只 → 第一只',
+        pick([A, B], 'a') === A);
+      check('选的那只已经没了 → 回落第一只(不显示空白)',
+        pick([A, B], 'ghost') === A, '拿到了 ' + (pick([A, B], 'ghost') || {}).name);
+      check('只有一只时怎么选都是它',
+        pick([B], 'a') === B && pick([B], '') === B);
+      check('一只都没有 → null (别炸)', pick([], 'a') === null && pick(null, 'a') === null);
+      check('列表里有脏数据(缺 id)也不炸',
+        pick([null, A], 'a') === A);
+    }
+
+    // ---- 接线: 桌宠真的按选的那只画 ----
+    check('currentDesktopPet 用的是 pickDesktopPet(列表, 选中的那只)',
+      /const pet = pickDesktopPet\(st\.pets, want\)/.test(nestSrc));
+    check('选中的那只不在了会清掉失效记录',
+      /if \(want && \(!pet \|\| pet\.id !== want\)\) setDesktopPetId\(''\)/.test(nestSrc));
+    check('选择存在 localStorage(显示偏好, 不为它升 db 版本)',
+      /desktopPetId: 'petNestDesktopPetId'/.test(nestSrc) &&
+      /localStorage\.getItem\(STORAGE_KEYS\.desktopPetId\)/.test(nestSrc));
+    check('PetNest 导出了 desktopPetId / isDesktopPet',
+      /desktopPetId: desktopPetId,/.test(nestSrc) &&
+      /isDesktopPet: isDesktopPet,/.test(nestSrc));
+
+    // ---- UI: 在哪儿选 ----
+    check('照顾弹窗里有「让它当桌宠」按钮', htmlSrc.includes('id="pn-deskpet-btn"'));
+    check('打开某只宠物的弹窗时会同步这个按钮的状态',
+      /const deskBtn = el\('pn-deskpet-btn'\)/.test(nestSrc));
+    check('已经是桌宠时按钮写「聊天框里就是它」并禁用',
+      /already \? '✔ 聊天框里就是它' : '让它当桌宠'/.test(nestSrc) &&
+      /deskBtn\.disabled = already \|\| isEggPet/.test(nestSrc));
+    check('还是颗蛋的不给当桌宠(没有模样可显示)',
+      /deskBtn\.disabled = already \|\| isEggPet/.test(nestSrc) &&
+      nestSrc.includes('它还是颗蛋，没有模样可以显示在聊天框上'));
+    check('点了会存下选择并立刻重画',
+      /function chooseDesktopPet\(petId\)/.test(nestSrc) &&
+      /deskBtn\.onclick = function \(\) \{ chooseDesktopPet\(pet\.id\); \}/.test(nestSrc) &&
+      /setDesktopPetId\(petId\);[\s\S]{0,300}await refreshAll\(\)/.test(nestSrc));
+    // 禁用态必须看得出「不能点」—— 2026-10-26 那两个说话开关就吃过这个亏(灰着不说原因)
+    check('禁用的按钮有看得见的样式(不是点了没反应)',
+      /\.pn-btn:disabled\s*\{[\s\S]{0,120}opacity/.test(read('css/pet-nest.css')));
+
+    // ---- 说话: 只有桌宠本人才把泡泡挂在自己头上 ----
+    // 以前桌宠固定第一只, "谁说话都画在同一个身上"看着还凑合;
+    // 现在能换了 → 不判就是张冠李戴(小白的台词冒在小花头上)。
+    check('说话前会先问「这只就是桌宠吗」',
+      /window\.PetNest\.isDesktopPet\(petRow\.id\)/.test(speechSrc));
+    check('不是桌宠的那只不往桌宠身上画泡泡',
+      /const canBubble = !o\.silent && speakerIsDeskPet/.test(speechSrc) &&
+      /if \(canBubble\) showBubble\(/.test(speechSrc));
+    check('不是桌宠说的那句话改成 toast(不白说)',
+      /!o\.silent && \(!canBubble \|\| !desktopPetVisible\(\)\)/.test(speechSrc));
+  }
+
   printSummary();
 })().catch(e => { console.error(e); process.exit(1); });
-
 function printSummary() {
   console.log('\n================================');
   console.log('通过 ' + passed + ' / 失败 ' + failed);
