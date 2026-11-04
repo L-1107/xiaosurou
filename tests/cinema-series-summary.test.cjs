@@ -139,8 +139,11 @@ function makeFakeElement(id) {
 //   eps           播几集
 //   turnLatencyMs 一次 turn 多久 (模拟模型慢)
 //   isSeries      是不是短剧
+//   failStageCount 前 N 次阶段摘要返回「太短的正文」(模拟模型没写出来)
 async function runScene(cfg) {
-  const o = Object.assign({ epLenSec: 90, eps: 4, turnLatencyMs: 8000, isSeries: true }, cfg || {});
+  const o = Object.assign({
+    epLenSec: 90, eps: 4, turnLatencyMs: 8000, isSeries: true, failStageCount: 0
+  }, cfg || {});
   const clock = makeClock();
   const stat = {
     setupCount: 0,
@@ -194,11 +197,16 @@ async function runScene(cfg) {
         });
         const epMatch = raw.match(/第\s*(\d+)\s*集/);
         const isEpisode = kind === 'episode';
-        const text = isEpisode
+        let text = isEpisode
           ? ('第 ' + (epMatch ? epMatch[1] : '?') + ' 集，女主在雨夜赶到医院，发现男主正陪着另一个女人，' +
              '两人当场争执，女主甩门而去，男主追出门外却发现她已经上了出租车离开，本集停在出租车驶离医院门口的那一刻。')
           : ('【剧情进度】\n男女主在医院门口争执后分开。\n\n【本段剧情】\n女主赶到医院撞见男主陪着另一个女人，' +
              '当场吵起来，男主追出去时她已经上了出租车离开，这一段就停在这里。');
+        // 模拟「模型这次什么都没写出来」(正文太短 → 低于下限 → 这一段落不了库)
+        if (!isEpisode && o.failStageCount > 0) {
+          stat.stageCount = (stat.stageCount || 0) + 1;
+          if (stat.stageCount <= o.failStageCount) text = '嗯。';
+        }
         const chunks = 4;
         for (let i = 0; i < chunks; i++) {
           const piece = text.slice(0, Math.ceil(text.length * (i + 1) / chunks));
@@ -404,6 +412,40 @@ section('④ 源码护栏');
   check('一集播完会换干净会话', /function resetSessionAfterEpisode\(/.test(live));
   check('单集总结失败看得见 (Live 没就绪也记一条)',
     /requestEpisodeSummary[\s\S]{0,900}noteEpisodeFail\(ep, 'Gemini Live 没连上/.test(live));
+}
+
+// ---------------------------------------------------------------------------
+// ⑤ 长剧 · 阶段摘要失败 → 【不能立刻换会话】(2026-11-04)
+// ---------------------------------------------------------------------------
+section('⑤ 长剧 · 阶段摘要失败时不换会话, 重试才救得回来');
+{
+  // 第一次阶段摘要返回「太短的正文」= 模拟模型这次没写出来
+  const r = await runScene({ isSeries: false, epLenSec: 0, eps: 0, failStageCount: 1 });
+  const st = r.stat;
+
+  const stageTurns = st.turns.filter(t => t.kind === 'stage');
+  check('长剧发了阶段摘要', stageTurns.length >= 2,
+    '次数=' + stageTurns.length + ' 时间=' + JSON.stringify(stageTurns.map(t => Math.round((t.at - 1700000000000) / 1000))));
+
+  // 关键: 失败那一次之后, 【不能】立刻换会话。
+  //   旧写法 (失败也换) → 画面全丢 → 重试看到的是新画面 → 那一段的内容真的没了。
+  //   新写法 (失败不换) → 画面留着 → 重试看到同一批画面 → 那段保住了。
+  const failedAt = stageTurns[0].at;
+  const retryAt = stageTurns[1] ? stageTurns[1].at : 0;
+  check('失败后的重试在 60 秒左右发生 (没被重连拖成一整轮)',
+    retryAt > failedAt && (retryAt - failedAt) < 90000,
+    '间隔=' + Math.round((retryAt - failedAt) / 1000) + 's');
+
+  // 落库的段落: 失败那次不占段号, 重试成功后补上 → 段落数 = 成功次数
+  const segRows = st.saved.filter(s => !/第\s*\d+\s*集/.test(s.text));
+  check('失败的那一段被重试补回来了 (段落数 = 成功次数)',
+    segRows.length >= 2,
+    '落库段落数=' + segRows.length + '  阶段摘要次数=' + stageTurns.length);
+
+  // 换会话次数: 正常每段成功后换一次。失败那次【不该】多换一次
+  //   (成功 3 次 = 3 次换 + 1 次初始; 旧写法会多一次, 因为失败也换)
+  check('失败没有多换一次会话', st.setupCount <= 1 + segRows.length,
+    'setup=' + st.setupCount + '  段落数=' + segRows.length);
 }
 
 // ---------------------------------------------------------------------------

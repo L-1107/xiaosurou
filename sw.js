@@ -965,7 +965,31 @@
 //   新增回归: tests/cinema-series-summary.test.cjs (19 条)
 //   index.html 的 ?v=：modules/cinema-live.js 2.4.1 → 2.4.2 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.109.0';
+// ============================================================
+// v0.2.110.0 —— 长剧「阶段摘要失败 → 那一段整段丢」 (2026-11-04)
+//
+//   用户追问: "长剧如果每 2 分钟换一次会话, 是不是也会丢失部分剧情"
+//   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让模型只吐 2 个字):
+//
+//   旧写法 (失败也换会话): turn 120(失败) → 252(重试) → 372 → 492, 只落【2 段】
+//     第 1 次失败 → 换会话 → 画面全丢 → 重试是在新会话里发的, 模型看到的是
+//     重试后那 60 秒的画面, 不是原来那 2 分钟的 → 【0~120 秒那段真的没了】。
+//     而且重连那一轮还得等 Live 重新 ready, 重试被拖成一整轮 (252s)。
+//   新写法 (失败不换会话): turn 120(失败) → 192(重试) → 312 → 432, 落【3 段】
+//     第 1 次失败 → 【不换】→ 画面留着 → 60 秒后的重试还能看到同一批画面
+//     → 那一段保住了 (重试写出来的是 0~192 秒, 含失败那段), 重试也不用等重连。
+//
+//   修法 (modules/cinema-live.js):
+//     · runStageSummary 收尾: 【成功才换会话】; 失败不换 (画面留给重试)
+//     · tickStageSummary 重试分支: 连着失败【两次】才强制换
+//       (那才是 2026-10-29 要防的"帧一直累积 → turn 变慢 → 更容易失败"的恶性循环)
+//     · 累积上限: 正常每段换 120 帧; 失败后多攒 60 秒 = 180 帧
+//       (258 token/帧 ≈ 46k token, 窗口 128K) —— 仍在预算内
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑤ 组 (4 条)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.2 → 2.4.3 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.110.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

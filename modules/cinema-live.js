@@ -475,6 +475,9 @@
     sessionFrames: 0,
     // 到预算了 → 找一个空档换干净会话 (不继承旧上下文)
     _needFreshSession: false,
+    // 🔴 2026-11-04: 阶段摘要连着失败了几次 (失败时不换会话, 画面留着给重试看;
+    //   连着两次还不行才强制换 —— 见 runStageSummary 的收尾和 tickStageSummary)。
+    _stageFailStreak: 0,
     // 🔴 2026-11-04: 这一次的重连是【我们自己主动】换的 (短剧每集一换),
     //   不是"断了" —— 'ready' 时别再刷「✅ Gemini Live 已连接」那条提示。
     //   用【时间戳】而不是布尔标志: 万一这次换会话没换成功 (连上了但没 ready),
@@ -1887,17 +1890,38 @@
         return false;
       })
       .then(function (ok) {
-        // 🔴 2026-10-29 (一) 换干净会话 —— 【每次摘要尝试之后】都换, 成功失败都换。
-        //   Live 的每个 turn 都要重读会话里累积的全部帧 (官方: 视频输入 258 token/帧),
-        //   而会话上下文窗口只有 128,000 token。
-        //   换了之后: 本会话累积帧归零 → 单个 turn 的输入永远只有这一段的量
-        //   (2 分钟 @ 1 FPS = 120 帧 = 30,960 token = 预算的 24%) → 永远不撞上限。
-        //   【为什么失败也要换】: 不换的话, 失败那几次的累积帧会一直留着 →
-        //   下一个 turn 的输入更大 → 更慢 → 更容易失败 → 恶性循环。
-        //   换会话丢 resume handle → 不继承撑爆的上下文 → 不会重连风暴。
-        //   剧情不靠会话连续 (每段当场落库 + 提示词里的滚动锚), 换会话不丢剧情。
-        //   副作用是好的: 新会话只看本段画面 → 写出来的【本段剧情】更准。
-        S._needFreshSession = true;
+        // 🔴 2026-11-04 换会话的时机改了 —— 【成功才换, 失败先不换】。
+        //
+        // 【原来】成功失败都换 (2026-10-29 定的), 理由是: 不换的话, 失败那几次
+        //   累积的帧会一直留着 → 下一个 turn 的输入更大 → 更慢 → 更容易失败 → 恶性循环。
+        // 【那个理由是对的, 但代价被漏算了】
+        //   失败也换 = 失败那一段【既没落库、画面也没了】→ 整段剧情直接消失,
+        //   而且【重试也救不回来】—— 60 秒后的重试是在新会话里发的, 模型看到的是
+        //   重试后那 60 秒的画面, 不是原来那 2 分钟的。
+        //   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让模型只吐 2 个字):
+        //   4 次摘要只落 3 段, 第 1 段 (0~120 秒) 整段消失, 聊天区还明说
+        //   「这一段剧情没总结出来…60 秒后会再试一次」—— 而那次重试救不了它。
+        //
+        // 【现在】
+        //   成功 → 照旧换干净会话 (上下文归零, 下一段从零看, 摘要更准)
+        //   失败 → 【不换】! 画面留着, 60 秒后的重试还能看到同一批画面 → 有机会补上。
+        //   连着失败【两次】才强制换 (见 tickStageSummary) —— 那时才真的撑不住。
+        //
+        // 累积上限: 正常每段换 = 120 帧; 失败后多攒 60 秒 = 180 帧
+        //   (258 token/帧 ≈ 46k token, 窗口 128K) —— 仍在预算内。
+        //
+        // ⚠️ 「要不要换会话」这个判断【全文件只有这一处】(tests/cinema-heat 守着这条)。
+        //   · 成功            → 换 (上下文归零, 下一段从零看, 摘要更准)
+        //   · 失败            → 不换 (画面留着, 60 秒后的重试还能看到同一批)
+        //   · 连着失败两次    → 换 (这时帧才真的撑不住; 也是 2026-10-29
+        //                       "帧一直累积 → turn 变慢 → 更容易失败"要防的恶性循环)
+        var failStreak = ok ? 0 : ((S._stageFailStreak || 0) + 1);
+        var needFresh = ok || failStreak >= 2;
+        S._stageFailStreak = failStreak;
+        if (needFresh) {
+          S._needFreshSession = true;
+          S._stageFailStreak = 0;
+        }
         finishSummary(watchSession.pendingSummary);
         flushQueuedUserText();
         return ok;
@@ -1978,6 +2002,9 @@
           }
         }
         if (!S.enabled || S._leaving) return;
+        // 🔴 2026-11-04: 「要不要换会话」的判断在 runStageSummary 的收尾里
+        //   (全文件唯一一处 S._needFreshSession = true) —— 那儿已经处理了
+        //   「失败不换 / 连着失败两次才换」。这里只管排下一次重试。
         watchSession.lastSummaryStartedAt = totalPlayedMs();
         scheduleStageSummary(SUMMARY_RETRY_DELAY_MS);
       });

@@ -123,7 +123,7 @@ function countOf(hay, needle) {
     !/SESSION_FRAME_BUDGET/.test(LIVE));
 
   // -------------------------------------------------------------------------
-  section('3. 换干净会话（每次摘要尝试之后都换，成功失败都换）');
+  section('3. 换干净会话（成功才换；失败先不换，连着失败两次才换）');
   // -------------------------------------------------------------------------
   const markAll = countOf(LIVE, 'S._needFreshSession = true;');
   check('换会话标记全文件只有一处', markAll === 1, markAll + ' 处');
@@ -132,7 +132,7 @@ function countOf(hay, needle) {
   const rsBody = rsIdx >= 0 ? LIVE.slice(rsIdx) : '';
   const catchIdx = rsBody.indexOf('.catch(function (err) {');
   const markIdx = rsBody.indexOf('S._needFreshSession = true;');
-  check('标记在 .catch 之后 —— 失败也会换 (不然会恶性循环)',
+  check('标记在收尾钩子里 (.catch 之后) —— 成功/失败都会走到那个判断',
     catchIdx >= 0 && markIdx > catchIdx,
     'catch@' + catchIdx + ' mark@' + markIdx);
 
@@ -140,6 +140,17 @@ function countOf(hay, needle) {
   check('成功分支里【没有】标记 (只能在收尾钩子里)',
     okIdx >= 0 && markIdx > okIdx &&
     rsBody.slice(okIdx, catchIdx).indexOf('S._needFreshSession = true;') === -1);
+
+  // 🔴 2026-11-04 改的规则 (原先是"成功失败都换"):
+  //   失败【不】立刻换会话 —— 画面留着, 60 秒后的重试还能看到同一批画面。
+  //   旧写法"失败也换"的后果: 失败那一段既没落库、画面也没了 → 整段剧情直接消失,
+  //   而且重试救不回来 (重试是在新会话里发的, 模型看到的是重试后那 60 秒)。
+  //   连着失败两次才强制换 (那才是 2026-10-29 要防的"帧一直累积 → turn 变慢"的恶性循环)。
+  check('失败不立刻换 (连着失败两次才换)',
+    /needFresh = ok \|\| failStreak >= 2/.test(LIVE),
+    '收尾里要有 "failStreak >= 2" 这个条件');
+  check('失败次数有单独计数 (连续失败用)',
+    /_stageFailStreak/.test(LIVE));
 
   // ⚠️ 这两条必须【在换会话那一块里】找 —— 线上版 cinema-live.js 的别处
   //    也有 saveHandle(null) (连不上时清废 handle), 全文件搜会误判成绿。
