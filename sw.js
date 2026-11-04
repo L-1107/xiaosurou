@@ -989,7 +989,39 @@
 //   新增回归: tests/cinema-series-summary.test.cjs 第 ⑤ 组 (4 条)
 //   index.html 的 ?v=：modules/cinema-live.js 2.4.2 → 2.4.3 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.110.0';
+// v0.2.111.0 —— 短剧「一集播完总结时 API 抽风 → 这一集白看」 (2026-11-04)
+//
+//   用户追问: "短剧如果一集结束剧情总结的时候API抽风, 没能总结起, 是不是就瓜起了"
+//   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让服务端不回话):
+//
+//   旧写法: 一集播完 → 要一条单集剧情 → 模型 90 秒不回话 → 超时
+//     → 这一集在库里【直接没了】, 而聊天区一句提示都没有 → 用户以为看过了,
+//       直到几集之后点「精炼」才发现素材不对。
+//     而且就算之后重试, 画面也已经不在了 (失败就换会话) → 救不回来。
+//
+//   修法 (modules/cinema-live.js):
+//     · 一集总结失败 → 【不换会话】(这一集的画面还留在 Live 会话里)
+//       → 60 秒后自动重试一次 → 重试时模型看到的还是这一集 → 补得上, 不用重播
+//     · 重试成功 → 才换干净会话 (下一集从零开始看) + 聊天区「✅ 第 N 集补记上了」
+//     · 重试失败 → 聊天区「⚠️ 第 N 集还是没总结出来 —— 重播这一集就能补上」
+//     · 换集了就放弃重试 (画面混了会串味), 并且要跟用户说清楚
+//       · 重试【已经排好】时换集 → onSeriesEpisodeChanged 取消 + 清混在一起的画面
+//       · 换集【早于失败被察觉】→ scheduleEpisodeSummaryRetry 一开始就放弃
+//         (模型 90 秒不回话时用户先点了下一集 → 画面已经混了 → 重试没意义)
+//     · 放弃重试时【不】换会话: 新一集已经播了一会儿, 换掉就把新一集的画面也扔了
+//     · 重试成功 → 换会话时必须把【前情提要】喂回新会话
+//       (走 resetSessionAfterEpisode, 不能只 resetLiveSession)
+//       → 少这一步, 下一集开播时模型手里是空白的 → 下一集的单集剧情少了上一集的上下文
+//     · 换集时清掉上一集的画面 → 下一集不会跟上一集串味
+//       (实测: 清了 = 下一集那一回合只看到 90 帧; 没清 = 180 帧, 两集混一起)
+//     · 四个失败点全部补上聊天区提示 (原来只有面板红字, 用户基本不会去翻那一页)
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑥⑦⑧ 组 (17 条)
+//             tests/cinema-episode-summary.test.cjs 第 ⑦ 组 (5 条)
+//   反向验证: _reports/cinema-test/reverse-verify-episode-retry.cjs (6 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.3 → 2.4.4 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.111.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

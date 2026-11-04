@@ -140,9 +140,12 @@ function makeFakeElement(id) {
 //   turnLatencyMs 一次 turn 多久 (模拟模型慢)
 //   isSeries      是不是短剧
 //   failStageCount 前 N 次阶段摘要返回「太短的正文」(模拟模型没写出来)
+//   failEpisodeCount 前 N 次单集总结【不回话】(模拟 API 抽风)
+//   waitAfterEpMs 一集播完之后等多久才开下一集 (决定自动重试来不来得及)
 async function runScene(cfg) {
   const o = Object.assign({
-    epLenSec: 90, eps: 4, turnLatencyMs: 8000, isSeries: true, failStageCount: 0
+    epLenSec: 90, eps: 4, turnLatencyMs: 8000, isSeries: true,
+    failStageCount: 0, failEpisodeCount: 0, waitAfterEpMs: 15000
   }, cfg || {});
   const clock = makeClock();
   const stat = {
@@ -190,13 +193,20 @@ async function runScene(cfg) {
         if (/你刚刚看完了/.test(raw)) kind = 'episode';
         else if (/你刚看完了一段/.test(raw)) kind = 'stage';
         else if (/我们之前看过一部分|前情提要/.test(raw)) kind = 'recap';
+        const epMatch = raw.match(/第\s*(\d+)\s*集/);
+        const isEpisode = kind === 'episode';
         stat.turns.push({
           kind: kind,
           at: clock.now(),
-          framesInSession: this.frames
+          framesInSession: this.frames,
+          ep: isEpisode && epMatch ? Number(epMatch[1]) : 0
         });
-        const epMatch = raw.match(/第\s*(\d+)\s*集/);
-        const isEpisode = kind === 'episode';
+        // 🔴 模拟「API 抽风」: 前 N 次单集总结, 服务端【一句话都不回】
+        //   (真实世界 = 断网 / 模型抽风 → 那一次总结 90 秒后超时, 拿不到任何内容)
+        if (isEpisode) {
+          stat.epTurnCount = (stat.epTurnCount || 0) + 1;
+          if (stat.epTurnCount <= o.failEpisodeCount) return;
+        }
         let text = isEpisode
           ? ('第 ' + (epMatch ? epMatch[1] : '?') + ' 集，女主在雨夜赶到医院，发现男主正陪着另一个女人，' +
              '两人当场争执，女主甩门而去，男主追出门外却发现她已经上了出租车离开，本集停在出租车驶离医院门口的那一刻。')
@@ -320,7 +330,10 @@ async function runScene(cfg) {
       await pump(o.epLenSec * 1000);
       video.ended = true;
       CL.onVideoEnded();
-      await pump(15000);          // 给单集总结 + 换会话留时间
+      // 给单集总结 + 换会话留时间。
+      // ⚠️ 失败重试那条路要等: 90 秒超时 → 再等 60 秒 → 重试 → 出结果 ≈ 160 秒,
+      //   所以 waitAfterEpMs 得给够, 否则集与集之间会先把重试取消掉。
+      await pump(o.waitAfterEpMs);
     }
   } else {
     // 长剧: 一口气播 6 分钟 (跨过 2 分钟那条线)
@@ -412,6 +425,15 @@ section('④ 源码护栏');
   check('一集播完会换干净会话', /function resetSessionAfterEpisode\(/.test(live));
   check('单集总结失败看得见 (Live 没就绪也记一条)',
     /requestEpisodeSummary[\s\S]{0,900}noteEpisodeFail\(ep, 'Gemini Live 没连上/.test(live));
+  // ---- 2026-11-04: API 抽风 → 自动重试 ----
+  check('有「失败后 60 秒自动重试」这个函数', /function scheduleEpisodeSummaryRetry\(/.test(live));
+  check('自动重试的间隔是 60 秒', /EPISODE_SUMMARY_RETRY_MS\s*=\s*60\s*\*\s*1000/.test(live));
+  check('失败【不】换会话, 是成功才换',
+    /if \(ok\) \{\s*resetSessionAfterEpisode\(ep\);\s*\} else \{\s*scheduleEpisodeSummaryRetry\(ep\);/.test(live));
+  check('换集时会取消待重试的那一集',
+    /onSeriesEpisodeChanged[\s\S]{0,2500}clearTimeout\(S\._epRetryTimer\)/.test(live));
+  check('已经换集了就直接放弃重试',
+    /function scheduleEpisodeSummaryRetry[\s\S]{0,600}S\._curEp\s*&&\s*S\._curEp\s*!==\s*ep/.test(live));
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +468,117 @@ section('⑤ 长剧 · 阶段摘要失败时不换会话, 重试才救得回来'
   //   (成功 3 次 = 3 次换 + 1 次初始; 旧写法会多一次, 因为失败也换)
   check('失败没有多换一次会话', st.setupCount <= 1 + segRows.length,
     'setup=' + st.setupCount + '  段落数=' + segRows.length);
+}
+
+// ---------------------------------------------------------------------------
+// ⑥ 短剧 · 一集总结时 API 抽风 → 60 秒后自动重试, 把这一集补上 (2026-11-04)
+// ---------------------------------------------------------------------------
+// 【用户原话】"短剧如果一集结束剧情总结的时候API抽风, 没能总结起, 是不是就瓜起了"
+//
+// 【修法】失败【不换会话】(这一集的画面还留在会话里) → 60 秒后自动重试一次
+//   → 重试时模型看到的还是这一集 → 补得上, 不用重播。
+section('⑥ 短剧 · 一集总结失败 → 60 秒后自动重试, 把这一集补上');
+{
+  // 第 1 集的单集总结: 服务端一句话都不回 (模拟 API 抽风)
+  //   → 90 秒超时 → 判定失败 → 【不换会话】→ 60 秒后自动重试 → 成功补记
+  const r = await runScene({
+    epLenSec: 90, eps: 1, failEpisodeCount: 1, waitAfterEpMs: 220000
+  });
+  const st = r.stat;
+
+  const epTurns = st.turns.filter(t => t.kind === 'episode');
+  check('第 1 集发了两次单集总结 (第一次失败 + 自动重试)', epTurns.length === 2,
+    '次数=' + epTurns.length);
+
+  // 重试必须发生在失败【之后】(90s 超时 + 60s 重试延迟 ≈ 150s), 不能立刻重发
+  const gap = epTurns.length >= 2 ? epTurns[1].at - epTurns[0].at : 0;
+  check('重试发生在失败之后 (不是立刻重发)',
+    gap > 100000 && gap < 200000, '间隔=' + Math.round(gap / 1000) + 's');
+
+  // 🔴 最关键的一条: 重试时那一集的画面【还在】会话里。
+  //   失败就换会话 → 画面被扔掉 → 重试也救不回来 → 这一集白看。
+  const retryFrames = epTurns.length >= 2 ? epTurns[1].framesInSession : 0;
+  check('重试时那一集的画面还在会话里 (失败没有换会话)',
+    retryFrames >= 80, '重试那一回合之前累计 ' + retryFrames + ' 帧 (一集约 90 帧)');
+
+  // 聊天区两句话: 一句失败提醒, 一句补记成功
+  const warnLines = st.chatLines.filter(l => /第 1 集没总结出来/.test(l));
+  const okLines = st.chatLines.filter(l => /第 1 集补记上了/.test(l));
+  check('聊天区说了「这一集没总结出来」', warnLines.length >= 1, warnLines.length + ' 条');
+  check('聊天区说了「补记上了」', okLines.length >= 1, okLines.length + ' 条');
+
+  // 落库的确实是「单集剧情」不是段落摘要
+  const ep1 = st.saved.filter(s => s.ep === 1);
+  check('第 1 集最后还是落库了 (重试补上)', ep1.length >= 1,
+    'ep=1 的行数=' + ep1.length + '  全部落库=' + JSON.stringify(st.saved.map(s => s.ep)));
+  check('落库的确实是「单集剧情」不是段落摘要',
+    ep1.length >= 1 && /第\s*1\s*集/.test(ep1[ep1.length - 1].text),
+    ep1.length ? ep1[ep1.length - 1].text.slice(0, 24) : '(没有)');
+
+  // 重试成功后换会话 → 必须把前情提要喂回新会话,
+  //   否则下一集开播时模型手里是空白的 → 下一集的单集剧情少了上一集的上下文
+  const recapTurns = st.turns.filter(t => t.kind === 'recap');
+  check('重试成功后把前情提要喂回了新会话', recapTurns.length >= 1,
+    'recap 次数=' + recapTurns.length + '  turns=' + JSON.stringify(st.turns.map(t => t.kind)));
+}
+
+// ---------------------------------------------------------------------------
+// ⑦ 短剧 · 重试窗口里换集 → 放弃重试, 并说清楚 (2026-11-04)
+// ---------------------------------------------------------------------------
+section('⑦ 短剧 · 重试窗口里换集 → 放弃那次重试');
+{
+  // 第 1 集失败 → 60 秒后本来要重试; 用户在重试【之前】就点了第 2 集
+  //   → 重试必须被放弃 (画面混了, 重试出来的总结会串味), 而且要告知用户
+  const r = await runScene({
+    epLenSec: 90, eps: 2, failEpisodeCount: 1, waitAfterEpMs: 120000
+  });
+  const st = r.stat;
+
+  const cancelLines = st.chatLines.filter(l => /第 1 集.*(取消|放弃)/.test(l));
+  check('聊天区说了「自动重试取消了」', cancelLines.length >= 1,
+    cancelLines.length + ' 条: ' + JSON.stringify(cancelLines.map(s => s.slice(0, 30))));
+
+  // 换集之后【不能再】冒出第 1 集的重试 turn
+  const ep1Turns = st.turns.filter(t => t.kind === 'episode' && t.ep === 1);
+  check('换集后没有再发第 1 集的重试', ep1Turns.length <= 1, '第 1 集的 turn 数=' + ep1Turns.length);
+
+  // 🔴 换集时必须【清掉上一集的画面】—— 不清, 第 2 集的单集剧情就跟第 1 集串味
+  //   (模型在一个会话里同时看到两集的画面, 分不清哪段是哪集)。
+  //   清了 → 第 2 集那一回合只看得到自己那 90 帧; 没清 → 180 帧 (两集混一起)。
+  const ep2Turns = st.turns.filter(t => t.kind === 'episode' && t.ep === 2);
+  check('换集时清掉了上一集的画面 (下一集不会跟上一集串味)',
+    ep2Turns.length >= 1 && ep2Turns[0].framesInSession <= 95,
+    '第 2 集那一回合之前累计 ' + (ep2Turns.length ? ep2Turns[0].framesInSession : -1) +
+    ' 帧 (一集约 90 帧, 混了就是 180)');
+
+  // 第 1 集没补上 (放弃了), 第 2 集正常总结
+  const eps = st.saved.map(s => s.ep).sort((a, b) => a - b);
+  check('第 1 集没落库 (重试被放弃了)', eps.indexOf(1) === -1, '落库集号=' + JSON.stringify(eps));
+  check('第 2 集照常落库', eps.indexOf(2) !== -1, '落库集号=' + JSON.stringify(eps));
+}
+
+// ---------------------------------------------------------------------------
+// ⑧ 短剧 · 换集早于「失败被察觉」→ 也不要再重试 (2026-11-04)
+// ---------------------------------------------------------------------------
+// 场景: 模型 90 秒都没回话, 用户等不及先点了下一集 → 等到超时才发现失败,
+//   但那时候人已经在看下一集了 → 画面已经混在一起 → 重试必须直接放弃。
+section('⑧ 短剧 · 换集早于失败被察觉 → 直接放弃重试');
+{
+  const r = await runScene({
+    epLenSec: 90, eps: 2, failEpisodeCount: 1, waitAfterEpMs: 30000
+  });
+  const st = r.stat;
+
+  const cancelLines = st.chatLines.filter(l => /第 1 集.*(取消|放弃)/.test(l));
+  check('聊天区说了「自动重试取消了」', cancelLines.length >= 1,
+    cancelLines.length + ' 条: ' + JSON.stringify(cancelLines.map(s => s.slice(0, 30))));
+
+  const ep1Turns = st.turns.filter(t => t.kind === 'episode' && t.ep === 1);
+  check('第 1 集只发过一次 (没有重试)', ep1Turns.length === 1, '第 1 集的 turn 数=' + ep1Turns.length);
+
+  const eps = st.saved.map(s => s.ep).sort((a, b) => a - b);
+  check('第 1 集没落库', eps.indexOf(1) === -1, '落库集号=' + JSON.stringify(eps));
+  check('第 2 集照常落库', eps.indexOf(2) !== -1, '落库集号=' + JSON.stringify(eps));
 }
 
 // ---------------------------------------------------------------------------

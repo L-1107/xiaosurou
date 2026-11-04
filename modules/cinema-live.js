@@ -87,6 +87,10 @@
   //   (2026-10-29: 「此刻画面」实况通道整个取消了 —— 不再占这条通道。)
   var EPISODE_SUMMARY_WAIT_MS = 25000;
 
+  // 🔴 2026-11-04: 一集总结失败后, 隔多久自动重试一次。
+  //   60 秒 = 跟长剧阶段摘要的失败重试间隔一样 (SUMMARY_RETRY_DELAY_MS)。
+  var EPISODE_SUMMARY_RETRY_MS = 60 * 1000;
+
 
   // 🔴 2026-10-19 内容下限 —— 这次改造里最该单独拎出来的一条。
   //
@@ -478,6 +482,13 @@
     // 🔴 2026-11-04: 阶段摘要连着失败了几次 (失败时不换会话, 画面留着给重试看;
     //   连着两次还不行才强制换 —— 见 runStageSummary 的收尾和 tickStageSummary)。
     _stageFailStreak: 0,
+    // 🔴 2026-11-04: 短剧「一集总结失败 → 自动重试」的状态
+    //   _epRetryEp   = 正在等重试的那一集 (0 = 没有)
+    //   _epRetryTimer= 重试定时器
+    //   _curEp       = 当前正在播的那一集 (换集了就放弃上一集的重试)
+    _epRetryEp: 0,
+    _epRetryTimer: null,
+    _curEp: 0,
     // 🔴 2026-11-04: 这一次的重连是【我们自己主动】换的 (短剧每集一换),
     //   不是"断了" —— 'ready' 时别再刷「✅ Gemini Live 已连接」那条提示。
     //   用【时间戳】而不是布尔标志: 万一这次换会话没换成功 (连上了但没 ready),
@@ -2305,15 +2316,32 @@
     return true;
   }
 
+  /**
+   * 一集总结失败 → 聊天区明说 (2026-11-04)
+   *
+   * 【为什么必须说】实测 (探针 _reports/cinema-test/probe-series-summary.cjs,
+   *   让服务端不回话): 一集播完时 API 抽风 → 这一集的记忆直接没了, 而
+   *   聊天区一句提示都没有 → 用户以为看过了, 也不知道自己少了一集,
+   *   直到几集之后点「精炼」才发现素材不对。记忆页虽然有红字, 但
+   *   绝大多数时候用户根本不会去翻那一页。
+   */
+  function warnEpisodeSummaryFailed(ep, why) {
+    var msg = '⚠️ 第 ' + ep + ' 集没总结出来（' + (why || '未知原因') +
+      '）—— 60 秒后会自动重试一次；实在不行，重播这一集就能补上。';
+    appendSystemLine(msg);
+    logWarn(msg);
+  }
+
   /** 一集播完 → 要一条单集记忆 */
   function requestEpisodeSummary(ep) {
     if (S._leaving) return Promise.resolve('');
     if (!S.client || !S.client.isReady()) {
       // 🔴 2026-11-04: 原来这里【静默】返回 '' —— 用户只看到「这一集没总结」,
       //   面板上没有红字, 日志里也没有, 完全查不出原因。
-      //   现在明说: Live 没连上 → 这一集没生成, 重播这一集就能补上。
+      //   现在明说: Live 没连上 → 这一集没生成, 60 秒后会自动重试。
       logWarn('第 ' + ep + ' 集没总结: Gemini Live 没就绪');
       noteEpisodeFail(ep, 'Gemini Live 没连上, 这一集没能生成出来');
+      warnEpisodeSummaryFailed(ep, 'Gemini Live 没连上');
       renderPlotPanel();
       return Promise.resolve('');
     }
@@ -2329,6 +2357,8 @@
       if (!ok) {
         logWarn('第 ' + ep + ' 集没总结: 摘要通道一直被占着');
         noteEpisodeFail(ep, '摘要通道一直被占着, 没能生成出来');
+        warnEpisodeSummaryFailed(ep, '摘要通道一直被占着');
+        renderPlotPanel();
         return '';
       }
       return doRequestEpisodeSummary(ep);
@@ -2373,6 +2403,8 @@
         if (!t) {
           logWarn('第 ' + ep + ' 集没总结出内容');
           noteEpisodeFail(ep, '模型这次什么都没说');
+          warnEpisodeSummaryFailed(ep, '模型这次什么都没说');
+          renderPlotPanel();
           return '';
         }
         // 🔴 2026-10-19: addEpisodeMemory 自己会卡长度下限, 返回 false 就当这次没总结出来。
@@ -2380,6 +2412,8 @@
         //   于是那一集在数据上"看过了", 但其实什么也没记下来。
         if (!addEpisodeMemory(ep, t)) {
           noteEpisodeFail(ep, '这次只总结出几个字, 太短, 没存');
+          warnEpisodeSummaryFailed(ep, '这次只总结出几个字, 太短, 没存');
+          renderPlotPanel();
           return '';
         }
         return t;
@@ -2387,6 +2421,8 @@
       .catch(function (err) {
         logWarn('第 ' + ep + ' 集总结失败:', err.message);
         noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        warnEpisodeSummaryFailed(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        renderPlotPanel();
         return '';
       });
   }
@@ -3880,6 +3916,9 @@
     stopSummaryWatchdog();
     stopStageSummary();      // 连 Live 都断了, 摘要定时器必须跟着停
     stopFrameLoop();
+    // 🔴 2026-11-04: 别让"一集总结失败后的自动重试"在退出后还活着
+    if (S._epRetryTimer) { clearTimeout(S._epRetryTimer); S._epRetryTimer = null; }
+    S._epRetryEp = 0;
     if (S.client) {
       try { S.client.close(reason || 'disabled'); } catch (e) { /* noop */ }
       S.client = null;
@@ -4413,11 +4452,71 @@
     //   最后变成"每换一集就立刻发一次"。短剧现在不跑阶段摘要了, 但看门狗
     //   和别的逻辑还看这个基准 → 改成"这一集从现在开始重新计时"。
     watchSession.lastSummaryStartedAt = totalPlayedMs();
+    // 🔴 2026-11-04: 记下【当前正在播的这一集】—— 用来判断上一集那个
+    //   自动重试还有没有必要 (换集了就放弃, 否则画面混在一起会串味)。
+    S._curEp = watchSession.nowPlayingEp || 0;
+    // 上一集总结失败 → 画面还留着(等 60 秒后重试)。用户已经换集了 →
+    //   放弃那次重试, 并把混在一起的画面清掉 —— 否则这一集的画面会跟新一集
+    //   混进同一个会话 → 新一集的单集剧情会串味。
+    if (S._epRetryTimer) {
+      var lostEp = S._epRetryEp;
+      clearTimeout(S._epRetryTimer);
+      S._epRetryTimer = null;
+      S._epRetryEp = 0;
+      log('上一集还在等自动重试, 但你已经换集了 —— 放弃那次重试, 并清掉混在一起的画面');
+      // ⚠️ 必须告诉用户: 刚才说过"60 秒后会自动重试", 现在不重试了,
+      //   不说清楚就是说话不算话 (用户会一直等那个自动补上)。
+      appendSystemLine('⚠️ 第 ' + lostEp + ' 集的自动重试因为你换集了取消了 —— ' +
+        '重播这一集就能补上。');
+      resetLiveSession('换集, 清掉上一集的画面');
+    }
     if (S.enabled) {
       markPlaying();                           // 新片马上要播, 接着起表
       scheduleStageSummary();
     }
     renderPlotPanel();
+  }
+
+  /**
+   * 换干净会话 (Live 的会话上下文是累积的, 不换会撑爆)。
+   *
+   * ⚠️「什么时候换」是这套机制里最容易出事的地方 (2026-11-04 连踩两次):
+   *   · 一集中途换 → 这一集的画面没了 → 单集剧情只剩尾巴
+   *   · 失败就换   → 失败那一段既没落库、画面也没了 → 整段剧情消失
+   * 所以换的时机必须是【安全点】: 一集与一集之间 / 一次摘要成功之后。
+   */
+  function resetLiveSession(reason) {
+    if (!S.enabled || S._leaving) return;
+    if (!S.client || typeof S.client.resetSession !== 'function') return;
+    if (!S.client.isReady()) return;            // 没连上就别动 (重连逻辑会管)
+    if (watchSession.pendingSummary || watchSession.summaryBusy) {
+      // 还有在途请求 (比如后台合并提要) —— 晚点再说, 别把它的结果掐断。
+      log('还有在途请求, 这一轮不换会话 (' + (reason || '') + ')');
+      return;
+    }
+    S._routineResetAt = Date.now();   // 'ready' 时别再刷「✅ Gemini Live 已连接」
+    S._needFreshSession = false;
+    S.sessionFrames = 0;
+    // 本地那个存档点也一起扔 —— 不然下次进影院会拿一个废 handle 去续,
+    // 服务端一收到 setup 就把连接掐掉 (症状是"连上秒断")。
+    try { saveHandle(null); } catch (e) { /* noop */ }
+    log('🔄 换干净会话 (' + (reason || '未说明') + ')');
+    diagPush('fresh');
+    try {
+      var p = S.client.resetSession();
+      if (p && typeof p.then === 'function') {
+        p.then(function () {
+          log('已换成干净会话');
+        }).catch(function (err) {
+          logWarn('换干净会话失败:', (err && err.message) || err);
+          S._routineResetAt = 0;
+          scheduleReconnect('换干净会话失败');
+        });
+      }
+    } catch (e) {
+      logWarn('换干净会话失败:', (e && e.message) || e);
+      S._routineResetAt = 0;
+    }
   }
 
   /**
@@ -4439,38 +4538,86 @@
    *   (走 injectSeriesRecap 那条路), 陪聊和后面的总结才对得上。
    */
   function resetSessionAfterEpisode(ep) {
+    watchSession.seriesRecapInjectPending = true;   // 新会话要把前情提要喂回去
+    resetLiveSession('第 ' + ep + ' 集结束');
+  }
+
+  /**
+   * 一集总结失败 → 先不换会话, 60 秒后自动重试一次 (2026-11-04)
+   *
+   * 【为什么救得回来】一集播完时, 这一集的画面还在 Live 会话里
+   *   (短剧是"一集结束才换会话")。所以只要失败原因是"模型没回话 / 超时 /
+   *   写太短", 画面就还在 → 重试时模型看到的还是这一集 → 能补上, 不用重播。
+   *   反过来说: 失败就换会话 = 把这一集的画面扔了 → 重试也救不回来。
+   *
+   * 【什么时候救不了】Live 断线 / 发不出去 → 会话已经没了 → 画面也没了
+   *   → 重试大概率还是失败 → 那就放弃, 面板上留红字, 用户重播这一集就能补。
+   *
+   * 【换集了就放弃】60 秒的窗口里用户可能已经点了下一集 → 下一集的画面会
+   *   混进同一个会话 → 重试出来的总结会串味 → 所以换集即放弃 (见
+   *   onSeriesEpisodeChanged)。
+   */
+  function scheduleEpisodeSummaryRetry(ep) {
     if (!S.enabled || S._leaving) return;
-    if (!S.client || typeof S.client.resetSession !== 'function') return;
-    if (!S.client.isReady()) return;            // 没连上就别动 (重连逻辑会管)
-    if (watchSession.pendingSummary || watchSession.summaryBusy) {
-      // 还有在途请求 (比如后台合并提要) —— 晚点再说, 别把它的结果掐断。
-      log('第 ' + ep + ' 集结束但还有在途请求, 这一轮不换会话');
+    // ⚠️ 2026-11-04: 可能【已经换集了】才等到这次失败。
+    //   典型场景: 模型 90 秒都没回话 (API 抽风), 用户等不及先点了下一集 →
+    //   等到 90 秒超时才发现"第 N 集没总结出来", 但那时候人已经在看第 N+1 集了。
+    //   这时这一集的画面已经跟新一集混在同一个会话里 → 重试出来的"第 N 集总结"
+    //   会串味 → 直接放弃, 而且要跟用户说清楚 (刚才说过"60 秒后会自动重试",
+    //   不说清楚就是说话不算话, 用户会一直等那个自动补上)。
+    //
+    //   ⚠️ 这里【不能】换会话: 新一集已经播了一会儿, 换掉就把新一集的画面也扔了。
+    //   (换集那一刻已经换过一次了 —— 见 onSeriesEpisodeChanged。)
+    if (S._curEp && S._curEp !== ep) {
+      log('第 ' + ep + ' 集已经换到第 ' + S._curEp + ' 集, 不再自动重试');
+      appendSystemLine('⚠️ 第 ' + ep + ' 集的自动重试取消了 —— 你已经换到第 ' + S._curEp +
+        ' 集，重播那一集就能补上。');
       return;
     }
-    S._routineResetAt = Date.now();   // 'ready' 时别再刷「✅ Gemini Live 已连接」
-    S._needFreshSession = false;
-    S.sessionFrames = 0;
-    // 本地那个存档点也一起扔 —— 不然下次进影院会拿一个废 handle 去续,
-    // 服务端一收到 setup 就把连接掐掉 (症状是"连上秒断")。
-    try { saveHandle(null); } catch (e) { /* noop */ }
-    watchSession.seriesRecapInjectPending = true;   // 新会话要把前情提要喂回去
-    log('📺 第 ' + ep + ' 集结束 → 换干净会话 (下一集从零开始看)');
-    diagPush('fresh');
-    try {
-      var p = S.client.resetSession();
-      if (p && typeof p.then === 'function') {
-        p.then(function () {
-          log('已换成干净会话');
-        }).catch(function (err) {
-          logWarn('换干净会话失败:', (err && err.message) || err);
-          S._routineResetAt = 0;
-          scheduleReconnect('换干净会话失败');
-        });
+    if (S._epRetryTimer) { clearTimeout(S._epRetryTimer); S._epRetryTimer = null; }
+    S._epRetryEp = ep;
+    S._epRetryTimer = setTimeout(function () {
+      S._epRetryTimer = null;
+      var want = S._epRetryEp;
+      S._epRetryEp = 0;
+      if (!want || !S.enabled || S._leaving) return;
+      // 换集了就放弃 (画面混了, 重试会串味)
+      // ⚠️ 这里【不能】换会话: 走到这一步说明换集那一刻没拦住(没走 onSeriesEpisodeChanged),
+      //   新一集很可能已经播了一会儿 → 换掉就把新一集的画面也扔了。
+      //   放弃重试就够了, 画面留着给新一集。
+      if (S._curEp && S._curEp !== want) {
+        log('第 ' + want + ' 集已经换到第 ' + S._curEp + ' 集, 放弃自动重试');
+        appendSystemLine('⚠️ 第 ' + want + ' 集的自动重试取消了 —— 你已经换到第 ' + S._curEp +
+          ' 集，重播那一集就能补上。');
+        return;
       }
-    } catch (e) {
-      logWarn('换干净会话失败:', (e && e.message) || e);
-      S._routineResetAt = 0;
-    }
+      if (!S.client || !S.client.isReady()) {
+        log('第 ' + want + ' 集重试时 Live 没就绪, 放弃');
+        resetLiveSession('第 ' + want + ' 集重试时 Live 没就绪');
+        return;
+      }
+      log('🔁 重试第 ' + want + ' 集的单集剧情');
+      requestEpisodeSummary(want).then(function (text) {
+        var ok = !!(text && String(text).trim());
+        if (ok) {
+          if (want > watchSession.seriesLastEp) watchSession.seriesLastEp = want;
+          renderPlotPanel();
+          appendSystemLine('✅ 第 ' + want + ' 集补记上了（刚才那次没总结出来，已自动重试补上）。');
+          // ⚠️ 这里必须走 resetSessionAfterEpisode, 不能只 resetLiveSession:
+          //   resetSessionAfterEpisode 会顺带把【前情提要】重新喂回新会话。
+          //   少这一步 → 下一集开播时模型手里是空白的(不知道上一集演到哪)
+          //   → 下一集的单集剧情就少了上一集的上下文。
+          resetSessionAfterEpisode(want);
+        } else {
+          appendSystemLine('⚠️ 第 ' + want + ' 集还是没总结出来 —— 重播这一集就能补上。');
+          // 失败 → 画面留着也没用了(用户会重播这一集) → 换干净会话, 重播从头看
+          resetLiveSession('第 ' + want + ' 集重试失败');
+        }
+      }).catch(function (err) {
+        logWarn('第 ' + want + ' 集重试失败:', err && err.message);
+        resetLiveSession('第 ' + want + ' 集重试失败');
+      });
+    }, EPISODE_SUMMARY_RETRY_MS);
   }
 
   /** 自然播放结束 → 停发帧, 不关 Live, 不退出房间, 用户还能继续聊 */
@@ -4497,19 +4644,26 @@
         // 🔴 2026-10-27: 只有【真的总结出来】才推进"看到第几集"。
         //   以前这里不看结果直接推进 —— 于是这一集在数据上"看过了",
         //   状态条也写着"看到第 N 集", 但库里根本没这一集, 用户自己都发现不了。
-        if (text && ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
+        var ok = !!(text && String(text).trim());
+        if (ok && ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
         renderPlotPanel();
         // 攒够一批评分压成跨场提要 (失败不丢数据, 各集都在库里)
-        return maybeMergeSeriesRecap();
-      }).then(function () {
-        // 🔴 2026-11-04: 一集结束 → 换干净会话。
-        //   必须【等单集剧情写完 + 后台合并跑完】再换 —— 换早了会把在途的结果掐断。
-        //   (换在集与集之间, 绝不能换在一集中间, 否则这一集只剩尾巴)
-        resetSessionAfterEpisode(ep);
+        return maybeMergeSeriesRecap().then(function () { return ok; });
+      }).then(function (ok) {
+        // 🔴 2026-11-04: 成功 → 换干净会话 (下一集从零开始看);
+        //   失败 → 【不换】! 画面还留着, 60 秒后自动重试一次 (见 scheduleEpisodeSummaryRetry)。
+        //   失败就换 = 把这一集的画面扔了 → 重试也救不回来 → 这一集白看。
+        if (ok) {
+          resetSessionAfterEpisode(ep);
+        } else {
+          scheduleEpisodeSummaryRetry(ep);
+        }
       }).catch(function (err) {
         logWarn('第 ' + ep + ' 集记录失败:', err.message);
         noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        warnEpisodeSummaryFailed(ep, '生成失败: ' + (err && err.message ? err.message : err));
         renderPlotPanel();
+        scheduleEpisodeSummaryRetry(ep);
       });
       return;
     }
