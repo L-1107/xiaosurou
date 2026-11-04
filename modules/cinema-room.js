@@ -177,6 +177,15 @@
     '    </div>',
     '    <div class="cinema-source-pane" data-src-pane="local">',
     '      <div class="cinema-source-desc">从手机里选一个视频文件，存进本地片单。选完就能播，进度会自动记住。</div>',
+    // 🔴 2026-11-04 作品名: 同一部作品的几集填【一样的名字】, 就共用一份剧情底稿/
+    //   前情提要 (换到下一集时模型还知道上一集演了什么)。
+    //   留空 = 不分组 (同一个聊天里所有本地影片共用一份, 会互相串台)。
+    '      <div class="cinema-work-row">',
+    '        <input type="text" id="cinema-work-name" class="cinema-work-name" list="cinema-work-name-list"',
+    '               placeholder="作品名（选填）" aria-label="作品名" autocomplete="off" autocorrect="off" spellcheck="false">',
+    '        <datalist id="cinema-work-name-list"></datalist>',
+    '      </div>',
+    '      <div class="cinema-source-desc cinema-work-hint">同一作品填一样的名字（可以下拉选以前用过的）。留空 = 不分组。</div>',
     '      <button class="cinema-source-go" id="cinema-src-local">选择本地视频</button>',
     '    </div>',
     // ---- 短剧库 (2026-10-07) ----
@@ -350,6 +359,9 @@
       addBtn: document.getElementById('cinema-add-btn'),
       drawerAdd: document.getElementById('cinema-drawer-add'),
       fileInput: document.getElementById('cinema-file-input'),
+      // 🔴 2026-11-04: 作品名 (同一部作品的几集共用一份剧情底稿)
+      workName: document.getElementById('cinema-work-name'),
+      workNameList: document.getElementById('cinema-work-name-list'),
       diagBox: document.getElementById('cinema-diag-box'),
       diagToggle: document.getElementById('cinema-diag-toggle'),
       closeBtn: document.getElementById('cinema-room-close'),
@@ -957,12 +969,17 @@
     } catch (e) { /* 拿不到配额就跳过检查 */ }
 
     let record;
+    // 🔴 2026-11-04: 作品名 —— 同一部作品的几集填一样的名字, 就共用一份
+    //   剧情底稿/前情提要 (key = film:<chatId>:<作品名>)。
+    //   留空 = 不分组 (老行为)。
+    const workName = readWorkName();
     try {
-      record = await S.addFilm(file, { name: stripExt(file.name) });
+      record = await S.addFilm(file, { name: stripExt(file.name), workName: workName });
     } catch (e) {
       reportError('保存失败', describeSaveError(e));
       return;
     }
+    if (workName) rememberWorkName(workName);
 
     await refreshList();
     if (softWarn && softWarn.warn) {
@@ -980,6 +997,56 @@
 
   function stripExt(name) {
     return String(name || '').replace(/\.[^/.]+$/, '');
+  }
+
+  // --------------------------------------------------------------------------
+  // 作品名 (2026-11-04)
+  // --------------------------------------------------------------------------
+  // 【为什么需要】本地影片的剧情底稿 key 原来只有 'film:'+chatId —— 同一个聊天里
+  //   【所有】本地影片共用一份 → 换到完全不相干的另一部作品, 也会把上一部的剧情
+  //   灌给模型 (串台)。用户原话: "我是疑惑怎么区分这个新文件是不是跟上一个文件
+  //   属于同一个动漫"。
+  // 【现在】同一部作品的几集填【一样的作品名】→ 共用一份底稿 → 换到下一集时,
+  //   模型还知道上一集演了什么; 不同作品名 → 各存各的, 不串台。
+  //   留空 = 老行为 (一个聊天里共用一份)。
+  const WORK_NAMES_KEY = 'cinema.workNames';
+
+  function readWorkName() {
+    try {
+      const el = els.workName;
+      return el ? String(el.value || '').trim() : '';
+    } catch (e) { return ''; }
+  }
+
+  function listWorkNames() {
+    try {
+      const raw = localStorage.getItem(WORK_NAMES_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && x) : [];
+    } catch (e) { return []; }
+  }
+
+  function rememberWorkName(name) {
+    const w = String(name || '').trim();
+    if (!w) return;
+    const arr = listWorkNames().filter(x => x !== w);
+    arr.unshift(w);
+    try { localStorage.setItem(WORK_NAMES_KEY, JSON.stringify(arr.slice(0, 20))); } catch (e) { /* noop */ }
+    refreshWorkNameList();
+  }
+
+  /** 把以前用过的作品名灌进 datalist → 点输入框能下拉选, 不用手打 */
+  function refreshWorkNameList() {
+    try {
+      const dl = els.workNameList;
+      if (!dl) return;
+      while (dl.firstChild) dl.removeChild(dl.firstChild);
+      listWorkNames().forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w;
+        dl.appendChild(opt);
+      });
+    } catch (e) { /* noop */ }
   }
 
   function describeSaveError(e) {
@@ -1070,7 +1137,14 @@
 
     // Gemini: 换片 = 旧 watch session 作废, 重开一轮
     // (旧 session 的剧情摘要是临时记忆, 不会写长期记忆, 直接丢弃)
-    if (global.CinemaLive) global.CinemaLive.onVideoSourceChanged();
+    if (global.CinemaLive) {
+      // 🔴 2026-11-04: 先告诉它这部片子属于哪部作品 (同作品共用一份底稿),
+      //   再让它换片 —— 顺序反了的话, 换片过程里会按【上一部】的 key 去读底稿。
+      if (typeof global.CinemaLive.setWorkName === 'function') {
+        global.CinemaLive.setWorkName(film.workName || '');
+      }
+      global.CinemaLive.onVideoSourceChanged();
+    }
 
     currentFilmId = film.id;
     pendingResumeTime = resumeTime || 0;
@@ -1363,6 +1437,7 @@
     setDrawer(false);
     setChatPanel(false);
     els.srcSheet.classList.add('open');
+    refreshWorkNameList();   // 🔴 2026-11-04: 作品名下拉 (以前用过的)
   }
 
   function closeSourceSheet() {
@@ -2737,7 +2812,9 @@
   // 版本戳: 只为一眼确认「手机上跑的到底是哪一份代码」。
   // PWA 有 service worker 缓存, 用户看到的经常是旧版, 没有戳根本分不清。
   // 每次改动影院都顺手改这里。
-  global.__CINEMA_VER = '0.33.0';
+  // 🔴 2026-11-04: 顺手跟 ?v= 对齐 (以前 ?v= 是 0.34.0, 这里还停在 0.33.0,
+  //   看着像两份代码, 排查时白白分神)。
+  global.__CINEMA_VER = '0.34.1';
 
   global.CinemaRoom = {
     open: open,

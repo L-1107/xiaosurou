@@ -167,6 +167,12 @@
     kind: 'film',              // 'film' = 长剧 | 'series' = 短剧
     seriesKey: null,           // 短剧: 剧名
     seriesTitle: '',           // 短剧: 剧名(显示用)
+    // 🔴 2026-11-04: 本地影片的「作品名」—— 同一部作品的几集填一样的名字,
+    //   就共用一份剧情底稿/前情提要 (key = film:<chatId>:<作品名>)。
+    //   空 = 不分组 (老行为)。
+    workName: '',
+    // 🔴 2026-11-04: 跨场资料正在读库中 (读库没完之前不注入, 见 loadCrossSession)
+    _crossReading: false,
     seriesLastEp: 0,           // 短剧: 已看到第几集
     episodeMemories: [],       // 短剧: 攒下的单集记忆 [{ ep, text, id }]
     // 🔴 2026-10-21: 落库失败的条目 [{ ep, msg }] —— 给记忆页面板显示用。
@@ -225,11 +231,49 @@
    *   key 必须跟"哪部剧"绑死, 所以用 duanju-bridge 给的 dir.name。
    *   长剧是本地上传的单文件, 用 chatId 当作用域刚好够隔离,
    *   免得两个角色攒的段落互相串台。
+   *
+   * 🔴 2026-11-04: 长剧这边加了一层【作品名】:
+   *   key = 'film:' + chatId + (作品名 ? ':' + 作品名 : '')
+   *   原因: 用户问的「我怎么知道这个新文件跟上一个文件是不是同一部动漫」——
+   *   原来只有 chatId 一个维度, 同一个聊天里【所有】本地影片共用一份底稿 →
+   *   换到完全不相干的另一部作品, 也会把上一部的剧情灌给模型 (串台)。
+   *   现在: 同一作品名 = 同一份底稿 (第二集知道第一集); 不同作品名 = 各存各的。
+   *   没填作品名 = 老行为 (一个聊天里共用一份)。
    */
   function currentSessionKey() {
     if (watchSession.kind === 'series') return watchSession.seriesKey ? String(watchSession.seriesKey) : '';
     var cid = watchSession.chatId || S.chatId || '';
-    return cid ? ('film:' + cid) : '';
+    if (!cid) return '';
+    var wn = String(watchSession.workName || '').trim();
+    return 'film:' + cid + (wn ? (':' + wn) : '');
+  }
+
+  /**
+   * 换作品 (本地影片的「作品名」变了) —— 2026-11-04
+   *
+   * 【为什么要清内存】底稿 key 变了, 内存里还留着上一部作品的段落/提要 →
+   *   注入时会把上一部的剧情一起喂给模型 → 串台。
+   *   所以换作品 = 把上一部的素材从内存里清掉, 让它老老实实从新 key 的库里读。
+   */
+  function setWorkName(name) {
+    var w = String(name || '').trim();
+    if (w === (watchSession.workName || '')) return;
+    var oldKey = currentSessionKey();
+    watchSession.workName = w;
+    var newKey = currentSessionKey();
+    if (newKey === oldKey) return;
+    watchSession.segments = [];
+    watchSession.segCount = 0;
+    watchSession.episodeMemories = [];
+    watchSession.seriesLastEp = 0;
+    watchSession.seriesRecap = null;
+    watchSession.seriesRecapInjectPending = false;
+    // key 变了 → 刚才那个读库的结果作废了, 别让它把注入卡住
+    watchSession._crossReading = false;
+    watchSession.currentPlotSummary = '';
+    watchSession.summaryCount = 0;
+    watchSession.summaryUpdatedAt = 0;
+    log('换作品 (' + (oldKey || '(无)') + ' → ' + newKey + '): 上一部的记忆已清空');
   }
 
   /** 当前这次 play 段已跑了多久 (ms); 没在播放时返回 0 */
@@ -348,6 +392,8 @@
     watchSession.kind = 'film';
     watchSession.seriesKey = null;
     watchSession.seriesTitle = '';
+    watchSession.workName = '';
+    watchSession._crossReading = false;
     watchSession.seriesLastEp = 0;
     watchSession.episodeMemories = [];
     watchSession.persistErrors = [];
@@ -3007,10 +3053,18 @@
     // 同步先把上一部残留的清掉 —— 慢一拍读回来也会串台
     watchSession.seriesRecap = null;
     watchSession.seriesRecapInjectPending = true;
+    // 🔴 2026-11-04: 标记"正在读库"。
+    //   以前没有这个标记 → 注入跑在【异步读库之前】, 那时 watchSession.seriesRecap
+    //   还是 null → 注入里"上次看到哪"(锚) 和"手动精炼的前情提要"全是空的,
+    //   而 injectSeriesRecap() 一进来就把 seriesRecapInjectPending 落闸 →
+    //   等库读完, tryInject() 再想注入时已经是空转 → 这两样【从来没喂给过模型】。
+    //   (实测: 库里明明有提要, 10 次注入一次都没有它。)
+    watchSession._crossReading = true;
 
     var CS = cinemaStorage();
     if (!CS || typeof CS.loadSeriesRecap !== 'function') {
       watchSession.seriesRecapInjectPending = false;   // 表都还没有, 后面也不会有
+      watchSession._crossReading = false;
       return;
     }
     // 记下这次的会话号: 切得比读盘快的话, 这一行的结果就过期了, 必须丢掉
@@ -3065,6 +3119,8 @@
 
     function tryInject() {
       if (!gotRecap || !gotEps) return;
+      // 🔴 2026-11-04: 库读完了 → 放行注入 (现在注入里才有锚 + 手动精炼的提要)
+      watchSession._crossReading = false;
       var rec = watchSession.seriesRecap;
       var pool = isSeries ? (watchSession.episodeMemories || []) : (watchSession.segments || []);
       // ⚠️ 2026-10-21: 长剧有两个字段, 提要(recapText)和锚(text)都算"有东西要注入"。
@@ -3119,6 +3175,12 @@
   /** Live 早就连着 (中途切剧) → 立刻注入; 还没连 → 留给 onClientState('ready')。 */
   function maybeInjectSeriesRecap() {
     if (!watchSession.seriesRecapInjectPending) return;
+    // 🔴 2026-11-04: 库还在读 → 先别注入。
+    //   这时候 watchSession.seriesRecap 还是 null, 注入进去的"上次看到哪"和
+    //   "手动精炼的前情提要"都是空的, 而且 injectSeriesRecap() 会把
+    //   seriesRecapInjectPending 落闸 → 库读完后的那次注入再也发不出去。
+    //   → 等库读完 (tryInject 里放行), 那时才有完整的内容可注入。
+    if (watchSession._crossReading) return;
     if (!S.client || !S.client.isReady()) return;     // 等 ready
     injectSeriesRecap();
   }
@@ -3919,6 +3981,15 @@
     // 🔴 2026-11-04: 别让"一集总结失败后的自动重试"在退出后还活着
     if (S._epRetryTimer) { clearTimeout(S._epRetryTimer); S._epRetryTimer = null; }
     S._epRetryEp = 0;
+    // 🔴 2026-11-04: 必须【在 close 之前】把 _userDisabled 置真。
+    //   live-client 的 close() 会同步触发 socket 的 onclose → 把状态报成 'closed'
+    //   → 上层 onClientState('closed') 看到 "不是用户主动禁用" 就【排一次自动重连】
+    //   → 那个重连 2 秒后回来, 把刚连好的新连接又顶掉 (reconnect 会先关掉当前 socket)。
+    //   症状 (实测, 探针 _reports/cinema-test/probe-local-file-summary.cjs):
+    //     换本地文件 → 新连接刚建好 → 几秒后被重连顶掉 → 这一集开头那十几秒的画面
+    //     进了个被丢弃的会话 → 模型看不见; 聊天区还刷「连接断开 / 已重新连接」。
+    //   live-client 自己写着「主动关闭 → 不做自动重连」—— 那句前提就是这里。
+    S._userDisabled = true;
     if (S.client) {
       try { S.client.close(reason || 'disabled'); } catch (e) { /* noop */ }
       S.client = null;
@@ -4849,6 +4920,9 @@
     handleUserMessage: handleUserMessage,
     onVideoEnded: onVideoEnded,
     onVideoSourceChanged: onVideoSourceChanged,
+    // 🔴 2026-11-04: 本地影片的「作品名」—— 同一作品的几集共用一份底稿。
+    //   宿主在换片时调它 (见 cinema-room.js 的 setVideoSrc)。
+    setWorkName: setWorkName,
 
     // ---- 短剧 (2026-10-07) ----
     setSeries: setSeries,

@@ -1051,7 +1051,46 @@
 //   反向验证: _reports/cinema-test/reverse-verify-local-file.cjs (2 个用例全报红)
 //   index.html 的 ?v=：modules/cinema-live.js 2.4.4 → 2.4.5 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.112.0';
+// v0.2.113.0 —— 本地影片「作品名」分组 + 前情提要真的喂给模型 (2026-11-04)
+//
+//   用户问: "我想通过上传本地文件看动漫, 30 多分钟一集, 很多集 ——
+//            怎么能做到放第二集的时候还有第一集的说明? 同一个作品可以保留前情提要吗?"
+//   用户定的方案: 「添加影片时让我填一个作品名, 同名的共用底稿」
+//
+//   【原来】本地影片的底稿 key = 'film:'+chatId —— 同一个聊天里【所有】本地影片共用一份
+//     → 换到完全不相干的另一部作品, 也会把上一部的剧情灌给模型 (串台)。
+//     而且 CinemaLive 连「现在放的是哪个文件」都不知道, 存储层的影片记录也没有作品字段。
+//
+//   【改法】
+//     · 存储层: 影片记录加 workName (非索引字段 → 不用升 db 版本)
+//     · UI: 「添加影片」面板加作品名输入框 (可留空=不分组) + 下拉以前用过的
+//     · CinemaLive: watchSession.workName + setWorkName(); 底稿 key 变成
+//       'film:'+chatId+':'+作品名 → 同一作品共用一份, 不同作品各存各的
+//     · 换作品时清掉上一部的内存素材 → 上一部的段落不会被灌进新作品
+//
+//   【顺带修的一个真 bug】(用户选的第二项)
+//     「上次看到哪」(滚动锚) 和「手动精炼的前情提要」【从来没被喂给过模型】——
+//     注入跑在【异步读库之前】(那时 seriesRecap 还是 null), 而且 injectSeriesRecap()
+//     一进来就把 seriesRecapInjectPending 落闸 → 库读完后的那次注入已是空转。
+//     实测: 库里明明有提要, 10 次注入一次都没有它。
+//     改法: 加 _crossReading 标记, 库没读完不注入 (pending 也就不落闸)。
+//
+//   【顺带修的一个既有问题】换本地文件时聊天区刷「连接断开 / 已重新连接」
+//     → disable() 里 close() 会同步触发 onclose → 上层排了一次自动重连
+//     → 那个重连 2 秒后回来把刚连好的新连接顶掉。
+//     改法: _userDisabled 在 close 之前置真 (live-client 自己的注释就写着
+//     「主动关闭 → 不做自动重连」)。
+//
+//   实测 (探针 _reports/cinema-test/probe-local-file-summary.cjs):
+//     同一作品 (某动漫,某动漫) → 换集那一刻模型拿到 上一个文件的第 2~5 段 + 锚
+//     不同作品 (某动漫,别的片) → 换集后只带新作自己的第 1 段, 段号从 1 重数, 不串台
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑩ 组 (10 条, 共 61 条)
+//   反向验证: _reports/cinema-test/reverse-verify-work-name.cjs (3 个用例全报红)
+//   index.html 的 ?v=：cinema-live.js 2.4.5 → 2.4.6 / cinema-room.js 0.34.0 → 0.34.1
+//                  / cinema-room.css 0.38.2 → 0.38.3 / cinema-storage.js 0.5.3 → 0.5.4
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.113.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

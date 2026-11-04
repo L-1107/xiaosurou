@@ -1706,6 +1706,39 @@ body.cinema-room-active {
   color: rgba(240, 220, 196, .30);
 }
 
+/* --------------------------------------------------------------------------
+   作品名输入框 (2026-11-04)
+   同一部作品的几集填一样的名字 → 共用一份剧情底稿/前情提要。
+   ⚠️ 字号必须 ≥16px —— iOS Safari 聚焦 <16px 的 input 会自动把整页放大,
+      字体再大也拦不住 (见 .cinema-series-addr 那个 13px 的历史遗留)。
+   -------------------------------------------------------------------------- */
+.cinema-work-row {
+  margin: 10px 0 6px;
+}
+
+.cinema-work-name {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(216, 168, 116, .26);
+  background: rgba(255, 255, 255, .05);
+  color: #f0e3d4;
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.cinema-work-name::placeholder {
+  color: rgba(240, 220, 196, .30);
+}
+
+.cinema-work-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: .72;
+  margin-bottom: 10px;
+}
+
 .cinema-series-list {
   margin-top: 12px;
   display: flex;
