@@ -1178,7 +1178,39 @@
 //
 //   index.html 的 ?v=：modules/cinema-chat.js 0.2.4 → 0.2.5 (沙盒同步)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.117.0';
+// v0.2.118.0 (2026-11-05): 修「家庭影院看两集短剧 → 手机发烫」
+//
+//   【实测依据】用户 A/B/C 三组真机实测:
+//     A 宿主单独开着          → 冷冰冰
+//     C 影院沙盒单独看一集    → 冷冰冰
+//     B 宿主里套着影院看一集  → 开始发烫 (再聊天更烫)
+//   ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】, 不是任何单边。
+//
+//   【这一版改的四处】
+//   ① 宿主静默 (cinema-room.css + cinema-room.js + background-activity.js + pet-nest.js)
+//      iframe 一开, 宿主 UI 整个 display:none (54 个全屏面板 + 约 20 条 infinite
+//      动画 + 顶栏毛玻璃全停), 后台活动模拟 / AI 提醒扫描 / 无声智能保活
+//      (含屏幕 WakeLock) / 桌宠换帧定时器 也一起停; 退出影院只恢复【进来之前
+//      就在跑】的那些。
+//   ② 沙盒里的 60fps 时间线探针整个删掉 (cinema-room.js)
+//      —— 2026-10-08 查「点击→冻结」加的实验代码, 结论早拿到了, 探针却一直
+//      在影院里自己跑一条 60fps 常驻循环 (12 个全局事件监听 + MutationObserver
+//      + visualViewport)。诊断收集器 diagLogPush 保留 (Live 的硬数据还要它)。
+//   ③ 环境光不再每次强制布局 (cinema-room.js)
+//      采样 1.8s → 4s; 两次 getBoundingClientRect 改成几何缓存 (只在屏幕
+//      真的变了才重算); 颜色几乎没变就不重写那整块 radial-gradient。
+//   ④ 短剧每集那个【独立的前情提要 Live 回合】删掉 (cinema-live.js)
+//      提要改成并进【这一集自己的总结指令】里 —— 内容一份没少 (压缩提要 +
+//      最近几集原文), 只是以前分两趟送、现在一趟送完。
+//      长剧(film)保持原样。
+//
+//   index.html 的 ?v=：modules/cinema-room.js 0.34.1 → 0.35.0、
+//   modules/cinema-room.css 0.38.3 → 0.39.0、modules/cinema-live.js 2.4.6 → 2.5.0、
+//   modules/background-activity.js 0.0.49 → 0.0.50、modules/pet-nest.js 0.0.36 → 0.0.37；
+//   cinema-sandbox/index.html 里那三个也一起对齐。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//   新增回归: tests/cinema-series-summary.test.cjs ⑪ 组 (4 条, 共 65 条)。
+const CACHE_VERSION = 'v0.2.118.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

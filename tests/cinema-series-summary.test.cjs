@@ -352,6 +352,16 @@ async function runScene(cfg) {
   await pump(1000);
 
   if (o.isSeries) {
+    // 🔴 2026-11-05: 场景可以预置一份【库里已有的前情提要】——
+    //   用来验"提要改成并进这一集总结指令"这条新路 (⑪ 组)。
+    //   必须写在 setSeries 之前: setSeries 会触发 loadCrossSession 读库。
+    if (o.seedRecap) {
+      await sandbox.CinemaStorage.saveSeriesRecap({
+        key: o.seedRecap.key,
+        title: o.seedRecap.title || '',
+        text: o.seedRecap.text || ''
+      });
+    }
     CL.setSeries('probe-drama', '测试短剧');
     for (let ep = 1; ep <= o.eps; ep++) {
       CL.setSeriesProgress('probe-drama', '测试短剧', ep - 1, '', ep);
@@ -571,10 +581,12 @@ section('⑥ 短剧 · 一集总结失败 → 60 秒后自动重试, 把这一�
     ep1.length >= 1 && /第\s*1\s*集/.test(ep1[ep1.length - 1].text),
     ep1.length ? ep1[ep1.length - 1].text.slice(0, 24) : '(没有)');
 
-  // 重试成功后换会话 → 必须把前情提要喂回新会话,
-  //   否则下一集开播时模型手里是空白的 → 下一集的单集剧情少了上一集的上下文
+  // 🔴 2026-11-05: 换会话后【不再】单发一个提要回合。
+  //   以前这里会发一个"只回一个好"的回合 —— 每集白白多一次 Live 往返
+  //   (上传指令 + 等模型吐字 + 收一整段音频), 手机上直接体现为发烫。
+  //   现在提要并进【下一集自己的总结指令】里了 (见 doRequestEpisodeSummary)。
   const recapTurns = st.turns.filter(t => t.kind === 'recap');
-  check('重试成功后把前情提要喂回了新会话', recapTurns.length >= 1,
+  check('换会话后不再单发提要回合 (省掉一次 Live 往返)', recapTurns.length === 0,
     'recap 次数=' + recapTurns.length + '  turns=' + JSON.stringify(st.turns.map(t => t.kind)));
 }
 
@@ -753,6 +765,50 @@ section('⑩ 作品名: 同作品共用一份底稿, 不同作品各存各的');
     check('换到另一个作品时, 没有把上一部的段落灌过去 (没有重复段号)', dup.length === 0,
       '段号重复的注入次数=' + dup.length);
   }
+}
+
+// ---------------------------------------------------------------------------
+// ⑪ 短剧 · 前情提要并进【这一集自己的总结指令】, 不再单发一个回合 (2026-11-05)
+// ---------------------------------------------------------------------------
+// 【为什么要改】用户真机实测: 宿主页面 + 影院 iframe 叠在一起看两集短剧 → 手机发烫。
+//   A/B/C 实测排除了单边: 宿主单独冷, 沙盒单独冷, 合起来才烫 → 锁定"叠加"。
+//   沙盒自己也在烧的东西里, 有一个是"每集换完会话就另发一个提要回合" ——
+//   那是一次完整的 Live 往返(上传指令 + 等模型吐字 + 收一整段音频), 白白多一趟。
+//   而短剧用 Live 的场合只有"写这一集的剧情"这一件事 (陪聊早走主 API 了),
+//   所以提要跟着【这一集总结】一起给模型就够了, 不必单开一回合。
+//   内容一份没少 (压缩提要 + 最近几集原文), 只是以前分两趟送, 现在一趟送完。
+section('⑪ 短剧: 前情提要并进总结指令, 不再单发提要回合');
+{
+  const r = await runScene({
+    epLenSec: 90, eps: 2,
+    seedRecap: {
+      key: 'probe-drama',
+      title: '测试短剧',
+      text: '【已看到第 1 集】女主在雨夜赶到医院, 撞见男主陪着另一个女人, 两人当场争执, 女主甩门而去。'
+    }
+  });
+  const st = r.stat;
+
+  // ① 全程一个提要回合都没有 (以前每集换完会话就多一个)
+  const recapTurns = st.turns.filter(t => t.kind === 'recap');
+  check('全程没有单独发提要回合', recapTurns.length === 0,
+    'recap 次数=' + recapTurns.length + '  turns=' + JSON.stringify(st.turns.map(t => t.kind)));
+
+  // ② 但提要的内容【确实】进了每一集自己的总结指令 (一份都没少)
+  const epTurns = st.turns.filter(t => t.kind === 'episode');
+  const withRecap = epTurns.filter(t => /女主在雨夜赶到医院/.test(t.raw || ''));
+  check('每一集的单集总结指令里都带着前情提要',
+    withRecap.length === epTurns.length && epTurns.length >= 2,
+    '带提要的总结次数=' + withRecap.length + ' / 共 ' + epTurns.length);
+
+  // ③ 提要不能把"只写这一集"的格式要求挤掉
+  const stillFormat = epTurns.filter(t => /只输出正文/.test(t.raw || ''));
+  check('格式要求(只输出正文)还留在指令里', stillFormat.length === epTurns.length,
+    '带格式要求的总结次数=' + stillFormat.length + ' / 共 ' + epTurns.length);
+
+  // ④ 摘要本身照旧能落库 (别把正事给改了)
+  check('两集都落库了', st.saved.filter(s => s.ep >= 1 && s.ep <= 2).length >= 2,
+    '落库=' + JSON.stringify(st.saved.map(s => s.ep)));
 }
 
 // ---------------------------------------------------------------------------

@@ -228,6 +228,52 @@ function strip(s) {
   check('沙盒那边有对应的请求/回包通道',
     /cinema:geminiRequest/.test(CHAT) && /cinema:geminiResponse/.test(CHAT));
 
+  section('⑨ 宿主静默: 影院 iframe 打开时, 宿主整个停下来 (2026-11-05)');
+  // 【实测依据】用户 A/B/C 三组真机实测:
+  //   A 宿主单独开着         → 冷冰冰
+  //   C 影院沙盒单独看一集   → 冷冰冰
+  //   B 宿主里套着影院看一集 → 开始发烫 (再聊天更烫)
+  // ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】。
+  // 宿主在 iframe 底下【一个像素都看不见】, 却还在全速跑:
+  //   54 个全屏面板 + 约 20 条 infinite 动画 + 顶栏毛玻璃 + 几个常驻定时器
+  // → 打开影院就静默, 退出影院再醒。
+  const CSS = read('modules/cinema-room.css');
+  const BG = read('modules/background-activity.js');
+  const PET = read('modules/pet-nest.js');
+
+  check('CSS: 影院开着时宿主主界面整个 display:none',
+    /body\.cinema-room-active #phone-screen[\s\S]{0,400}display: none !important/.test(CSS));
+  check('CSS: 桌宠和悬浮球也一起藏掉',
+    /body\.cinema-room-active #pn-desktop-pet/.test(CSS) &&
+    /body\.cinema-room-active #floating-ball/.test(CSS));
+  check('CSS: 剩下的动画也冻结 (不是只藏起来)',
+    /body\.cinema-room-active[\s\S]{0,800}animation-play-state: paused !important/.test(CSS));
+  check('宿主: 打开影院时会停宿主那些常驻任务',
+    /function pauseHostTimers\(\)[\s\S]{0,600}pauseHostBackgroundTasks/.test(ROOM));
+  check('宿主: 打开影院时会停桌宠的换帧定时器',
+    /function pauseHostTimers\(\)[\s\S]{0,600}pauseDesktopPet/.test(ROOM));
+  check('宿主: 退出影院时会把它们恢复',
+    /function resumeHostTimers\(\)[\s\S]{0,600}resumeHostBackgroundTasks/.test(ROOM) &&
+    /function resumeHostTimers\(\)[\s\S]{0,600}resumeDesktopPet/.test(ROOM));
+  check('宿主: closeSandbox 的两个出口都会恢复宿主',
+    (ROOM.match(/resumeHostTimers\(\)/g) || []).length >= 3,
+    '出现次数=' + (ROOM.match(/resumeHostTimers\(\)/g) || []).length);
+  check('后台活动: 有 pause/resume 一对',
+    /function pauseHostBackgroundTasks\(\)/.test(BG) &&
+    /function resumeHostBackgroundTasks\(\)/.test(BG));
+  check('后台活动: 只恢复【进影院之前就在跑】的那些 (不给用户凭空多开)',
+    /hostTaskPauseState/.test(BG) &&
+    /simulation: !!simulationIntervalId/.test(BG) &&
+    /reminder: !!aiReminderSchedulerIntervalId/.test(BG));
+  check('后台活动: pause/resume 暴露到 window (影院那边调得到)',
+    /window\.pauseHostBackgroundTasks = pauseHostBackgroundTasks/.test(BG) &&
+    /window\.resumeHostBackgroundTasks = resumeHostBackgroundTasks/.test(BG));
+  check('桌宠: 换帧定时器可以单独停/起',
+    /function startDesktopPetTimer\(\)/.test(PET) &&
+    /function stopDesktopPetTimer\(\)/.test(PET) &&
+    /pauseDesktopPet: stopDesktopPetTimer/.test(PET) &&
+    /resumeDesktopPet: startDesktopPetTimer/.test(PET));
+
   console.log('\n========================================');
   console.log('  通过 ' + pass + ' / 失败 ' + fail);
   console.log('__FAILURES__' + failed.join(''));

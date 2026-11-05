@@ -418,7 +418,7 @@
     bindEvents();
     initKeyboardMode();   // 🧪 实验 C 已还原 (2026-10-08): 跟打字卡顿无关
     startPerfWatchdog();
-    startTimelineProbe();  // 🧪 诊断探针 v2 (时间线)
+    watchAmbientGeometry();   // 2026-11-05: 屏幕尺寸一变, 环境光的几何缓存就作废
     return els;
   }
 
@@ -515,164 +515,30 @@
     setTimeout(tick, 1000);
   }
 
-  // 🧪 诊断探针 v2 (2026-10-08) —— 时间线记录器
+  // 🧪 诊断探针 v2 已整个删掉 (2026-11-05)
   //
-  // 上一版有两个硬伤, 害我下了错结论:
-  //   ① 采样从 focusin 之后 400ms 才开始, 把「点击 → 冻结」整段漏掉了。
-  //      实测真值: 6 秒窗口只跑出 8 帧 = 主线程冻了约 9 秒。
-  //   ② 只记帧数, 看不到「卡死前最后一个事件是什么」。
+  //   它是 2026-10-08 为了查「点击 → 冻结」加的实验代码: 每帧 1 次 rAF +
+  //   1 个微任务 + 1 个 setTimeout(0), 外加 12 个全局事件监听 + visualViewport
+  //   + MutationObserver, 还有一个自己的 rAF 帧循环 —— 也就是说它在影院里
+  //   【自己开了一条 60fps 的常驻循环】。
   //
-  // 这版重做(三条都来自 Gemini 的建议):
-  //   A. 日志极轻 —— 热路径里只往扁平数组 push「时间戳 + 事件名」,
-  //      一个字符都不打。iOS Safari 往 console 打对象本身就可能阻塞,
-  //      所以一律不在事件里 console.log, 全攒着, 结束后一次性 dump。
-  //   B. 从 touchstart 就开始记, 不等 focus —— 这才看得到点击到卡死的完整链路。
-  //   C. 同时量四样, 一眼分清是「同步宏任务卡死」还是「微任务队列被撑爆」:
-  //        帧间隔       : rAF 实际间隔, 超过阈值就是主线程被占住
-  //        宏任务延迟   : setTimeout(0) 的排队延迟 = 事件循环被长任务堵住
-  //        微任务延迟   : rAF 里排一个微任务, 量它多久才轮到
-  //        DOM 变更次数 : MutationObserver 回调次数
+  //   那次实验的结论早就拿到了 (键盘弹起 → 视口变矮 → 整个房间 resize →
+  //   毛玻璃重采样), 探针却一直留在生产代码里白烧电。真机发热实测里,
+  //   沙盒单独看是凉的, 宿主+沙盒叠起来才烫 —— 这条自己跑的帧循环
+  //   属于"沙盒自己也在烧"的一部分, 删掉它没有代价。
   //
-  // 用法(用户侧, 不装任何东西):
-  //   进影院 → 正常操作 → 复现卡顿 → ⚙设置 →「诊断(出问题时展开)」→ 截图
-  //   冻结超过 2 秒会自动 dump 一次, 也会在每次开设置面板时 dump。
+  //   下面只保留真正还在用的东西: 诊断收集器 diagLogPush
+  //   (Live 的连上/断开/丢帧/剧情成败都往那儿塞, 出事时截图给我看)。
   // --------------------------------------------------------------------------
-  var TL = [];                 // [相对毫秒, 事件名] —— 扁平, 不存对象
-  var TL_T0 = 0, TL_MAX = 120;
-  var tlLast = 0, tlMicroAt = 0, tlMacroAt = 0;
-  var tlFrames = 0, tlMut = 0;
-  var tlGapMax = 0, tlGapN = 0;
-  var tlMicroMax = 0, tlMacroMax = 0;
-  var tlDumped = false, tlDumping = false;
-
-  function tlMark(name, prio) {
-    if (prio) { if (TL.length >= TL_MAX) TL.shift(); }
-    else if (TL.length >= TL_MAX) return;
-    TL.push([Math.round(performance.now() - TL_T0), name]);
-  }
-
-  // 时间线正文单独存一份, 由 renderDiagBox 一并渲染。
-  // ⚠️ 不逐条走 diagLogPush: 那会 120 次重渲染 + 120 次 console.log,
-  //    iOS Safari 往 console 打东西本身就可能阻塞 —— 那探针就自己制造卡顿了。
-  var TL_TEXT = '';
-
-  function tlDump(reason) {
-    if (tlDumping) return;
-    tlDumping = true;
-    try {
-      var head = '[时间线] ' + reason +
-        ' | 帧数=' + tlFrames +
-        ' 最长帧=' + tlGapMax + 'ms(×' + tlGapN + ')' +
-        ' 微任务最慢=' + tlMicroMax + 'ms' +
-        ' 宏任务最慢=' + tlMacroMax + 'ms' +
-        ' DOM变更=' + tlMut;
-      var lines = ['  ' + head];
-      for (var i = 0; i < TL.length; i++) {
-        lines.push('  +' + TL[i][0] + 'ms  ' + TL[i][1]);
-      }
-      lines.push('  [时间线] ---- 共 ' + TL.length + ' 条记录, 结束 ----');
-      TL_TEXT = lines.join('\n');
-      diagLogPush(head);          // 一次进日志, 顺带触发一次 renderDiagBox
-      tlDumped = true;
-    } catch (e) { /* 诊断绝不能影响主流程 */ }
-    tlDumping = false;
-  }
-
-  function startTimelineProbe() {
-    if (!els || !els.root) return;
-    TL_T0 = performance.now();
-    tlLast = TL_T0;
-    tlMark('探针启动, 房间已打开');
-
-    // C1. 帧循环: 量帧间隔 + 每帧排一个微任务量它的延迟
-    requestAnimationFrame(function loop(now) {
-      tlFrames++;
-      var gap = now - tlLast;
-      tlLast = now;
-      if (gap > 200) {
-        tlGapN++;
-        if (gap > tlGapMax) tlGapMax = Math.round(gap);
-        tlMark('⛔ 主线程空转 ' + Math.round(gap) + 'ms', true);
-        // 冻过 2 秒就自动 dump 一次(冻结期间的事件补记在后面)
-        if (gap > 2000) setTimeout(function () { tlDump('检测到 ' + Math.round(gap / 100) / 10 + 's 冻结'); }, 300);
-      }
-      // 微任务: 每帧只排一个, 不会自己撑爆队列
-      var m0 = performance.now();
-      Promise.resolve().then(function () {
-        var d = performance.now() - m0;
-        if (d > tlMicroMax) tlMicroMax = Math.round(d);
-        if (d > 50) tlMark('微任务延迟 ' + Math.round(d) + 'ms', true);
-      });
-      // 宏任务: setTimeout(0) 多久才轮到 = 事件循环有没有被长任务堵住
-      var t0 = performance.now();
-      setTimeout(function () {
-        var d2 = performance.now() - t0;
-        if (d2 > tlMacroMax) tlMacroMax = Math.round(d2);
-      }, 0);
-      requestAnimationFrame(loop);
-    });
-
-    // B. 从 touchstart 就开始记(捕获阶段), 不等 focus
-    var EV = ['touchstart', 'touchend', 'mousedown', 'click',
-              'focus', 'blur', 'focusin', 'focusout',
-              'input', 'beforeinput', 'compositionstart', 'compositionend'];
-    for (var i = 0; i < EV.length; i++) {
-      (function (name) {
-        document.addEventListener(name, function (e) {
-          var extra = '';
-          if (name === 'focusin' || name === 'focus') {
-            var t = e.target;
-            extra = ' → ' + (t && (t.id || t.className || t.tagName) || '?');
-          }
-          tlMark('◆ ' + name + extra);
-        }, true);
-      })(EV[i]);
-    }
-
-    // visualViewport 事件也记(只记次数, 不打对象)
-    try {
-      var vv = global.visualViewport;
-      if (vv) {
-        var vvn = { resize: 0, scroll: 0 };
-        vv.addEventListener('resize', function () {
-          vvn.resize++; tlMark('● vv.resize #' + vvn.resize);
-        });
-        vv.addEventListener('scroll', function () {
-          vvn.scroll++; tlMark('● vv.scroll #' + vvn.scroll);
-        });
-        global.__cinemaVVCount = vvn;
-      }
-    } catch (e) { /* noop */ }
-
-    // DOM 变更次数 —— 观察器风暴的信号
-    // ⚠️ 只看 body 的【直接子级】, 不开 subtree。
-    //    开 subtree 的话每次任何深层 DOM 变动都会回调, 那它自己就成了开销,
-    //    探针反而制造问题(Gemini 提醒过: 探针必须极轻)。直接子级已经够
-    //    捕捉「影院被挂进/移出 body」这类关键变化。
-    try {
-      var mo = new MutationObserver(function (list) {
-        tlMut += list.length;
-        if (tlMut <= 20) tlMark('◇ body 子级变动 #' + tlMut);
-      });
-      mo.observe(document.body, { childList: true });
-      global.__cinemaTLMut = mo;
-    } catch (e) { /* noop */ }
-
-    // 开设置面板时也 dump 一次(用户主动来看的时刻)
-    if (els.diagToggle) {
-      els.diagToggle.addEventListener('click', function () {
-        if (tlDumped) return;
-        tlDump('打开诊断面板时手动采集');
-      });
-    }
-
-    global.__cinemaTL = function () { tlDump('手动触发'); };
-    global.__cinemaTLMark = tlMark;
-    // 🔴 2026-10-29: 把已有的诊断收集器暴露给 cinema-live.js。
-    //   Live 那边的连上/断开/丢帧/剧情成败也进这个框 ——
-    //   用户「⚙设置 → 底部『诊断』→ 截图」一次就能给我全部硬数据。
-    global.__cinemaDiagPush = diagLogPush;
-  }
+  // 🔴 2026-10-29: 把已有的诊断收集器暴露给 cinema-live.js。
+  //   Live 那边的连上/断开/丢帧/剧情成败也进这个框 ——
+  //   用户「⚙设置 → 底部『诊断』→ 截图」一次就能给我全部硬数据。
+  //
+  // ⚠️ 2026-11-05: 原来这行是挂在【诊断探针】函数体里面的 ——
+  //   探针整个删掉的时候差点把它一起带走。cinema-live.js 还在用这个出口
+  //   (tests/cinema-heat.test.cjs 有断言), 所以它现在独立存在,
+  //   不再跟任何探针绑在一起 —— 以后再删别的东西也不会误伤它。
+  global.__cinemaDiagPush = diagLogPush;
 
   // --------------------------------------------------------------------------
   // 事件绑定
@@ -1325,10 +1191,58 @@
   // blob URL 是同源的, 所以 drawImage 不会被跨域污染挡住。
   // --------------------------------------------------------------------------
 
-  const AMBIENT_INTERVAL = 1800;
+  // 🔴 2026-11-05 (手机发热): 原来这一块是"每 1.8 秒烧一次电", 现在改了:
+  //   ① 采样间隔 1.8s → 4s。这层柔光本来就是跟着画面慢慢变的装饰,
+  //      4 秒完全看不出来, 但 drawImage + getImageData (GPU→CPU 两次同步
+  //      回读) 的次数少了一半以上。
+  //   ② 不再每次 getBoundingClientRect。旧代码每重打一次光就【读两遍布局】,
+  //      紧接着又写 style.width/height/top —— 写完再读, iOS 每次都被逼着
+  //      把整页重新排一遍版。现在几何尺寸缓存起来, 只有屏幕真的变了才重算。
+  //   ③ 颜色几乎没变就不重写 background。整层柔光是一整块 radial-gradient,
+  //      重写一次 = 整屏重绘一次。
+  const AMBIENT_INTERVAL = 4000;
   let ambientCanvas = null;
   let lastAmbientAt = 0;
   let ambientFallbackRgb = null;
+
+  // 大屏几何 (相对 ambient 所在的那层墙) —— 只在屏幕真的变了的时候重算
+  let ambientGeo = null;
+  let ambientGeoDirty = true;
+  let ambientGeoObserver = null;
+  // 上一次【真正写进 style】的尺寸和颜色, 用来判断这次要不要重写
+  let ambientAppliedW = -1, ambientAppliedH = -1, ambientAppliedTop = '';
+  let ambientAppliedRgb = null, ambientAppliedAlpha = -1;
+
+  function measureAmbientGeo() {
+    ambientGeoDirty = false;
+    ambientGeo = null;
+    if (!els.ambient || !els.screen) return;
+    const host = els.ambient.parentElement;
+    if (!host) return;
+    const s = els.screen.getBoundingClientRect();
+    const p = host.getBoundingClientRect();
+    if (!s || !p || !s.width || !p.width) return;
+    ambientGeo = { w: s.width, h: s.height, top: s.top - p.top };
+  }
+
+  function ensureAmbientGeo() {
+    if (ambientGeoDirty || !ambientGeo) measureAmbientGeo();
+    return ambientGeo;
+  }
+
+  /** 屏幕尺寸变了 (换片换朝向 / 转屏 / 窗口缩放) → 几何缓存作废, 下次重算 */
+  function watchAmbientGeometry() {
+    if (ambientGeoObserver || !els.screen) return;
+    try {
+      if (typeof ResizeObserver === 'function') {
+        ambientGeoObserver = new ResizeObserver(function () { ambientGeoDirty = true; });
+        ambientGeoObserver.observe(els.screen);
+      }
+    } catch (e) { /* noop */ }
+    try {
+      global.addEventListener('resize', function () { ambientGeoDirty = true; });
+    } catch (e) { /* noop */ }
+  }
 
   function updateAmbient(force) {
     if (!els.ambient) return;
@@ -1374,22 +1288,42 @@
 
   function paintAmbient(rgb, alpha) {
     if (!els.ambient) return;
-    const s = els.screen.getBoundingClientRect();
-    const host = els.ambient.parentElement.getBoundingClientRect();
-    if (!s.width || !host.width) return;
-    const w = s.width * 2.5;
-    const h = Math.max(s.height * 2.2, 190);
-    els.ambient.style.width = w + 'px';
-    els.ambient.style.height = h + 'px';
-    els.ambient.style.top = (s.top - host.top - (h - s.height) / 2) + 'px';
-    els.ambient.style.background =
-        'radial-gradient(closest-side, rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + '),' +
-        ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.34).toFixed(3) + ') 55%,' +
-        ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0) 100%)';
+    const geo = ensureAmbientGeo();
+    if (!geo) return;
+    const w = geo.w * 2.5;
+    const h = Math.max(geo.h * 2.2, 190);
+    const top = (geo.top - (h - geo.h) / 2) + 'px';
+
+    // 几何变了才写尺寸; 颜色几乎没变就不碰 background (整屏重绘不便宜)
+    const geoChanged = (w !== ambientAppliedW || h !== ambientAppliedH || top !== ambientAppliedTop);
+    const rgbChanged = !(ambientAppliedRgb &&
+      Math.abs(ambientAppliedRgb[0] - rgb[0]) <= 6 &&
+      Math.abs(ambientAppliedRgb[1] - rgb[1]) <= 6 &&
+      Math.abs(ambientAppliedRgb[2] - rgb[2]) <= 6 &&
+      ambientAppliedAlpha === alpha);
+    if (!geoChanged && !rgbChanged) return;
+
+    if (geoChanged) {
+      els.ambient.style.width = w + 'px';
+      els.ambient.style.height = h + 'px';
+      els.ambient.style.top = top;
+      ambientAppliedW = w; ambientAppliedH = h; ambientAppliedTop = top;
+    }
+    if (rgbChanged) {
+      ambientAppliedRgb = [rgb[0], rgb[1], rgb[2]];
+      ambientAppliedAlpha = alpha;
+      els.ambient.style.background =
+          'radial-gradient(closest-side, rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + '),' +
+          ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.34).toFixed(3) + ') 55%,' +
+          ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0) 100%)';
+    }
   }
 
   function stopAmbient() {
     if (els.ambient) els.ambient.classList.remove('is-on');
+    // 颜色缓存清掉 —— 下一段片子重新打光时一定要重写一次
+    ambientAppliedRgb = null;
+    ambientAppliedAlpha = -1;
   }
 
   // --------------------------------------------------------------------------
@@ -2175,8 +2109,7 @@
 
   function renderDiagBox() {
     if (!els.diagBox) return;
-    var tail = TL_TEXT ? ('\n\n' + TL_TEXT) : '';
-    if (!diagLog.length) { els.diagBox.textContent = '（暂无记录）' + tail; return; }
+    if (!diagLog.length) { els.diagBox.textContent = '（暂无记录）'; return; }
     // 顶上带一行环境信息 —— 出问题时第一眼就能知道是什么浏览器在跑
     var ua = '';
     try {
@@ -2184,7 +2117,7 @@
       ua = m ? m[0] : (navigator.userAgent.slice(0, 40) || '?');
     } catch (e) { ua = '?'; }
     var head = '浏览器: ' + ua + '  ·  ' + (global.CinemaStorage ? '存储层已就绪' : '存储层未加载');
-    els.diagBox.textContent = head + '\n' + '─'.repeat(20) + '\n' + diagLog.join('\n') + tail;
+    els.diagBox.textContent = head + '\n' + '─'.repeat(20) + '\n' + diagLog.join('\n');
   }
 
   // 看门狗: iOS 上偶尔 change 就是不来 (选择器弹了又关 / 系统弹窗抢焦点 /
@@ -3136,6 +3069,45 @@
       }).catch(() => null);
     }
 
+    // =========================================================================
+    // 🔴 2026-11-05 宿主静默: 影院 iframe 打开时, 宿主这些常驻任务一起停
+    //
+    // 【为什么】用户 A/B/C 三组真机实测:
+    //   A 宿主单独开着         → 冷冰冰
+    //   C 影院沙盒单独看一集   → 冷冰冰
+    //   B 宿主里套着影院看一集 → 开始发烫 (再聊天更烫)
+    // ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】。
+    //
+    // 宿主在 iframe 底下【一个像素都看不见】, 却还在全速跑:
+    //   · 54 个全屏面板 + 约 20 条 infinite 动画 + 顶栏毛玻璃
+    //     → CSS 那头停 (见 cinema-room.css 的「宿主静默」段)
+    //   · 后台活动模拟 / AI 提醒扫描 / 无声智能保活 (含屏幕 WakeLock)
+    //   · 桌宠的换帧定时器
+    // 影院开着的时候这些一个都用不上 → 打开就静默, 退出再醒。
+    //
+    // 【恢复原则】只恢复【进影院之前就在跑】的那些 (由 background-activity.js
+    //   自己记), 不给用户凭空多开一个后台活动。
+    // =========================================================================
+    function pauseHostTimers() {
+      try {
+        if (typeof global.pauseHostBackgroundTasks === 'function') global.pauseHostBackgroundTasks();
+      } catch (e) { /* noop */ }
+      try {
+        var pn = global.PetNest;
+        if (pn && typeof pn.pauseDesktopPet === 'function') pn.pauseDesktopPet();
+      } catch (e) { /* noop */ }
+    }
+
+    function resumeHostTimers() {
+      try {
+        if (typeof global.resumeHostBackgroundTasks === 'function') global.resumeHostBackgroundTasks();
+      } catch (e) { /* noop */ }
+      try {
+        var pn = global.PetNest;
+        if (pn && typeof pn.resumeDesktopPet === 'function') pn.resumeDesktopPet();
+      } catch (e) { /* noop */ }
+    }
+
     function closeSandbox(reason) {
       stopSandboxWatch();
       // ⚠️ 以前这里是 "if (!frame) return;" —— 于是 frame 已经是 null 的时候,
@@ -3143,12 +3115,14 @@
       //   整页点不动。现在即使没有 frame 也把 class 摘干净。
       if (!frame) {
         if (document.body) document.body.classList.remove('cinema-room-active');
+        resumeHostTimers();
         return;
       }
       try { frame.remove(); } catch (e) {}
       frame = null; ready = false;
       unbindViewportRelay();
       if (document.body) document.body.classList.remove('cinema-room-active');
+      resumeHostTimers();
     }
 
     // =========================================================================
@@ -3352,6 +3326,7 @@
     sbtn.addEventListener('click', function () {
       if (frame) { closeSandbox(); return; }   // 再点一次 = 退出沙盒
       if (document.body) document.body.classList.add('cinema-room-active');
+      pauseHostTimers();   // 2026-11-05: 宿主静默 (CSS 那头是 display:none)
       bindViewportRelay();
       frame = document.createElement('iframe');
       frame.id = 'cinema-sandbox-frame';

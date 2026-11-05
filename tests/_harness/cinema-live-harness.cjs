@@ -216,6 +216,9 @@ async function runScenario(cfg) {
         // 🔴 这个 turn 发出时, 会话里【已经累积了多少帧】→ 就是它要重读的上下文
         const rec = {
           kind: kind,
+          // 🔴 2026-11-05: 带上原文 —— 探针要靠它分清"单集总结"和"提要注入"
+          //   (这两个都是 summary, 光看 kind 分不出来)。只加字段, 不改任何行为。
+          raw: rawText,
           sentAt: clock.now(),
           framesAtSend: this._frames || 0,
           inflightAtSend: stats.turnCount - stats.turnDone

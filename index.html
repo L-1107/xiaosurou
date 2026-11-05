@@ -215,7 +215,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- Gemini 3.8 Live 纯协议层 (无 DOM)。Cinema Room 与已删除的旧观影共用这一份。必须在 init-features.js 之前加载。 -->
   <script src="modules/live-client.js?v=0.6.0" defer></script>
   <script src="modules/notification-battery.js?v=0.0.49" defer></script>
-  <script src="modules/background-activity.js?v=0.0.49" defer></script>
+  <script src="modules/background-activity.js?v=0.0.50" defer></script>
   <script src="modules/proactive-wake.js?v=0.2.16" defer></script>      
   <script src="modules/in-app-proactive-patrol.js?v=0.2.18" defer></script>
   <script src="modules/proactive-wake-ui.js?v=0.2.28" defer></script>
@@ -261,11 +261,11 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.34.1" defer></script>
-  <link rel="stylesheet" href="modules/cinema-room.css?v=0.38.3">
+  <script src="modules/cinema-room.js?v=0.35.0" defer></script>
+  <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.0">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
-  <script src="modules/cinema-live.js?v=2.4.6" defer></script>
+  <script src="modules/cinema-live.js?v=2.5.0" defer></script>
   <!-- Cinema Room 的【陪聊】层 (2026-10-23)。
        陪聊改走【主聊天的主 API】: 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆,
        性格跟外面聊天一致。Live 只负责看画面 + 写剧情记忆。
@@ -311,7 +311,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
              没有参考图(首次生成) → 照旧写盲盒配色。羽化(终形态)例外，本就该换配色。
        index.html 的 ?v=：modules/pet-nest.js 0.0.25 → 0.0.26。
        ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
-  <script src="modules/pet-nest.js?v=0.0.36" defer></script>
+  <script src="modules/pet-nest.js?v=0.0.37" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
   <script src="modules/pet-image.js?v=0.0.9" defer></script>

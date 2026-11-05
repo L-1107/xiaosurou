@@ -2433,15 +2433,34 @@
     instruction.push('⚠️ 正文【第一句必须以"第 ' + ep + ' 集，"开头】, 然后接剧情。');
     instruction.push('这是为了标明集号, 不是让你重复标题, 整段就正常写下去。');
     instruction.push('');
-    instruction.push('只输出正文, 不要客套、不要分析、不要"根据我的观察"这种说法。');
-    if (watchSession.episodeMemories.length) {
+
+    // 🔴 2026-11-05 (手机发热): 前情提要【并进这一集自己的指令】, 不再单独发一个回合。
+    //
+    //   以前每集播完换会话后, 会另发一个"只回一个好"的提要回合 (injectSeriesRecap)。
+    //   那一回合 = 一次完整的 Live 往返 (上传指令 → 等模型吐字 → 收一整段音频),
+    //   手机上就是一次实打实的射频往返 —— 看两集就白白多两个回合。
+    //   而短剧用 Live 的场合只有"写这一集的剧情"这一件事 (陪聊早就走主 API 了),
+    //   所以那份提要跟着【这一集总结】一起给模型就够了, 不必单开一回合。
+    //
+    //   内容跟以前那个独立回合【一模一样】(压缩提要 + 最近几集原文),
+    //   区别只是以前分两趟送, 现在一趟送完。
+    var recapForSummary = String((watchSession.seriesRecap && watchSession.seriesRecap.text) || '').trim();
+    if (recapForSummary) {
+      instruction.push('# 前情提要(前面几集的压缩版, 只作背景, 不要复述):');
       instruction.push('');
+      instruction.push(recapForSummary);
+      instruction.push('');
+    }
+    if (watchSession.episodeMemories.length) {
       instruction.push('前面已经记过的集(不要重复写, 只写这一集):');
       var recent = watchSession.episodeMemories.slice(-3);
       for (var i = 0; i < recent.length; i++) {
         instruction.push('第 ' + recent[i].ep + ' 集：' + recent[i].text);
       }
+      instruction.push('');
     }
+
+    instruction.push('只输出正文, 不要客套、不要分析、不要"根据我的观察"这种说法。');
 
     return requestSummary('episode', instruction.join('\n'))
       .then(function (text) {
@@ -3181,6 +3200,16 @@
     //   seriesRecapInjectPending 落闸 → 库读完后的那次注入再也发不出去。
     //   → 等库读完 (tryInject 里放行), 那时才有完整的内容可注入。
     if (watchSession._crossReading) return;
+    // 🔴 2026-11-05 (手机发热): 短剧【不再单独发提要回合】。
+    //   以前每集换完会话都要另发一个"只回一个好"的回合, 那是白白多一次
+    //   Live 往返 (射频 + 等模型 + 收音频)。现在提要改成并进【这一集自己的
+    //   总结指令】里 (见 doRequestEpisodeSummary), 模型一次就想清楚了。
+    //   短剧用 Live 的场合只有"写剧情记忆"这一件事, 不再有别的用途。
+    //   长剧(film)保持原样 —— 它的阶段摘要靠会话里的上下文, 提要是锚。
+    if (watchSession.kind === 'series') {
+      watchSession.seriesRecapInjectPending = false;   // 落闸, 别再空转
+      return;
+    }
     if (!S.client || !S.client.isReady()) return;     // 等 ready
     injectSeriesRecap();
   }
@@ -4605,11 +4634,16 @@
    *     这一集的全部画面都在它自己那个会话里 → 总结完整。
    *
    * 【换完要把前情提要重新喂一遍】
-   *   新会话是空白的, 模型不知道这部剧演到哪了 → 把提要 + 最近几集原文重新注入
-   *   (走 injectSeriesRecap 那条路), 陪聊和后面的总结才对得上。
+   *   🔴 2026-11-05 改法: 不再【另发一个回合】喂, 改成把提要并进【下一集
+   *   自己的总结指令】里 (见 doRequestEpisodeSummary)。以前是每集换完会话
+   *   再单发一个"只回一个好"的回合 —— 那是一次白跑的 Live 往返(射频+等模型+
+   *   收音频), 看两集就多两趟, 手机上直接体现为发烫。
+   *   内容一份没少 (压缩提要 + 最近几集原文), 只是以前分两趟送, 现在一趟送完。
    */
   function resetSessionAfterEpisode(ep) {
-    watchSession.seriesRecapInjectPending = true;   // 新会话要把前情提要喂回去
+    // ⚠️ 置 false (不是 true): 不置的话 maybeInjectSeriesRecap() 会一直以为
+    //   "还有提要没喂", 每一次 Live ready 都会白空跑一趟。
+    watchSession.seriesRecapInjectPending = false;
     resetLiveSession('第 ' + ep + ' 集结束');
   }
 

@@ -3458,6 +3458,30 @@
   let desktopPetTimer = null;
 
   /**
+   * 桌宠换帧定时器 (呼吸动画的 JS 那一半; CSS 那一半是 @keyframes)
+   *
+   * 🔴 2026-11-05: 影院 iframe 打开时宿主要彻底静默 → 这条定时器一起停,
+   *   退出影院再起来 (见 window.PetNest.pauseDesktopPet / resumeDesktopPet)。
+   *   呼吸动画本身靠 CSS, 宿主把桌宠 display:none 之后它就不画了;
+   *   但这个 setInterval 是 JS 的, 藏起来也照样跑, 得手动停。
+   */
+  function startDesktopPetTimer() {
+    if (desktopPetTimer) return;
+    desktopPetTimer = setInterval(() => {
+      if (document.hidden) return;
+      desktopPetFrame = (desktopPetFrame + 1) % 6;
+      const sprite = el('pn-desktop-pet-sprite');
+      if (sprite && sprite.style.backgroundImage) setSpriteFrame(sprite, desktopPetFrame);
+    }, 5200);
+  }
+
+  function stopDesktopPetTimer() {
+    if (!desktopPetTimer) return;
+    clearInterval(desktopPetTimer);
+    desktopPetTimer = null;
+  }
+
+  /**
    * 页面上现在有没有「全屏遮罩」弹着。
    * 330 的弹窗要么是 <dialog>（showModal 进 top layer，backdrop 盖全屏），
    * 要么是 #custom-modal-overlay.visible（z-index 999999）——
@@ -3762,14 +3786,7 @@ function careActionForButton(btnId) {
     }
 
     // 待机动画：呼吸 + 偶尔换姿态
-    if (!desktopPetTimer) {
-      desktopPetTimer = setInterval(() => {
-        if (document.hidden) return;
-        desktopPetFrame = (desktopPetFrame + 1) % 6;
-        const sprite = el('pn-desktop-pet-sprite');
-        if (sprite && sprite.style.backgroundImage) setSpriteFrame(sprite, desktopPetFrame);
-      }, 5200);
-    }
+    startDesktopPetTimer();
 
     // 拖动
     let dragging = false;
@@ -4721,6 +4738,11 @@ function careActionForButton(btnId) {
       refreshAll();
     },
     desktopPetEnabled,
+    // 🔴 2026-11-05: 宿主静默 (影院 iframe 打开) 时停/起桌宠的换帧定时器。
+    //   呼吸动画靠 CSS, 宿主把桌宠藏起来它就不画了;
+    //   但这个 setInterval 是 JS 的, 藏起来照样跑 —— 得手动停。
+    pauseDesktopPet: stopDesktopPetTimer,
+    resumeDesktopPet: startDesktopPetTimer,
     // 🔴 2026-11-04: 聊天框上那只桌宠是谁 —— 用户可以在宠物屋里自己选
     desktopPetId: desktopPetId,
     isDesktopPet: isDesktopPet,
