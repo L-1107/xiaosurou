@@ -1454,7 +1454,10 @@ let voiceCallStatusHoldUntil = 0;
       }
       // 给 AI 看"人话版": 有中文名就写 "举手猫爪(cat_paw_up)", 没有就写原 id。
       // 只喂英文 id / 纯数字 id 时 AI 不知道该在什么场合用哪个, 结果就是干脆不写表情指令。
-      const nameList = options.slice(0, 16)
+      // 上限从 16 提到 64: 原来 16 是给"一堆长英文 id"的模型省 prompt 用的;
+      // 表情 id 是中文名时, 几十个也就几十个字, 不该被截断 (用户要全部能用)。
+      // 64 只是兜底, 防止个别模型塞几百个表情把 prompt 撑爆。
+      const nameList = options.slice(0, 64)
         .map(o => (o.label ? (o.label + '(' + o.id + ')') : o.id))
         .join(' / ');
       console.log('[视频通话表情] 已把表情清单写进 prompt: ' + options.length + ' 个 → ' + nameList);
