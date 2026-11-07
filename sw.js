@@ -1210,7 +1210,18 @@
 //   cinema-sandbox/index.html 里那三个也一起对齐。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
 //   新增回归: tests/cinema-series-summary.test.cjs ⑪ 组 (4 条, 共 65 条)。
-const CACHE_VERSION = 'v0.2.118.0';
+// v0.2.119.0 (2026-11-07): Live2D 表情清单上限 16 → 64 + 调试台按钮名去重。
+//   ① video-voice-call.js: AI 的表情清单原来只写前 16 个进 prompt —— 那是给
+//      "一堆长英文 id"的模型省 token 的长度保险。现在模型的表情 id 是中文名
+//      (闭眼 / 发火 / 哦嘴 …), 几十个也就几十个字, 不该被截断 —— 用户要全部能用。
+//      64 只是兜底, 防止个别模型塞几百个表情把 prompt 撑爆。
+//   ② live2d-manager.js: 调试台按钮 label 原来 `cn + ' ' + name`, 而 cn 找不到
+//      映射时回退成 name → 中文 id 会拼成 "闭眼 闭眼"。现在同名只显示一次
+//      ('cry' 这类有中文映射的仍显示 "流泪 cry")。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.82 → 0.0.83、
+//   modules/live2d-manager.js 0.0.7 → 0.0.8。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.119.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
