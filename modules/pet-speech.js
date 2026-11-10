@@ -601,28 +601,37 @@
       });
 
       // 气泡先冒省略号（用户定的）
-      if (!o.silent) showBubble('…');
+      // 🔴 2026-11-04: 只有【聊天框上那只】才有资格把泡泡画在自己头上。
+      //   以前桌宠固定是第一只, 所以"谁说话都往同一个身上画"看着还凑合;
+      //   现在用户能自己选桌宠了 —— 如果小花的台词冒在小花头上、小白的台词
+      //   也冒在小花头上, 就是张冠李戴。不是它说的话 → 走 toast (跟桌宠藏起来时一样)。
+      const speakerIsDeskPet = !window.PetNest || typeof window.PetNest.isDesktopPet !== 'function'
+        ? true
+        : window.PetNest.isDesktopPet(petRow.id);
+      const canBubble = !o.silent && speakerIsDeskPet;
+      if (canBubble) showBubble('…');
 
       let text = '';
       try {
         text = await callModel(prompt, { temperature: 0.95, maxTokens: 120 });
       } catch (e) {
         console.warn('[宠物说话] 生成失败（忽略，不影响别的功能）:', (e && e.message) || e);
-        if (!o.silent) hideBubble();
+        if (canBubble) hideBubble();
         return null;
       }
       text = String(text || '').trim();
       if (!text) {
-        if (!o.silent) hideBubble();
+        if (canBubble) hideBubble();
         return null;
       }
       // 别让它说太长
       if (text.length > 120) text = text.slice(0, 120);
 
-      if (!o.silent) showBubble(text);
+      if (canBubble) showBubble(text);
 
-      // 桌宠不在聊天页 → 气泡看不见 → 补一个 toast，别让这句话白说
-      if (!o.silent && !desktopPetVisible()) {
+      // 气泡看不见 → 补一个 toast，别让这句话白说
+      //   两种情况: ① 桌宠不在聊天页 ② 说话的这只不是聊天框上那只
+      if (!o.silent && (!canBubble || !desktopPetVisible())) {
         toastSafe(((pet && pet.name) || '宠物') + '：' + text);
       }
 
@@ -642,17 +651,46 @@
     try {
       const state = window.state;
       const id = state && state.activeChatId;
-      if (!id) return null;
-      return (state.chats && state.chats[id]) || null;
+      if (id && state.chats && state.chats[id]) return state.chats[id];
+      // ⚠️【2026-10-28 修 —— 用户实测「刚开软件弹的宠物语言，聊天框里看不见」】
+      //   刚开软件时还没进过任何聊天 → state.activeChatId 是空的 → 这里返回 null
+      //   → 宠物那句话【一句都没写进任何会话】→ 等于白说。
+      //   → 落到【最近聊过的那个会话】（chats 表有 lastMessageTimestamp 索引）。
+      return mostRecentChat();
     } catch (e) {
       return null;
     }
   }
 
+  /** 最近聊过的那个会话（没有 activeChatId 时用） */
+  function mostRecentChat() {
+    try {
+      const state = window.state;
+      const chats = (state && state.chats) || {};
+      const ids = Object.keys(chats);
+      if (!ids.length) return null;
+      let best = null, bestAt = -1;
+      for (const cid of ids) {
+        const c = chats[cid];
+        if (!c) continue;
+        const at = Number(c.lastMessageTimestamp || c.updatedAt || 0) || 0;
+        if (at > bestAt) { bestAt = at; best = c; }
+      }
+      return best;
+    } catch (e) { return null; }
+  }
+
   function renderChatIfActive(chatId) {
     try {
-      if (window.state && window.state.activeChatId === chatId
-        && typeof window.renderChatMessages === 'function') {
+      if (!window.state || window.state.activeChatId !== chatId) return;
+      // ⚠️【2026-10-28 修 —— 用户实测「宠物说的话要退出聊天框再进才能看见」】
+      //   原来调的是 window.renderChatMessages —— 这个函数【全项目都没有定义】！
+      //   (真正的渲染函数是 window.renderChatInterface，chat-interface.js 里暴露的)
+      //   → 那个 typeof 判断永远为假 → 话写进库了，界面【从不重绘】，
+      //     直到退出聊天框再进（重进时走 renderChatInterface）才看得见。
+      if (typeof window.renderChatInterface === 'function') {
+        try { window.renderChatInterface(chatId); } catch (e) { /* 忽略 */ }
+      } else if (typeof window.renderChatMessages === 'function') {
         window.renderChatMessages();
       }
     } catch (e) { /* 忽略 */ }
@@ -803,6 +841,7 @@
     desktopPetVisible,
     speechEnabled,
     chatInsertEnabled,
+    mostRecentChat,
     recentChatLines,
     lastSpokeAt,
     markSpoke

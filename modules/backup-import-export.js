@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // backup-import-export.js — 备份导入导出 + 数据分布统计
 // 从 script.js 拆分（原始行范围：6093~6974 + 54517~55595）
 // ============================================================
@@ -286,6 +286,150 @@
     }
   }
 
+  // ==========================================================================
+  // 影院 Blob 编解码 (2026-10-29)
+  //
+  // 【问题】影院有两张表带二进制:
+  //   cinemaChars  { id:'bg'|'left'|'right'|'table', image: Blob, x, y, scale }  ← 立绘/背景
+  //   cinemaBlobs  { id, file: File }                                             ← 影片本体
+  // 备份是 JSON.stringify 出来的 —— Blob/File 一律被压成 {}:
+  //   JSON.stringify({id:'f1', file: new File([..])})  ->  {"id":"f1","file":{}}
+  // ⇒ 立绘/背景整个丢掉，换设备后只剩几个空位。
+  //
+  // 【修法】
+  //   立绘/背景 (几百 KB ~ 几 MB) → base64 dataURL 带走，导入时还原成 Blob。
+  //   影片本体 (可能几百 MB) → 不进备份。片单元数据 (cinemaFilms) 照旧保留，
+  //     换设备后重新加一次文件就行 —— 影院里本来就有「影片本体不在了」的友好提示。
+  //
+  // 【为什么影片不进】base64 会把体积膨胀 4/3，一部 24MB 的片子进 JSON 就是 32MB，
+  //   手机上导出会直接把内存打爆。当初把 cinemaBlobs 拆成独立表，就是为了
+  //   「列片单」不把视频读进内存 —— 备份没理由反过来把它塞回去。
+  // ==========================================================================
+  const BACKUP_CINEMA_BLOB_FIELDS = { cinemaChars: ['image'] };
+  const BACKUP_CINEMA_SKIP_TABLES = ['cinemaBlobs'];
+
+  function isCinemaBlobTable(tableName) {
+    return !!(tableName && Object.prototype.hasOwnProperty.call(BACKUP_CINEMA_BLOB_FIELDS, tableName));
+  }
+
+  function isCinemaSkipTable(tableName) {
+    return BACKUP_CINEMA_SKIP_TABLES.indexOf(tableName) !== -1;
+  }
+
+  /** Blob → base64 dataURL（备份里能安全 JSON 化） */
+  async function blobToBackupDataUrl(blob) {
+    if (!blob || typeof blob.arrayBuffer !== 'function') return '';
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return 'data:' + (blob.type || 'application/octet-stream') + ';base64,' + btoa(bin);
+  }
+
+  /** base64 dataURL → Blob */
+  async function backupDataUrlToBlob(dataUrl) {
+    const m = /^data:([^;,]*)((?:;[^,;]*)*),(.*)$/.exec(String(dataUrl || ''));
+    if (!m) return null;
+    const mime = m[1] || 'application/octet-stream';
+    if (/;base64/i.test(m[2] || '')) {
+      const bin = atob(m[3] || '');
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type: mime });
+    }
+    return new Blob([decodeURIComponent(m[3] || '')], { type: mime });
+  }
+
+  /**
+   * 导出前：把表里的 Blob 字段换成 base64 dataURL。非 Blob 表原样返回（零开销）。
+   */
+  async function encodeCinemaTable(tableName, records) {
+    if (!isCinemaBlobTable(tableName) || !Array.isArray(records)) return records;
+    const fields = BACKUP_CINEMA_BLOB_FIELDS[tableName];
+    const out = [];
+    for (const record of records) {
+      if (!record || typeof record !== 'object') { out.push(record); continue; }
+      let copy = null;
+      for (const field of fields) {
+        const v = record[field];
+        if (!v || typeof v === 'string') continue;            // 已经是 dataURL
+        if (typeof v.arrayBuffer !== 'function') continue;    // 不是 Blob
+        const dataUrl = await blobToBackupDataUrl(v);
+        if (!dataUrl) continue;
+        if (!copy) copy = Object.assign({}, record);
+        copy[field] = dataUrl;
+      }
+      out.push(copy || record);
+    }
+    return out;
+  }
+
+  /**
+   * 导入前：把 dataURL 还原成 Blob。
+   * 顺带处理【老备份里的空壳】：Blob 被 JSON 压成 {} 之后是 truthy 的，
+   *   直接写回库 → getChar() 会把它当图片返回 → createObjectURL({}) 抛异常。
+   *   这里把它清掉，界面就显示「没传立绘」而不是炸。
+   */
+  async function decodeCinemaTable(tableName, records) {
+    if (!isCinemaBlobTable(tableName) || !Array.isArray(records)) return records;
+    const fields = BACKUP_CINEMA_BLOB_FIELDS[tableName];
+    const out = [];
+    for (const record of records) {
+      if (!record || typeof record !== 'object') { out.push(record); continue; }
+      let copy = null;
+      for (const field of fields) {
+        if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
+        const v = record[field];
+        if (!v) continue;
+        if (typeof v === 'string') {
+          if (!/^data:/i.test(v)) continue;                     // 不是 dataURL，原样留着
+          const blob = await backupDataUrlToBlob(v);
+          if (!blob) continue;
+          if (!copy) copy = Object.assign({}, record);
+          copy[field] = blob;
+          continue;
+        }
+        if (typeof v.arrayBuffer === 'function') continue;    // 本来就是 Blob，原样
+        // 走到这儿 = 老备份的空壳 ({}) → 清掉
+        if (!copy) copy = Object.assign({}, record);
+        delete copy[field];
+      }
+      out.push(copy || record);
+    }
+    return out;
+  }
+
+  /**
+   * 导入前的统一预处理：整份备份里的二进制还原 + 影片本体剔除。
+   * ⚠️ 必须在【事务外面】调用 —— 还原 Blob 要 await arrayBuffer()，
+   *    那不是 IDB 请求，在 Dexie 事务里 await 会让事务提前提交。
+   */
+  async function prepareBackupTablesForImport(source) {
+    const out = {};
+    if (!source || typeof source !== 'object') return out;
+    for (const tableName in source) {
+      const rows = source[tableName];
+      if (!Array.isArray(rows)) { out[tableName] = rows; continue; }
+      if (isCinemaSkipTable(tableName)) continue;   // 影片本体不进备份
+      out[tableName] = await decodeCinemaTable(tableName, rows);
+    }
+    return out;
+  }
+
+  /** 单表导入（没有外层事务的路径用）：还原 Blob + 跳过影片本体表 */
+  async function importTableRecords(tableName, records) {
+    if (!Array.isArray(records) || records.length === 0) return 0;
+    if (isCinemaSkipTable(tableName)) {
+      console.log(`[Backup] 跳过表 ${tableName}（影片本体不进备份，换设备后请重新添加影片文件）`);
+      return 0;
+    }
+    const decoded = await decodeCinemaTable(tableName, records);
+    await db.table(tableName).bulkPut(decoded);
+    return decoded.length;
+  }
+
   // ============================================================
   // localStorage 扩展设置备份和恢复辅助函数
   // ------------------------------------------------------------
@@ -470,6 +614,12 @@
         shoppingCategories,
         customAvatarFrames,
         readingLibrary,
+        // ⚠️ 2026-11-01: 读书屋 (旧版「一起读书」重做)。
+        //   老的 readingLibrary 表里每条记录都带整本书正文 → 备份会被撑成几十 MB。
+        //   现在拆成 readingBooks(元数据) + readingPages(一页一条正文),
+        //   两个都带走, 还原之后书架和正文都还在。
+        readingBooks,
+        readingPages,
         quickReplies,
         quickReplyCategories,
         npcGroups,
@@ -518,6 +668,8 @@
         db.shoppingCategories.toArray(),
         db.customAvatarFrames.toArray(),
         db.readingLibrary.toArray(),
+        db.readingBooks.toArray(),
+        db.readingPages.toArray(),
         db.quickReplies.toArray(),
         db.quickReplyCategories.toArray(),
         db.npcGroups.toArray(),
@@ -573,6 +725,8 @@
         shoppingCategories,
         customAvatarFrames,
         readingLibrary,
+        readingBooks,
+        readingPages,
         quickReplies,
         quickReplyCategories,
         npcGroups,
@@ -692,7 +846,9 @@
         stickerVisionCache: '表情识别缓存',
         shoppingCategories: '商品分类',
         customAvatarFrames: '自定义头像框',
-        readingLibrary: '阅读库',
+        readingLibrary: '阅读库(旧)',
+        readingBooks: '读书屋(书架)',
+        readingPages: '读书屋(正文页)',
         quickReplies: '快捷回复',
         quickReplyCategories: '快捷回复分类',
         npcGroups: 'NPC分组',
@@ -867,6 +1023,11 @@
       console.log('正在清理扩展设置 localStorage 数据...');
       clearExtraLocalStorage();
 
+      // 🔴 影院立绘的 dataURL → Blob 要 await blob.arrayBuffer()，那不是 IDB 请求，
+      //   在 Dexie 事务里 await 它会让事务提前提交（"Transaction committed too early"）。
+      //   所以先在事务外面把二进制还原好，再进事务写库。
+      const prepared = await prepareBackupTablesForImport(backupData);
+
       // 2. 导入数据库
       await db.transaction('rw', db.tables, async () => {
 
@@ -875,13 +1036,13 @@
         }
 
 
-        for (const tableName in backupData) {
+        for (const tableName in prepared) {
           // 跳过 localStorage 字段，它不是数据库表
           if (tableName === 'localStorage') continue;
 
-          if (Array.isArray(backupData[tableName])) {
-            console.log(`正在导入表: ${tableName}, 记录数: ${backupData[tableName].length}`);
-            await db.table(tableName).bulkPut(backupData[tableName]);
+          if (Array.isArray(prepared[tableName])) {
+            console.log(`正在导入表: ${tableName}, 记录数: ${prepared[tableName].length}`);
+            await db.table(tableName).bulkPut(prepared[tableName]);
           }
         }
       });
@@ -984,7 +1145,9 @@
       'npcs': 'NPCs',
       'npcGroups': 'NPC分组',
       'stickerVisionCache': '表情缓存',
-      'readingLibrary': '阅读库',
+      'readingLibrary': '阅读库(旧)',
+      'readingBooks': '读书屋(书架)',
+      'readingPages': '读书屋(正文页)',
       'quickReplies': '快捷回复',
       'quickReplyCategories': '快捷回复分类',
       'naiPresets': 'NAI预设',
@@ -1159,7 +1322,9 @@
       'npcs': 'NPCs',
       'npcGroups': 'NPC分组',
       'stickerVisionCache': '表情缓存',
-      'readingLibrary': '阅读库',
+      'readingLibrary': '阅读库(旧)',
+      'readingBooks': '读书屋(书架)',
+      'readingPages': '读书屋(正文页)',
       'quickReplies': '快捷回复',
       'quickReplyCategories': '快捷回复分类',
       'naiPresets': 'NAI预设',
@@ -1289,6 +1454,18 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         await importPetNestBackup(dataToMerge.petNest);
       }
 
+      // 🔴 影院立绘的 dataURL → Blob 要 await blob.arrayBuffer()，那不是 IDB 请求，
+      //   在 Dexie 事务里 await 它会让事务提前提交。
+      //   所以先在事务外面把二进制还原好，再进事务写库。
+      const preparedRows = {};
+      for (const type of typesToMerge) {
+        if (type === 'localStorage' || type === 'petNest') continue;
+        const rows = dataToMerge[type];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+        if (isCinemaSkipTable(type)) continue;   // 影片本体不进备份
+        preparedRows[type] = await decodeCinemaTable(type, rows);
+      }
+
       // 处理数据库表
       await db.transaction('rw', db.tables, async () => {
         for (const type of typesToMerge) {
@@ -1296,6 +1473,8 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
           if (type === 'localStorage') continue;
           // 宠物屋也是独立库，不在主库表里
           if (type === 'petNest') continue;
+          // 影片本体 (cinemaBlobs) 不进备份 —— 直接丢掉，别把 {} 当文件写进去
+          if (isCinemaSkipTable(type)) continue;
           
           const data = dataToMerge[type];
           if (!data) continue;
@@ -1309,7 +1488,7 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
           if (Array.isArray(data)) {
 
             console.log(`正在合并 ${data.length} 条记录到 ${type}...`);
-            await table.bulkPut(data);
+            await table.bulkPut(preparedRows[type] || data);
           } else if (typeof data === 'object' && data.id) {
 
             console.log(`正在合并单条记录到 ${type}...`);
@@ -1395,6 +1574,17 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         if (Array.isArray(backupData.shoppingCategories)) await db.shoppingCategories.bulkPut(backupData.shoppingCategories);
         if (Array.isArray(backupData.customAvatarFrames)) await db.customAvatarFrames.bulkPut(backupData.customAvatarFrames);
         if (Array.isArray(backupData.readingLibrary)) await db.readingLibrary.bulkPut(backupData.readingLibrary);
+        // ⚠️ 2026-11-01 读书屋: 正文页可能有三万多条 (二十四史 = 3.2 万页),
+        //   一次 bulkPut 几万条会把事务撑爆 → 分批写。
+        //   分批是在【同一个事务】里做的, 所以每批之间不能 await 非 IDB 的 Promise
+        //   (那会让 Dexie 事务提前提交, 后面几批全丢)。
+        if (Array.isArray(backupData.readingBooks)) await db.readingBooks.bulkPut(backupData.readingBooks);
+        if (Array.isArray(backupData.readingPages)) {
+          const CHUNK = 2000;
+          for (let i = 0; i < backupData.readingPages.length; i += CHUNK) {
+            await db.readingPages.bulkPut(backupData.readingPages.slice(i, i + CHUNK));
+          }
+        }
         if (Array.isArray(backupData.quickReplies)) await db.quickReplies.bulkPut(backupData.quickReplies);
         if (Array.isArray(backupData.quickReplyCategories)) await db.quickReplyCategories.bulkPut(backupData.quickReplyCategories);
         if (Array.isArray(backupData.npcGroups)) await db.npcGroups.bulkPut(backupData.npcGroups);
@@ -1466,11 +1656,14 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
     try {
       await runPreBackupImageMigration();
 
-      const tablesToBackup = db.tables.map(t => t.name);
+      // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+      const tablesToBackup = db.tables.map(t => t.name).filter(function (n) { return !isCinemaSkipTable(n); });
 
       for (const tableName of tablesToBackup) {
         console.log(`正在打包表: ${tableName}...`);
         let tableData = await db.table(tableName).toArray();
+        // 🔴 影院立绘/背景是 Blob —— 不转 base64 的话 JSON.stringify 会压成 {}，图片整个丢掉。
+        tableData = await encodeCinemaTable(tableName, tableData);
 
         // 方案3：导出时移除API历史记录
         if (tableName === 'chats') {
@@ -1626,7 +1819,8 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
 
       await writer.write(encoder.encode('{\n"version": 3,\n"timestamp": ' + Date.now() + ',\n"data": {\n'));
 
-      const tablesToBackup = await db.tables.map(t => t.name);
+      // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+      const tablesToBackup = await db.tables.map(t => t.name).filter(function (n) { return !isCinemaSkipTable(n); });
 
       for (let i = 0; i < tablesToBackup.length; i++) {
         const tableName = tablesToBackup[i];
@@ -1637,21 +1831,35 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
 
         let isFirstRecordInTable = true;
 
-        await table.each(record => {
-          if (!isFirstRecordInTable) {
-            writer.write(encoder.encode(',\n'));
+        // 🔴 影院立绘/背景 (cinemaChars) 存的是 Blob —— JSON.stringify 会把它压成 {}，
+        //   图片整个丢掉。table.each 的回调是同步的，转不了 Blob，
+        //   所以这张表单独走 toArray + 转 base64。
+        if (isCinemaBlobTable(tableName)) {
+          const blobRows = await encodeCinemaTable(tableName, await table.toArray());
+          for (const blobRow of blobRows) {
+            if (!isFirstRecordInTable) {
+              await writer.write(encoder.encode(',\n'));
+            }
+            await writer.write(encoder.encode(JSON.stringify(blobRow)));
+            isFirstRecordInTable = false;
           }
+        } else {
+          await table.each(record => {
+            if (!isFirstRecordInTable) {
+              writer.write(encoder.encode(',\n'));
+            }
 
-          // 方案3：导出时移除API历史记录
-          let recordToWrite = record;
-          if (tableName === 'chats' && record.apiHistory) {
-            recordToWrite = { ...record };
-            delete recordToWrite.apiHistory;
-          }
+            // 方案3：导出时移除API历史记录
+            let recordToWrite = record;
+            if (tableName === 'chats' && record.apiHistory) {
+              recordToWrite = { ...record };
+              delete recordToWrite.apiHistory;
+            }
 
-          writer.write(encoder.encode(JSON.stringify(recordToWrite)));
-          isFirstRecordInTable = false;
-        });
+            writer.write(encoder.encode(JSON.stringify(recordToWrite)));
+            isFirstRecordInTable = false;
+          });
+        }
 
 
         await writer.write(encoder.encode('\n]'));
@@ -1697,10 +1905,13 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         data: {}
       };
 
-      const tablesToBackup = db.tables.map(t => t.name);
+      // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+      const tablesToBackup = db.tables.map(t => t.name).filter(function (n) { return !isCinemaSkipTable(n); });
 
       for (const tableName of tablesToBackup) {
         let tableData = await db.table(tableName).toArray();
+        // 🔴 影院立绘/背景是 Blob —— 不转 base64 的话 JSON.stringify 会压成 {}，图片整个丢掉。
+        tableData = await encodeCinemaTable(tableName, tableData);
         
         // 方案3：导出时移除API历史记录
         if (tableName === 'chats') {
@@ -2273,7 +2484,11 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
       let totalRecords = 0;
       for (const tableName of tables) {
         if (db[tableName]) {
+          // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+          if (isCinemaSkipTable(tableName)) continue;
           let tableData = await db.table(tableName).toArray();
+          // 🔴 影院立绘/背景是 Blob —— 不转 base64 的话 JSON.stringify 会压成 {}，图片整个丢掉。
+          tableData = await encodeCinemaTable(tableName, tableData);
           
           // 根据选中的角色/群聊过滤数据
           if (isFiltered) {
@@ -2511,10 +2726,13 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
           const tableData = data[tableName];
           if (Array.isArray(tableData) && tableData.length > 0) {
             // 使用 bulkPut 来合并数据（如果有主键冲突会覆盖）
-            await db.table(tableName).bulkPut(tableData);
-            importedTables++;
-            importedRecords += tableData.length;
-            console.log(`已导入表 ${tableName}: ${tableData.length} 条记录`);
+            // 🔴 影院立绘要先还原成 Blob；影片本体 (cinemaBlobs) 直接丢掉
+            const imported = await importTableRecords(tableName, tableData);
+            if (imported > 0) {
+              importedTables++;
+              importedRecords += imported;
+              console.log(`已导入表 ${tableName}: ${imported} 条记录`);
+            }
           }
         } else {
           console.warn(`表 ${tableName} 不存在于当前数据库中，跳过`);
@@ -2725,7 +2943,8 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
       };
 
       // --- 3. 流式遍历数据库 ---
-      const tablesToBackup = db.tables.map(t => t.name);
+      // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+      const tablesToBackup = db.tables.map(t => t.name).filter(function (n) { return !isCinemaSkipTable(n); });
 
       for (const tableName of tablesToBackup) {
         const totalCount = await db.table(tableName).count();
@@ -2735,8 +2954,10 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
 
         while (offset < totalCount) {
           const batch = await db.table(tableName).offset(offset).limit(DB_BATCH_SIZE).toArray();
+          // 🔴 影院立绘/背景是 Blob —— 不转 base64 的话 JSON.stringify 会压成 {}，图片整个丢掉。
+          const encBatch = isCinemaBlobTable(tableName) ? await encodeCinemaTable(tableName, batch) : batch;
 
-          for (const record of batch) {
+          for (const record of encBatch) {
             const recordStr = JSON.stringify(record);
             const recordSize = recordStr.length + tableName.length + 5;
 
@@ -3048,7 +3269,8 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
 
       // --- 3. 流式生成完整 JSON 并自动分片 ---
       await writeToStream('{\n"version": 3,\n"timestamp": ' + Date.now() + ',\n"data": {\n');
-      const tablesToBackup = db.tables.map(t => t.name);
+      // 🔴 影片本体表 (cinemaBlobs) 不进备份 —— 文件太大，base64 会撑爆内存。
+      const tablesToBackup = db.tables.map(t => t.name).filter(function (n) { return !isCinemaSkipTable(n); });
 
       for (let i = 0; i < tablesToBackup.length; i++) {
         const tableName = tablesToBackup[i];
@@ -3061,7 +3283,9 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
           let offset = 0;
           while (offset < totalCount) {
             const batch = await db.table(tableName).offset(offset).limit(DB_BATCH_SIZE).toArray();
-            for (const record of batch) {
+            // 🔴 影院立绘/背景是 Blob —— 不转 base64 的话 JSON.stringify 会压成 {}，图片整个丢掉。
+            const encBatch = isCinemaBlobTable(tableName) ? await encodeCinemaTable(tableName, batch) : batch;
+            for (const record of encBatch) {
               if (!isFirstRecord) {
                 await writeToStream(',\n');
               }
@@ -3354,7 +3578,7 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
         const dataPart = json.data || json;
         for (const tableName of Object.keys(dataPart)) {
           const records = dataPart[tableName];
-          if (Array.isArray(records) && records.length > 0) await db.table(tableName).bulkPut(records);
+          if (Array.isArray(records) && records.length > 0) await importTableRecords(tableName, records);
         }
       };
       if (targetSet.type === 'multipart') {
@@ -3394,7 +3618,7 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
             const dataPart = json.data || json;
             for (const tableName of Object.keys(dataPart)) {
               const records = dataPart[tableName];
-              if (Array.isArray(records) && records.length > 0) await db.table(tableName).bulkPut(records);
+              if (Array.isArray(records) && records.length > 0) await importTableRecords(tableName, records);
             }
           }
           await new Promise(r => setTimeout(r, 50));
@@ -3410,7 +3634,7 @@ document.getElementById('confirm-merge-import-btn').onclick = () => {
           const dataPart = parsed.data || parsed;
           for (const tableName of Object.keys(dataPart)) {
             const records = dataPart[tableName];
-            if (Array.isArray(records) && records.length > 0) await db.table(tableName).bulkPut(records);
+            if (Array.isArray(records) && records.length > 0) await importTableRecords(tableName, records);
           }
         }
       } else {

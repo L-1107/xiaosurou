@@ -1,0 +1,791 @@
+/* ============================================================
+ * modules/reading-sandbox.css
+ * 读书屋 (iframe 沙盒) · 样式
+ *
+ * 【为什么单独一份】
+ *   读书屋跑在 reading-sandbox/index.html 里, 那是个只有几十个 DOM 节点的
+ *   干净文档 —— 宿主有 3552 个节点, 在里面点输入框主线程会冻 4~5 秒
+ *   (影院踩过的坑, modules/cinema-room.js:2754 有记录)。
+ *   → 这份 CSS 只给沙盒用, 不进宿主。
+ *
+ * 【配色】
+ *   宣纸底 + 墨字 + 描金, 跟用户给的那两张背景图是一套。
+ * ============================================================ */
+
+:root {
+  --rr-ink: #3c3026;
+  --rr-ink-soft: #6d5c4a;
+  --rr-ink-faint: #9b8a75;
+  --rr-paper: #faf4e6;
+  --rr-paper-2: #f2e6cf;
+  --rr-accent: #9a6b3f;
+  --rr-accent-gold: #c9a227;
+  --rr-line: rgba(122, 90, 58, 0.22);
+  --rr-line-soft: rgba(122, 90, 58, 0.12);
+  --rr-shadow: 0 6px 26px rgba(70, 44, 18, 0.16);
+  --rr-chat-h: 42vh;
+  --rr-serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC",
+               "Source Han Serif SC", "Times New Roman", serif;
+  --rr-sans: -apple-system, BlinkMacSystemFont, "PingFang SC",
+             "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #f6efe2;
+  color: var(--rr-ink);
+  font-family: var(--rr-sans);
+  font-size: 15px;
+  -webkit-text-size-adjust: 100%;
+}
+
+#rr-root {
+  position: fixed;
+  /* ⚠️ 键盘避让: iframe 里的 window.visualViewport【不会】反映 iOS 键盘
+     (键盘压的是顶层视口, iframe 拿不到 inset) → 由宿主转发真实高度过来。
+     整个读书屋跟着可视视口走, 键盘弹多高就缩多高, 输入框永远不会被盖住。 */
+  top: var(--rr-vv-top, 0px);
+  left: 0;
+  right: 0;
+  height: var(--rr-vv-height, 100dvh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+button { font-family: inherit; }
+
+/* ============================================================
+ * 开机页
+ * ============================================================ */
+#rr-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  background: linear-gradient(160deg, #f7efdf 0%, #efe3cc 100%);
+}
+#rr-boot .t {
+  font-family: var(--rr-serif);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--rr-accent);
+}
+#rr-boot .s {
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--rr-ink-faint);
+  max-width: 300px;
+}
+#rr-boot.hide { display: none; }
+
+/* ============================================================
+ * 通用
+ * ============================================================ */
+.rr-view { flex: 1 1 auto; min-height: 0; display: none; flex-direction: column; }
+.rr-view.active { display: flex; }
+
+.rr-icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--rr-ink-soft);
+  padding: 6px 9px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rr-icon-btn:active { background: rgba(122, 90, 58, 0.1); }
+.rr-icon-btn svg { width: 18px; height: 18px; display: block; }
+
+/* ============================================================
+ * 顶栏
+ *
+ * ⚠️ 2026-11-02 用户反馈: 手机 PWA 上"返回书架"的返回键位置太高,
+ *   顶到状态栏(时间/信号)那一行去了。
+ *   原因: env(safe-area-inset-top) 在【iframe 里】基本返回 0
+ *   (安全区是顶层文档的概念) → 顶栏就贴在屏幕最上面。
+ *   修法: 宿主(顶层文档)量出真值, 用 --rr-safe-top 传进来,
+ *         顶栏取两者的最大值 —— 宿主量不到时至少还有 env() 兜底。
+ * ============================================================ */
+.rr-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: calc(max(env(safe-area-inset-top, 0px), var(--rr-safe-top, 0px)) + 10px);
+  padding-right: 14px;
+  padding-bottom: 10px;
+  padding-left: 14px;
+  background: rgba(250, 244, 230, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--rr-line-soft);
+  z-index: 4;
+}
+.rr-topbar .rr-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--rr-serif);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--rr-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rr-topbar .rr-sub {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--rr-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 字数(#rr-book-stat) 和页码(#rr-page-label) 之间留一点空, 别挤在一起。
+   字数是 2026-11-03 加的 (书架卡片说明区去掉后, 字数挪到顶栏)。 */
+.rr-topbar #rr-book-stat:not(:empty) {
+  margin-right: 10px;
+}
+.rr-topbar .rr-back {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 14px;
+  color: var(--rr-accent);
+  border: 0;
+  background: transparent;
+  padding: 6px 4px;
+  cursor: pointer;
+  font-family: var(--rr-serif);
+}
+
+/* ============================================================
+ * 书架大厅
+ * ============================================================ */
+#rr-hall {
+  background-image: url("../assets/reading-room/reading-hall-bg.webp");
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+#rr-hall .rr-hall-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 14px calc(env(safe-area-inset-bottom) + 24px);
+}
+.rr-hall-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.rr-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--rr-line);
+  background: rgba(255, 252, 244, 0.88);
+  color: var(--rr-ink);
+  /* ⚠️ 必须是 16px: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+     (而且 iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+     → 用户实测"只要点击输入框, 屏幕就会异常放大"。
+     主聊天那边 (css/chat-ui.css) 的输入框早就是 16px, 这里跟上。 */
+  font-size: 16px;
+  outline: none;
+}
+.rr-search:focus { border-color: var(--rr-accent); }
+.rr-search::placeholder { color: var(--rr-ink-faint); }
+
+.rr-add-btn {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--rr-accent);
+  background: linear-gradient(180deg, #b07f4c, #95653a);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(120, 78, 34, 0.28);
+}
+.rr-add-btn:active { transform: translateY(1px); }
+
+.rr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 12px;
+}
+/* ============================================================
+ * 书籍卡片 (2026-11-03 调整过)
+ *
+ * 以前: 上面 104px 封面 (cover 铺满裁切) + 下面一块白底说明区
+ *       (书名 / 字数·页数 / 进度条)。用户反馈"封面图占全部不好看",
+ *       而且竖版封面被 cover 裁掉两边。
+ * 现在: 卡片【只留封面图】, 说明区去掉 (阅读页顶栏本来就有书名和页码),
+ *       封面改成 contain —— 【整张封面完整显示, 不裁切】。
+ *       代价: 图和卡片的比例不一样时四周会留白 (这是"不裁切"的必然结果)。
+ * ============================================================ */
+.rr-book-card {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 252, 244, 0.9);
+  border: 1px solid var(--rr-line);
+  box-shadow: var(--rr-shadow);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.12s ease;
+}
+.rr-book-card:active { transform: scale(0.975); }
+.rr-book-card .rr-cover {
+  /* 整张图都看得见 → contain。contain 的前提是容器有确定的高宽比,
+     所以这里用 aspect-ratio 定成 3:4 (常见的书籍开本比例),
+     竖版封面几乎填满, 横版封面上下留白但一条边都不裁。 */
+  aspect-ratio: 3 / 4;
+  width: 100%;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: var(--rr-paper-2);
+  border-bottom: 1px solid var(--rr-line-soft);
+}
+/* ⚠️ 2026-11-03: 卡片说明区(书名/字数/页数/进度条)按用户要求去掉了,
+   所以 .rr-meta / .rr-name / .rr-stat / .rr-bar 这几条规则已经没有对应元素,
+   全部删掉 —— 留着就是死代码。
+   书名和页码在阅读页顶栏, 字数也补到顶栏了 (见 .rr-topbar .rr-sub)。 */
+/* ============================================================
+ * 卡片菜单 (2026-11-02)
+ *
+ * 以前卡片右上角常驻一个 🗑, 现在换成 ⋯ 三点按钮 (CSS 画的, 不用素材),
+ * 点开是一张羊皮纸小卷轴, 里面只有两项: 更换封面 / 删除书籍。
+ * ============================================================ */
+.rr-book-card .rr-card-menu-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(122, 90, 58, 0.3);
+  /* 浅色圆底 + 深咖啡色的点 → 封面是深色照片时也照样看得清 */
+  background: rgba(250, 244, 230, 0.88);
+  color: var(--rr-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  z-index: 3;
+  box-shadow: 0 2px 8px rgba(60, 40, 20, 0.24);
+}
+.rr-book-card .rr-card-menu-btn i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.rr-book-card .rr-card-menu-btn.on {
+  background: var(--rr-accent);
+  border-color: rgba(122, 90, 58, 0.45);
+  color: #fff8ec;
+}
+
+/* 羊皮纸菜单本体
+ * ⚠️ 素材 420×502 → 这里的 164×196 是同一个比例 (164/420*502 ≈ 196),
+ *   再配 background-size: contain → 怎么缩放都不会把卷轴拉变形。
+ * ⚠️ 文字全部在素材【外面】用 HTML 渲染 —— 素材里一个字的没有。 */
+.rr-card-menu {
+  position: fixed;
+  z-index: 2147483000;
+  width: 164px;
+  height: 196px;
+  background-image: url("../assets/reading-room/menu-scroll.webp");
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: contain;
+}
+/* 文字区: 绝对定位的内层容器
+ * ⚠️ 千万别用百分比 padding 来定位文字 —— 百分比永远按【包含块的宽度】算,
+ *   菜单挂在 body 上时包含块是整个视口 (500 多像素),
+ *   padding 会把菜单整个撑成 200 多像素宽 (实测 202×242)。
+ *   内层容器是绝对定位, 它的百分比才是相对菜单自己算的。 */
+.rr-card-menu-items {
+  position: absolute;
+  left: 27%;
+  right: 16%;
+  top: 30%;
+  bottom: 18%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.rr-card-menu-item {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  font-family: var(--rr-serif);
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  color: var(--rr-ink);        /* 默认深咖啡色 */
+  padding: 10px 4px;
+  width: 100%;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.rr-card-menu-item:hover,
+.rr-card-menu-item:active {
+  color: var(--rr-accent);     /* 悬停/按住 → 古铜色高亮 */
+  background: rgba(154, 107, 63, 0.12);
+}
+
+/* ============================================================
+ * 换封面 · 预览框 (2026-11-02)
+ * ============================================================ */
+.rr-cover-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(48, 38, 30, 0.55);
+  padding: 20px;
+}
+.rr-cover-preview.on { display: flex; }
+.rr-cover-preview-card {
+  width: min(300px, 86vw);
+  background: var(--rr-paper);
+  border: 1px solid var(--rr-line);
+  border-radius: 14px;
+  box-shadow: var(--rr-shadow);
+  padding: 16px;
+  text-align: center;
+}
+.rr-cover-preview-tip {
+  font-family: var(--rr-serif);
+  font-size: 15px;
+  color: var(--rr-ink);
+  margin-bottom: 12px;
+}
+.rr-cover-preview-card img {
+  display: block;
+  width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--rr-line-soft);
+  background: var(--rr-paper-2);
+}
+.rr-cover-preview-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.rr-cover-pbtn {
+  flex: 1 1 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--rr-line);
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--rr-ink);
+  font-family: var(--rr-serif);
+  /* ⚠️ 按钮不是输入框 —— 15px 不会触发 iOS 的聚焦自动放大 */
+  font-size: 15px;
+  padding: 10px 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.rr-cover-pbtn.primary {
+  background: linear-gradient(180deg, #b07f4c, #95653a);
+  border-color: rgba(122, 90, 58, 0.45);
+  color: #fff;
+}
+
+.rr-empty {
+  text-align: center;
+  color: var(--rr-ink-faint);
+  font-size: 13px;
+  line-height: 2;
+  padding: 60px 20px;
+}
+.rr-empty .big { font-family: var(--rr-serif); font-size: 34px; display: block; margin-bottom: 10px; }
+
+/* ============================================================
+ * 阅读室
+ * ============================================================ */
+#rr-reader {
+  background-image: url("../assets/reading-room/reading-page-bg.webp");
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+#rr-reader .rr-topbar { background: rgba(250, 244, 230, 0.7); }
+
+.rr-page-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 14px 6px;
+  display: flex;
+  flex-direction: column;
+}
+.rr-page-card {
+  /* ⚠️ flex-shrink 必须是 0 —— 之前写 1 (flex:1 1 auto), 卡片被压到跟可视区一样高,
+     *   加上 overflow:hidden, 一页正文的下半段直接被裁掉, 而且滚也滚不到
+     *   (外层 .rr-page-area 看到的就是"卡片正好占满", 没有滚动条)。
+   *   改成 1 0 auto = 内容多高卡片就多高 (超了让外层去滚), 内容矮再撑满。 */
+  flex: 1 0 auto;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 251, 240, 0.93), rgba(249, 240, 224, 0.95));
+  border: 1px solid var(--rr-line);
+  box-shadow: var(--rr-shadow);
+  padding: 20px 18px 22px;
+  margin-bottom: 0;
+  position: relative;
+  overflow: hidden;
+}
+.rr-page-card .rr-chapter {
+  font-family: var(--rr-serif);
+  font-size: 13px;
+  color: var(--rr-accent);
+  letter-spacing: 0.06em;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px dashed var(--rr-line);
+}
+.rr-page-text {
+  font-family: var(--rr-serif);
+  font-size: 17px;
+  line-height: 2.05;
+  color: var(--rr-ink);
+  letter-spacing: 0.02em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rr-page-text p { text-indent: 2em; margin: 0 0 0.35em; }
+.rr-page-text .rr-ch-line {
+  text-indent: 0;
+  text-align: center;
+  font-size: 15px;
+  color: var(--rr-accent);
+  margin: 0.6em 0;
+  letter-spacing: 0.08em;
+}
+
+/* 选中片段的高亮 */
+.rr-page-text ::selection { background: rgba(201, 162, 39, 0.32); }
+.rr-picked {
+  /* ⚠️ 这一条是 .rr-page-area 的直接子元素 (不在正文卡片里), 用 sticky 贴在可视区底部。
+     之前它塞在卡片里, 正文一长就被顶到屏幕外 —— 用户圈完句子根本不知道自己圈了哪句。 */
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  flex: 0 0 auto;
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(252, 247, 236, 0.97);
+  border: 1px solid var(--rr-line);
+  border-left: 3px solid var(--rr-accent-gold);
+  box-shadow: 0 -3px 12px rgba(60, 48, 38, 0.08);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--rr-ink-soft);
+  display: none;
+}
+.rr-picked.on { display: block; }
+.rr-picked b { color: var(--rr-accent); font-weight: 600; }
+/* 提示条是 sticky 的 → 给正文区留出它的高度, 最后一段才不会被压在底下 */
+.rr-page-area.has-picked { padding-bottom: 92px; }
+
+.rr-pick-fab {
+  position: absolute;
+  z-index: 30;
+  display: none;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(60, 48, 38, 0.9);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.rr-pick-fab.on { display: block; }
+
+.rr-page-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px calc(env(safe-area-inset-bottom) + 8px);
+}
+.rr-nav-btn {
+  flex: 1 1 0;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--rr-line);
+  background: rgba(255, 252, 244, 0.9);
+  color: var(--rr-ink);
+  font-family: var(--rr-serif);
+  font-size: 15px;
+  cursor: pointer;
+}
+.rr-nav-btn:disabled { opacity: 0.38; }
+.rr-nav-btn:active:not(:disabled) { background: rgba(240, 230, 210, 0.95); }
+.rr-page-num {
+  flex: 0 0 auto;
+  min-width: 74px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--rr-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+ * 固定聊天窗口 (下半屏)
+ * ============================================================ */
+#rr-splitter {
+  flex: 0 0 auto;
+  height: 12px;
+  background: rgba(250, 244, 230, 0.9);
+  border-top: 1px solid var(--rr-line-soft);
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+#rr-splitter::after {
+  content: "";
+  width: 42px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rr-line);
+}
+
+#rr-chat {
+  flex: 0 0 auto;
+  height: var(--rr-chat-h);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(249, 242, 227, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--rr-line-soft);
+  overflow: hidden;
+}
+#rr-chat.collapsed { height: 46px; }
+#rr-chat.collapsed #rr-chat-body,
+#rr-chat.collapsed #rr-chat-input-wrap { display: none; }
+
+.rr-chat-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--rr-line-soft);
+}
+.rr-chat-head .t {
+  flex: 1 1 auto;
+  font-family: var(--rr-serif);
+  font-size: 14px;
+  color: var(--rr-ink);
+  letter-spacing: 0.04em;
+}
+.rr-chat-head .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--rr-accent-gold);
+  display: inline-block; margin-right: 6px;
+}
+.rr-chat-head .s { font-size: 11px; color: var(--rr-ink-faint); }
+
+#rr-chat-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.rr-msg {
+  max-width: 86%;
+  padding: 8px 11px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* AI 消息的一行: 头像 + 气泡 (2026-11-03 加头像, 跟主聊天一个观感)
+   ⚠️ .rr-msg 自己是气泡本体, 这一层只负责横向排布, 别把气泡样式写在这 */
+.rr-msg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  align-self: flex-start;
+  max-width: 88%;   /* 头像+气泡整体的宽度上限, 跟用户气泡的 86% 大致对齐 */
+}
+.rr-msg-row .rr-msg-avatar {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--rr-paper-2);
+  border: 1px solid var(--rr-line-soft);
+  margin-top: 2px;
+}
+.rr-msg-row .rr-msg {
+  max-width: none;   /* 宽度由 row 控制, 不然头像+气泡会溢出 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.rr-msg.user {
+  align-self: flex-end;
+  background: linear-gradient(180deg, #b07f4c, #95653a);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.rr-msg.ai {
+  align-self: flex-start;
+  background: rgba(255, 253, 246, 0.96);
+  border: 1px solid var(--rr-line-soft);
+  color: var(--rr-ink);
+  border-bottom-left-radius: 4px;
+}
+.rr-msg.sys {
+  align-self: center;
+  max-width: 94%;
+  background: transparent;
+  border: 1px dashed var(--rr-line);
+  color: var(--rr-ink-faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 6px 10px;
+}
+
+#rr-chat-input-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px calc(env(safe-area-inset-bottom) + 10px);
+  border-top: 1px solid var(--rr-line-soft);
+  background: rgba(252, 247, 236, 0.96);
+}
+#rr-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 38px;
+  max-height: 110px;
+  border-radius: 19px;
+  border: 1px solid var(--rr-line);
+  background: #fffdf7;
+  color: var(--rr-ink);
+  /* ⚠️ 必须是 16px: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+     (而且 iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+     → 用户实测"只要点击输入框, 屏幕就会异常放大"。
+     主聊天那边 (css/chat-ui.css) 的输入框早就是 16px, 这里跟上。 */
+  font-size: 16px;
+  line-height: 1.5;
+  padding: 9px 14px;
+  outline: none;
+  resize: none;
+  font-family: inherit;
+}
+#rr-chat-input:focus { border-color: var(--rr-accent); }
+#rr-send-btn {
+  flex: 0 0 auto;
+  height: 38px;
+  min-width: 62px;
+  padding: 0 14px;
+  border-radius: 19px;
+  border: 0;
+  background: linear-gradient(180deg, #b07f4c, #95653a);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+#rr-send-btn:disabled { opacity: 0.45; }
+
+/* ============================================================
+ * 提示条
+ * ============================================================ */
+#rr-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 14%;
+  transform: translateX(-50%);
+  z-index: 60;
+  background: rgba(50, 40, 30, 0.9);
+  color: #fff;
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  max-width: 84%;
+  text-align: center;
+  display: none;
+}
+#rr-toast.on { display: block; }
+
+/* 导入进度 */
+#rr-import {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(246, 239, 226, 0.94);
+  padding: 26px;
+  text-align: center;
+}
+#rr-import.on { display: flex; }
+#rr-import .t { font-family: var(--rr-serif); font-size: 16px; color: var(--rr-ink); }
+#rr-import .s { font-size: 12px; color: var(--rr-ink-faint); }
+#rr-import .bar {
+  width: 220px; height: 6px; border-radius: 3px;
+  background: var(--rr-line-soft); overflow: hidden;
+}
+#rr-import .bar i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--rr-accent), var(--rr-accent-gold));
+  transition: width 0.2s ease;
+}

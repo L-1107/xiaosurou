@@ -45,7 +45,7 @@
   var PLOT_PANEL_ID = 'cinema-plot-panel';
   var STATUS_ID = 'cinema-live-status';
 
-  // 1 FPS —— 官方建议上限, 旧文件已验证
+  // 1 FPS —— 官方建议上限, 旧文件已验证 (用户 2026-10-29: 从一开始就是 1 FPS, 没变过)
   var FRAME_INTERVAL_MS = 1000;
   var JPEG_QUALITY = 0.6;
 
@@ -53,7 +53,12 @@
   var FRAME_MAX_DIM = 768;
 
   // ---- 阶段剧情摘要 (与旧文件一致) ----
-  var WATCH_SUMMARY_INTERVAL_MS = 5 * 60 * 1000;
+  var WATCH_SUMMARY_INTERVAL_MS = 2 * 60 * 1000;
+  // 🔴 2026-10-29: 5 分钟 → 2 分钟一段 (用户定的)。
+  //   为什么: 主 API 靠【文字剧情总结】聊天, 段落越细它答得越准 ——
+  //   问「刚是怎么了」能定位到具体那两分钟, 而不是笼统的五分钟。
+  //   (取消「每 30 秒一句此刻画面」那条通道后, Live 的 turn 才排得过来 ——
+  //    探针实测: 有实况时摘要 turn 要等 191 秒, 没有时 35 秒。)
   // 🔴 2026-10-19 原来只有一个 PLOT_SUMMARY_MAX_CHARS=2000, 现在拆成两个,
   //   因为这两段东西的用途完全不同, 混在一条提示词里就会出现"要么写不细、
   //   要么越滚越长"这种两头不讨好的结果:
@@ -62,7 +67,14 @@
   var ANCHOR_MAX_CHARS = 500;
   var SEGMENT_MAX_CHARS = 700;
   var SERIES_OUTLINE_MAX_CHARS = 1500;    // 短剧: 攒够一批合并出的总纲
-  var SUMMARY_REQUEST_TIMEOUT_MS = 45000;
+  // 🔴 2026-10-29: 45 秒 → 90 秒。
+  //   探针实测: 服务端 turn 3~12 秒时摘要能写进去, turn 35 秒时【一段都写不进去】——
+  //   因为 45 秒硬超时把请求判了死刑, 静默 resolve(''), 用户只看到「没总结」。
+  //   放宽到 90 秒, 让慢一点的 turn 也有机会把剧情写出来。
+  var SUMMARY_REQUEST_TIMEOUT_MS = 90000;
+
+  // 🔴 2026-10-29: 摘要失败后多久重试一次 (别让用户干等 5 分钟)。
+  var SUMMARY_RETRY_DELAY_MS = 60 * 1000;
 
   // 🔴 2026-10-27: 单集剧情要等的【摘要通道】上限 (毫秒)。
   //
@@ -71,23 +83,14 @@
   //   就占一次这条通道 —— 短剧一集才 1~2 分钟, 播完那一刻正好撞上在途的实况,
   //   这一集的单集剧情就被扔了 (用户实测: 第一次不总结, 再放一遍才总结)。
   //
-  //   25 秒 = 实况通道自己的超时 (LIVE_NOW_TIMEOUT_MS 20s) + 阶段摘要超时的一部分,
-  //   够把正常的在途请求等完, 又不至于让用户干等太久。
+  //   25 秒 = 阶段摘要超时的一部分, 够把正常的在途请求等完, 又不至于让用户干等太久。
+  //   (2026-10-29: 「此刻画面」实况通道整个取消了 —— 不再占这条通道。)
   var EPISODE_SUMMARY_WAIT_MS = 25000;
 
-  // ---- 「此刻画面」实况 (2026-10-23) ----
-  // 陪聊改走主 API 之后, 主 API 看不见画面 —— 它只能靠"剧情记忆"知道演了什么。
-  // 剧情记忆的粒度是 5 分钟一段, 问"刚才是怎么了"会答得粗。
-  // 所以 Live 多开一条【高频短句】通道: 每隔一段时间写一句"此刻屏幕上是谁在干什么",
-  // 覆盖式存进 watchSession.liveNow, 只给主 API 当上文用。
-  //
-  // 为什么默认 30 秒而不是 15 秒:
-  //   这一条每个 turn 的输入是"这 30 秒的帧"(~30 张), 单次开销只有 5 分钟摘要的 1/10,
-  //   但它会占 Live 的 turn 队列。所以宁可慢一点, 也不跟用户抢。
-  var LIVE_NOW_INTERVAL_MS = 30 * 1000;
-  var LIVE_NOW_TIMEOUT_MS = 20000;
-  // 摘要快到期时, 实况让路 (摘要优先 —— 摘要进的是剧情记忆, 实况只是陪聊的补充)
-  var LIVE_NOW_YIELD_BEFORE_SUMMARY_MS = 15000;
+  // 🔴 2026-11-04: 一集总结失败后, 隔多久自动重试一次。
+  //   60 秒 = 跟长剧阶段摘要的失败重试间隔一样 (SUMMARY_RETRY_DELAY_MS)。
+  var EPISODE_SUMMARY_RETRY_MS = 60 * 1000;
+
 
   // 🔴 2026-10-19 内容下限 —— 这次改造里最该单独拎出来的一条。
   //
@@ -98,7 +101,9 @@
   //   为什么"非空即成功"是错的: 截断过的内容比没有更糟。
   //   没有 → 用户知道没记下来, 会重试; 截断的三个字 → 用户以为记下来了, 不会再试。
   //   所以低于这个长度一律【当没生成出来】, 不落库、不算成功、保留上一次的好版本。
-  var MIN_SUMMARY_CHARS = 80;
+  // 🔴 2026-10-29: 80 → 50 字。2 分钟一段本来就演不了多少事,
+  //   硬卡 80 字会把一半的段扔掉 (那就等于没缩短间隔)。
+  var MIN_SUMMARY_CHARS = 50;
 
   // 🔴 2026-10-10 摘要收尾判据: 静默多少毫秒算"这次说完了"。
   //
@@ -155,10 +160,19 @@
     // 本轮摘要计时是什么时候起的 (按 playedMs 坐标系)。暂停不重置它,
     // 恢复后靠 scheduleStageSummary() 算还差多少。
     lastSummaryStartedAt: 0,
+    // 🔴 2026-10-29: 最后一次【成功写进剧情】时的已播放时长 (ms)。
+    //   看门狗靠它判断「已经看了很久却没写进剧情」→ 强制补一次。
+    lastSummaryOkPlayedMs: 0,
     // ---- 短剧专用 (2026-10-07) ----
     kind: 'film',              // 'film' = 长剧 | 'series' = 短剧
     seriesKey: null,           // 短剧: 剧名
     seriesTitle: '',           // 短剧: 剧名(显示用)
+    // 🔴 2026-11-04: 本地影片的「作品名」—— 同一部作品的几集填一样的名字,
+    //   就共用一份剧情底稿/前情提要 (key = film:<chatId>:<作品名>)。
+    //   空 = 不分组 (老行为)。
+    workName: '',
+    // 🔴 2026-11-04: 跨场资料正在读库中 (读库没完之前不注入, 见 loadCrossSession)
+    _crossReading: false,
     seriesLastEp: 0,           // 短剧: 已看到第几集
     episodeMemories: [],       // 短剧: 攒下的单集记忆 [{ ep, text, id }]
     // 🔴 2026-10-21: 落库失败的条目 [{ ep, msg }] —— 给记忆页面板显示用。
@@ -203,7 +217,10 @@
     //   【单条覆盖式, 不是数组】—— 实况是"此刻"的快照, 攒多条只会互相矛盾
     //   ("张三站在门口" 和 "李四坐在床上" 堆一起, 主 API 只会更懵)。
     //   at = 写下来的时刻, 传给主 API 时算成"多少秒前看到的"。
-    liveNow: { text: '', at: 0 }
+    // 🔴 2026-10-29: 语义变了 —— 不再是「Live 写的此刻画面」,
+    //   而是【最近一段剧情结束时截的那张画面】(image) + 一句说明(text)。
+    //   image 是【阅后即焚】: 主 API 用完立刻烧掉, 不留在任何地方。
+    liveNow: { text: '', at: 0, image: '' }
   };
 
   /**
@@ -214,11 +231,49 @@
    *   key 必须跟"哪部剧"绑死, 所以用 duanju-bridge 给的 dir.name。
    *   长剧是本地上传的单文件, 用 chatId 当作用域刚好够隔离,
    *   免得两个角色攒的段落互相串台。
+   *
+   * 🔴 2026-11-04: 长剧这边加了一层【作品名】:
+   *   key = 'film:' + chatId + (作品名 ? ':' + 作品名 : '')
+   *   原因: 用户问的「我怎么知道这个新文件跟上一个文件是不是同一部动漫」——
+   *   原来只有 chatId 一个维度, 同一个聊天里【所有】本地影片共用一份底稿 →
+   *   换到完全不相干的另一部作品, 也会把上一部的剧情灌给模型 (串台)。
+   *   现在: 同一作品名 = 同一份底稿 (第二集知道第一集); 不同作品名 = 各存各的。
+   *   没填作品名 = 老行为 (一个聊天里共用一份)。
    */
   function currentSessionKey() {
     if (watchSession.kind === 'series') return watchSession.seriesKey ? String(watchSession.seriesKey) : '';
     var cid = watchSession.chatId || S.chatId || '';
-    return cid ? ('film:' + cid) : '';
+    if (!cid) return '';
+    var wn = String(watchSession.workName || '').trim();
+    return 'film:' + cid + (wn ? (':' + wn) : '');
+  }
+
+  /**
+   * 换作品 (本地影片的「作品名」变了) —— 2026-11-04
+   *
+   * 【为什么要清内存】底稿 key 变了, 内存里还留着上一部作品的段落/提要 →
+   *   注入时会把上一部的剧情一起喂给模型 → 串台。
+   *   所以换作品 = 把上一部的素材从内存里清掉, 让它老老实实从新 key 的库里读。
+   */
+  function setWorkName(name) {
+    var w = String(name || '').trim();
+    if (w === (watchSession.workName || '')) return;
+    var oldKey = currentSessionKey();
+    watchSession.workName = w;
+    var newKey = currentSessionKey();
+    if (newKey === oldKey) return;
+    watchSession.segments = [];
+    watchSession.segCount = 0;
+    watchSession.episodeMemories = [];
+    watchSession.seriesLastEp = 0;
+    watchSession.seriesRecap = null;
+    watchSession.seriesRecapInjectPending = false;
+    // key 变了 → 刚才那个读库的结果作废了, 别让它把注入卡住
+    watchSession._crossReading = false;
+    watchSession.currentPlotSummary = '';
+    watchSession.summaryCount = 0;
+    watchSession.summaryUpdatedAt = 0;
+    log('换作品 (' + (oldKey || '(无)') + ' → ' + newKey + '): 上一部的记忆已清空');
   }
 
   /** 当前这次 play 段已跑了多久 (ms); 没在播放时返回 0 */
@@ -245,6 +300,47 @@
   }
 
   /**
+   * 长剧式的「每 2 分钟一段」阶段摘要, 短剧模式下【不跑】。
+   *
+   * 🔴 2026-11-04 (用户实测: 竖屏在线短剧「一集播完第一次没总结剧情 / 第二次播一半
+   *   观影API重连 / 最后总结的剧情只有半截」, 而横屏的在线短剧却正常):
+   *
+   * 【为什么短剧不能跑它】—— 三条独立的伤害, 全都打在短剧身上:
+   *
+   *   ① 【抢通道】
+   *     摘要只有一条通道 (watchSession.pendingSummary), 阶段摘要和「每集单集剧情」
+   *     用的就是它。短剧一集才 1~2 分钟, 阶段摘要一发, 一集播完那一刻正好撞上
+   *     在途请求 → 单集剧情干等 EPISODE_SUMMARY_WAIT_MS 也等不到 → 这一集白看
+   *     (用户报的「第一次没总结」就是这条)。
+   *
+   *   ② 【撞主键】两样东西写的是【同一张表、同一个主键】:
+   *       单集剧情 ep = 集号          → id = "<剧名>#3"
+   *       段落摘要 ep = 段号(segCount) → id = "<剧名>#1"
+   *     段号从 1 起、集号也从 1 起 → 必然撞车, 谁后写谁赢:
+   *       · 短集 (一集 < 2 分钟): 阶段摘要在【这一集播完之后】才发 → 段落摘要
+   *         把这一集的单集剧情【覆盖掉】→ 面板上那一条只剩半截。
+   *       · 长集 (一集 > 2 分钟): 阶段摘要在集中间发, 单集剧情后写能盖回来 →
+   *         看着就正常。
+   *     这就是「竖屏坏、横屏好」的全部原因 —— 代码里【没有任何一处】按竖屏/横屏
+   *     分支, 真正的分水岭是「一集长度 vs 2 分钟这个摘要间隔」, 而竖屏短剧一集
+   *     通常只有 1~2 分钟, 横屏的长集通常超过 2 分钟。
+   *
+   *   ③ 【重置会话】
+   *     每次阶段摘要之后都会 S._needFreshSession = true → 帧循环里
+   *     S.client.resetSession() → Live 断线重连。连接一断, 会话里累积的画面全没了
+   *     → 模型只看得见重连之后那几秒 → 这一集的单集剧情【只剩尾巴】
+   *     (用户报的「只有半截」就是这条)。
+   *
+   * 【短剧的记忆载体本来就是「每集一条」】(见本文件「短剧」那段注释)
+   *   阶段摘要对短剧不但没用, 还有害 —— 短剧的滚动锚本来就不落库
+   *   (persistFilmAnchor 对短剧直接 return), 它产出的段落对短剧没有任何去处。
+   * 所以: 短剧模式一律不跑阶段摘要, 只保留「每集一条」。
+   */
+  function stageSummaryEnabled() {
+    return watchSession.kind !== 'series';
+  }
+
+  /**
    * 按【已播放时长】重排摘要定时器, 而不是每次都排满 5 分钟。
    *
    * 旧写法是 setTimeout(5分钟) 然后 finally 里无条件重排 —— 暂停一次就丢 5 分钟,
@@ -259,6 +355,8 @@
       clearTimeout(watchSession.summaryTimer);
       watchSession.summaryTimer = null;
     }
+    // 🔴 2026-11-04: 短剧不排长剧式阶段摘要 (原因见 stageSummaryEnabled 上面)
+    if (!stageSummaryEnabled()) return;
     var waited = 0;
     // ⚠️ 必须用 !== null 之类的显式判断, 不能用真值判断 ——
     // lastSummaryStartedAt 初始就是 0, 用 if (lastSummaryStartedAt) 会把
@@ -283,14 +381,19 @@
     watchSession.pendingSummary = null;
     watchSession.summaryBusy = false;
     watchSession.chatLog = [];
+    // 🔴 2026-10-29: 新一场 → 上一场的画面不许漏过来 (老 bug: 一直没清)
+    watchSession.liveNow = { text: '', at: 0, image: '' };
     watchSession.closed = false;
     watchSession.leavePromise = null;
     watchSession.playedMs = 0;
     watchSession.playingSince = 0;
     watchSession.lastSummaryStartedAt = 0;
+    watchSession.lastSummaryOkPlayedMs = 0;
     watchSession.kind = 'film';
     watchSession.seriesKey = null;
     watchSession.seriesTitle = '';
+    watchSession.workName = '';
+    watchSession._crossReading = false;
     watchSession.seriesLastEp = 0;
     watchSession.episodeMemories = [];
     watchSession.persistErrors = [];
@@ -414,11 +517,29 @@
     enabled: false,
     client: null,
     frameTimer: null,
-    // 「此刻画面」实况的定时器 (2026-10-23) —— 跟 frameTimer 一样, Live 就绪才起
-    liveNowTimer: null,
     canvas: null,
     ctx: null,
     framesSent: 0,
+    // 🔴 2026-10-29: 本次【会话】已经发了多少帧 (用来算 Live 的 token 预算)。
+    //   framesSent 是从开房算起的总数, 不适合做预算。
+    sessionFrames: 0,
+    // 到预算了 → 找一个空档换干净会话 (不继承旧上下文)
+    _needFreshSession: false,
+    // 🔴 2026-11-04: 阶段摘要连着失败了几次 (失败时不换会话, 画面留着给重试看;
+    //   连着两次还不行才强制换 —— 见 runStageSummary 的收尾和 tickStageSummary)。
+    _stageFailStreak: 0,
+    // 🔴 2026-11-04: 短剧「一集总结失败 → 自动重试」的状态
+    //   _epRetryEp   = 正在等重试的那一集 (0 = 没有)
+    //   _epRetryTimer= 重试定时器
+    //   _curEp       = 当前正在播的那一集 (换集了就放弃上一集的重试)
+    _epRetryEp: 0,
+    _epRetryTimer: null,
+    _curEp: 0,
+    // 🔴 2026-11-04: 这一次的重连是【我们自己主动】换的 (短剧每集一换),
+    //   不是"断了" —— 'ready' 时别再刷「✅ Gemini Live 已连接」那条提示。
+    //   用【时间戳】而不是布尔标志: 万一这次换会话没换成功 (连上了但没 ready),
+    //   布尔会一直挂着, 把后面真正那次重连的提示也一起吞掉。
+    _routineResetAt: 0,
     paused: false,
     statusEl: null,
     bubbleEl: null,
@@ -430,6 +551,80 @@
     //   这段时间主会话【不许】自动重连 (不然撞并发, 精炼照样失败)。
     _refineBorrowed: false
   };
+
+  // ============================================================
+  // 诊断日志 (2026-10-29)
+  //
+  // 为什么加: 用户报「十分钟一句剧情总结都没写」时, 界面上什么线索都没有 ——
+  // 失败是静默的, 断线也没人知道。iPhone 上又拿不到 console。
+  // 所以把关键事件写进 localStorage, 失败提示里直接带上一行诊断,
+  // 用户截个图我就能看到「断了几次 / 丢了几帧 / 发了多少帧 / 摘要成几次败几次」。
+  // ============================================================
+  var DIAG_KEY = 'cinema_live_diag_v1';
+  var DIAG_MAX = 80;
+
+  // 事件名 → 人话 (进诊断框给用户看的)
+  var DIAG_TEXT = {
+    connect: 'Live 连上了',
+    close: 'Live 断了',
+    goAway: '服务端说它要断了',
+    summaryOk: '剧情写进去了',
+    summaryFail: '剧情没写成',
+    fresh: '换了干净会话（帧预算用完）',
+    try: '发起剧情总结',
+    skip: '这次没发出去',
+    forced: '强制补一次总结'
+  };
+
+  function diagPush(ev, data) {
+    try {
+      var arr = [];
+      try { arr = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]'); } catch (e) { arr = []; }
+      if (!Array.isArray(arr)) arr = [];
+      arr.push({ t: Date.now(), ev: ev, d: data || null });
+      while (arr.length > DIAG_MAX) arr.shift();
+      localStorage.setItem(DIAG_KEY, JSON.stringify(arr));
+    } catch (e) { /* noop */ }
+    // 🔴 2026-10-29: 顺便推进影院设置面板里那个【已有的】诊断框 ——
+    //   用户点 ⚙设置 → 底部「诊断」→ 截图, 就能一次给我全部硬数据,
+    //   不用等「总结失败」才有东西可看。
+    try {
+      if (global && typeof global.__cinemaDiagPush === 'function') {
+        global.__cinemaDiagPush('[Live] ' + (DIAG_TEXT[ev] || ev) +
+          (data ? ' ' + JSON.stringify(data) : ''));
+      }
+    } catch (e2) { /* noop */ }
+  }
+
+  function diagStats() {
+    var n = { connects: 0, closes: 0, goAway: 0, summaryOk: 0, summaryFail: 0, fresh: 0 };
+    try {
+      var arr = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+      if (!Array.isArray(arr)) return n;
+      arr.forEach(function (r) {
+        if (r.ev === 'connect') n.connects++;
+        else if (r.ev === 'close') n.closes++;
+        else if (r.ev === 'goAway') n.goAway++;
+        else if (r.ev === 'summaryOk') n.summaryOk++;
+        else if (r.ev === 'summaryFail') n.summaryFail++;
+        else if (r.ev === 'fresh') n.fresh++;
+      });
+    } catch (e) { /* noop */ }
+    return n;
+  }
+
+  /** 一行诊断摘要, 拼进失败提示里 —— 用户截图我就能看到 */
+  function diagOneLine() {
+    var n = diagStats();
+    var dropped = 0;
+    try {
+      if (S.client && typeof S.client.getDroppedFrames === 'function') {
+        dropped = S.client.getDroppedFrames() || 0;
+      }
+    } catch (e) { /* noop */ }
+    return '（诊断: 连上 ' + n.connects + ' 次 / 断了 ' + n.closes + ' 次 / 摘要成 ' + n.summaryOk +
+      ' 败 ' + n.summaryFail + ' / 已发 ' + S.framesSent + ' 帧 / 丢帧 ' + dropped + '）';
+  }
 
   // ============================================================
   // 工具
@@ -625,19 +820,72 @@
         return;
       }
       if (S.paused) { S.paused = false; renderStatus('ready'); log('视频恢复播放, 继续发帧'); }
+      // 🔴 2026-10-29: 先问客户端「缓冲满了吗」, 满了【直接跳过这一轮】。
+      //   原来是先抽帧 (JPEG 编码 + base64, 每帧 1.3MB 垃圾) 再发现要丢 → 白干。
+      if (typeof S.client.canSendFrame === 'function' && !S.client.canSendFrame()) {
+        S.skippedByBackpressure = (S.skippedByBackpressure || 0) + 1;
+        return;
+      }
       var b64 = grabFrameBase64(video);
       if (!b64) return;
       S.framesSent++;
-      S.client.sendVideoFrame(b64, 'image/jpeg');
+      S.sessionFrames = (S.sessionFrames || 0) + 1;
+      // ⚠️ 2026-11-04: 这里【故意不】加「攒够 N 帧就换会话」那套。
+      //   项目原来试过按帧预算换会话, 后来撤掉了 (见 tests/cinema-heat.test.cjs
+      //   「没有每会话帧预算那套」) —— 因为一换会话, 会话里累积的画面全没了,
+      //   模型只看得见换之后那几秒 → 这一集的单集剧情【只剩尾巴】,
+      //   正是用户 2026-11-03 报的「最后总结的剧情只有半截」。
+      //   现在的做法: 短剧【一集换一次】(在集与集之间换, 不在一集中间换),
+      //   长剧【每 2 分钟一段摘要后换一次】—— 两边都换在"安全点"上。
+      var sent = S.client.sendVideoFrame(b64, 'image/jpeg');
+      // 🔴 2026-10-28: 背压丢帧 → 让用户知道"网络堵了, 模型那会儿看不见画面"。
+      //   不说的话用户只会觉得"模型变傻了", 查不到方向。
+      if (!sent && typeof S.client.getDroppedFrames === 'function') {
+        var dropped = S.client.getDroppedFrames() || 0;
+        if (dropped && dropped !== S._lastDroppedReported) {
+          S._lastDroppedReported = dropped;
+          appendSystemLine('⚠️ 网络堵住了，已经丢掉 ' + dropped +
+            ' 帧画面（不影响你看片，只是模型那会儿看不见屏幕）。');
+        }
+      }
+
+      // 🔴 2026-10-29: 找空档换干净会话 (不继承爆掉的上下文)。
+      //   必须等没有在途的摘要 —— 换会话会把在途请求打断。
+      if (S._needFreshSession && !watchSession.pendingSummary && !watchSession.summaryBusy) {
+        S._needFreshSession = false;
+        S.sessionFrames = 0;
+        diagPush('fresh');
+        log('换干净会话 (不继承旧上下文)');
+        try { saveHandle(null); } catch (e) { /* noop */ }
+        try {
+          if (S.client && typeof S.client.resetSession === 'function') {
+            // 🔴 2026-10-29 (用户实测「live 断了怎么都重连不上」):
+            //   这个 promise 以前【没人接】—— 失败时是 unhandled rejection,
+            //   而且【不会触发任何重连安排】→ live 就此不 ready
+            //   → tickStageSummary 每次早退 → 剧情一句都不写。
+            //   现在接住它: 失败就按「重连」处理, 不让它悄悄消失。
+            var freshP = S.client.resetSession();
+            if (freshP && typeof freshP.then === 'function') {
+              freshP.then(function () {
+                log('已换成干净会话');
+              }).catch(function (err) {
+                logWarn('换干净会话失败:', (err && err.message) || err);
+                scheduleReconnect('换干净会话失败');
+              });
+            }
+          }
+        } catch (e) { logWarn('换干净会话失败:', (e && e.message) || e); }
+        return;
+      }
+
       // 每 30 帧打一次, 免得刷屏
       if (S.framesSent % 30 === 0) {
         log('已发 ' + S.framesSent + ' 帧 (当前 ' + Math.round(b64.length * 0.75 / 1024) + 'KB/帧, t=' +
           video.currentTime.toFixed(1) + 's)');
       }
     }, FRAME_INTERVAL_MS);
-    log('开始 1 FPS 视频帧发送 (长边降采样到 ' + FRAME_MAX_DIM + ', 保持宽高比)');
-    // 实况通道跟帧循环同生共死 (2026-10-23): 有帧才有"此刻画面"可言
-    startLiveNowLoop();
+    log('开始 ' + (1000 / FRAME_INTERVAL_MS).toFixed(1) + ' FPS 视频帧发送 (长边降采样到 ' +
+      FRAME_MAX_DIM + ', 保持宽高比)');
   }
 
   function stopFrameLoop() {
@@ -646,7 +894,6 @@
       S.frameTimer = null;
       log('已停止视频帧发送');
     }
-    stopLiveNowLoop();
   }
 
   // ============================================================
@@ -721,6 +968,83 @@
   }
 
   function resetBubble() { S.bubbleEl = null; bubbleStreamId++; }
+
+  /**
+   * 把一条 AI 回复按段落拆成多个气泡 (2026-11-03)
+   *
+   * 【为什么要拆】
+   *   主聊天框里 AI 一次回复会显示成【好几个独立气泡】(它返回 JSON 数组, 一条一个)。
+   *   影院陪聊是一条纯文字, renderGeminiBubble 一直覆盖更新【同一个】气泡
+   *   → 用户看到的是一大坨文字糊在一个框里, 跟主聊天完全不是一个观感。
+   *   → 流式过程保持"一个气泡里滚字"(流畅, 不跳), 结束时再按段落切开。
+   *
+   * 【怎么切】
+   *   先按空行切; 切不出来(模型没分段)再按单换行切; 还不行就整段一个气泡。
+   *   不按句子切 —— 那样会把一句话拦腰截断, 读起来更碎。
+   */
+  function splitReplyParagraphs(text) {
+    var t = String(text || '').trim();
+    if (!t) return [];
+    var parts = t.split(/\n\s*\n+/);
+    if (parts.length <= 1) parts = t.split(/\n+/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var s = String(parts[i] || '').trim();
+      if (s) out.push(s);
+    }
+    return out.length ? out : [t];
+  }
+
+  /**
+   * 收尾: 把已经流式打完的那个气泡按段落拆开重排。
+   * cinema-chat.js 在最终拿到全文后调它 (替代原来那次 renderAssistantBubble)。
+   */
+  function finalizeAssistantBubble(text) {
+    var box = getChatBox();
+    if (!box) return;
+    var full = String(text || '').trim();
+    if (!full) return;
+
+    var paras = splitReplyParagraphs(full);
+    var inner = (S.bubbleEl && box.contains(S.bubbleEl)) ? S.bubbleEl : null;
+
+    if (!inner) {
+      // 没有流式气泡 (非流式一次性返回) → 先老老实实渲染第一个
+      renderGeminiBubble(paras[0]);
+      inner = S.bubbleEl;
+    } else {
+      inner.textContent = paras[0];
+    }
+
+    // 后面几段各开一个 assistant 气泡, 紧跟在上一段后面
+    var prevWrap = inner ? inner.parentNode : null;
+    for (var i = 1; i < paras.length; i++) {
+      var wrap = document.createElement('div');
+      wrap.className = 'cinema-chat-msg assistant';
+      var avatar = getAvatarUrl();
+      if (avatar) {
+        var img = document.createElement('img');
+        img.className = 'cinema-chat-avatar';
+        img.src = avatar;
+        img.alt = '';
+        wrap.appendChild(img);
+      }
+      var b = document.createElement('div');
+      b.className = 'cinema-chat-bubble';
+      b.textContent = paras[i];
+      wrap.appendChild(b);
+
+      if (prevWrap && prevWrap.parentNode === box) {
+        box.insertBefore(wrap, prevWrap.nextSibling);
+      } else {
+        box.appendChild(wrap);
+      }
+      prevWrap = wrap;
+      inner = b;   // 让 S.bubbleEl 指向最后一段, 免得再被覆盖写
+    }
+    S.bubbleEl = inner;
+    box.scrollTop = box.scrollHeight;
+  }
 
   // ============================================================
   // 剧情记忆面板 (Cinema Room 自己的, 可查看 + 可编辑)
@@ -1475,6 +1799,7 @@
     lines.push('· 谁出场了、发生了什么、有什么冲突或转折、这一段停在哪里, 写清楚。');
     lines.push('· 不写你和用户的互动, 不写聊天, 不写评价。');
     lines.push('· 控制在 ' + SEGMENT_MAX_CHARS + ' 字以内。');
+    lines.push('· 这一段只有 2 分钟, 发生的事不多 —— 写清楚就行, 不用硬凑字数。');
     lines.push('');
     lines.push('# 输出格式（必须严格照做，不要解释）');
     lines.push('先写 ' + ANCHOR_MARK + ' 这几个字, 空一行, 写剧情进度正文。');
@@ -1574,6 +1899,9 @@
         var ok = applyStageSummary(text);
         if (ok) {
           watchSession.summaryCount++;
+          // 🔴 2026-10-29: 记下「成功写进剧情」这一刻的已播放时长 ——
+          //   看门狗靠它判断「该补下一次了」。
+          watchSession.lastSummaryOkPlayedMs = totalPlayedMs();
           // ⚠️ 这行必须加 (2026-10-07 用户实测: 摘要出来了, 计数一直 0)。
           //
           // 原因: summaryCount++ 跑在【微任务】里 —— onTurnCompleteInternal
@@ -1583,11 +1911,74 @@
           // 而摘要正文因为别的路径刷新过又能显示出来。
           renderPlotPanel();
           log('✅ 段落剧情已记录 (第 ' + watchSession.segCount + ' 段)');
+          diagPush('summaryOk', { seg: watchSession.segCount });
+
+
+          // 🔴 2026-10-29 (二) 顺手截一张【这一段结束时的画面】给主 API。
+          //   【阅后即焚】: 只在内存里放这一张, 主 API 请求发完就烧掉 ——
+          //   不落库、不进备份、不进导出、不进草稿, 恒定最多一张, 绝不堆积。
+          try {
+            var shotVideo = getVideo();
+            if (shotVideo && !shotVideo.paused && !shotVideo.ended) {
+              var shot = grabFrameBase64(shotVideo);
+              if (shot) {
+                watchSession.liveNow = {
+                  text: '第 ' + watchSession.segCount + ' 段剧情结束时的画面',
+                  at: Date.now(),
+                  image: shot
+                };
+                diagPush('shot');
+              }
+            }
+          } catch (e) { /* noop */ }
+        } else {
+          // 🔴 2026-10-29: 之前失败是【完全静默】的 —— 用户只看到「十分钟一句总结都没写」,
+          //   却不知道是模型慢、格式没认出来、还是连接断了。现在说出来, 顺便带上诊断。
+          diagPush('summaryFail', { why: 'format' });
+          appendSystemLine('⚠️ 这一段剧情没写进去（模型写的没认出格式，或者太短了）。' + diagOneLine());
         }
         return ok;
       })
-      .catch(function (err) { logWarn('阶段摘要失败:', err.message); return false; })
+      .catch(function (err) {
+        logWarn('阶段摘要失败:', err.message);
+        diagPush('summaryFail', { why: String((err && err.message) || err) });
+        appendSystemLine('⚠️ 这一段剧情没总结出来（' +
+          (err && err.message ? err.message : '出错了') + '）。60 秒后会再试一次。' + diagOneLine());
+        return false;
+      })
       .then(function (ok) {
+        // 🔴 2026-11-04 换会话的时机改了 —— 【成功才换, 失败先不换】。
+        //
+        // 【原来】成功失败都换 (2026-10-29 定的), 理由是: 不换的话, 失败那几次
+        //   累积的帧会一直留着 → 下一个 turn 的输入更大 → 更慢 → 更容易失败 → 恶性循环。
+        // 【那个理由是对的, 但代价被漏算了】
+        //   失败也换 = 失败那一段【既没落库、画面也没了】→ 整段剧情直接消失,
+        //   而且【重试也救不回来】—— 60 秒后的重试是在新会话里发的, 模型看到的是
+        //   重试后那 60 秒的画面, 不是原来那 2 分钟的。
+        //   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让模型只吐 2 个字):
+        //   4 次摘要只落 3 段, 第 1 段 (0~120 秒) 整段消失, 聊天区还明说
+        //   「这一段剧情没总结出来…60 秒后会再试一次」—— 而那次重试救不了它。
+        //
+        // 【现在】
+        //   成功 → 照旧换干净会话 (上下文归零, 下一段从零看, 摘要更准)
+        //   失败 → 【不换】! 画面留着, 60 秒后的重试还能看到同一批画面 → 有机会补上。
+        //   连着失败【两次】才强制换 (见 tickStageSummary) —— 那时才真的撑不住。
+        //
+        // 累积上限: 正常每段换 = 120 帧; 失败后多攒 60 秒 = 180 帧
+        //   (258 token/帧 ≈ 46k token, 窗口 128K) —— 仍在预算内。
+        //
+        // ⚠️ 「要不要换会话」这个判断【全文件只有这一处】(tests/cinema-heat 守着这条)。
+        //   · 成功            → 换 (上下文归零, 下一段从零看, 摘要更准)
+        //   · 失败            → 不换 (画面留着, 60 秒后的重试还能看到同一批)
+        //   · 连着失败两次    → 换 (这时帧才真的撑不住; 也是 2026-10-29
+        //                       "帧一直累积 → turn 变慢 → 更容易失败"要防的恶性循环)
+        var failStreak = ok ? 0 : ((S._stageFailStreak || 0) + 1);
+        var needFresh = ok || failStreak >= 2;
+        S._stageFailStreak = failStreak;
+        if (needFresh) {
+          S._needFreshSession = true;
+          S._stageFailStreak = 0;
+        }
         finishSummary(watchSession.pendingSummary);
         flushQueuedUserText();
         return ok;
@@ -1606,7 +1997,10 @@
     persistSeriesRecapSafely(anchor);
   }
 
-  function tickStageSummary() {
+  function tickStageSummary(forced, sinceMs) {
+    // ⚠️ 已触发的定时器句柄要清掉 —— 否则看门狗会以为「定时器还在」,
+    //   就算它真的丢了也不会补排。
+    watchSession.summaryTimer = null;
     // ⚠️⚠️ 每一条提前 return 的分支都必须重新排下一次定时器!
     //
     // 2026-10-04 用户实测: 视频断续放了十几分钟, 一份剧情摘要都没有, 退出也没写记忆。
@@ -1619,12 +2013,29 @@
     // 🔴 2026-10-23: retryInMs —— 「此刻画面」实况在途时, 摘要等它一下再跑。
     //   实况只要几秒, 不该让这一轮摘要白等 5 分钟。
     var retryInMs = 0;
+    // 🔴 2026-10-29: why = 这次为什么没发出去 —— 写进诊断, 用户截图我就能定案。
+    var why = '';
     try {
-      if (!S.enabled || watchSession.summaryBusy) return;
+      if (!S.enabled || watchSession.summaryBusy) { why = '没启用或正在总结'; return; }
       if (S._leaving) return;              // 要退出了, 不必再排
+      // 🔴 2026-11-04: 短剧按集总结, 不跑长剧式阶段摘要 (原因见 stageSummaryEnabled)
+      if (!stageSummaryEnabled()) { why = '短剧按集总结'; return; }
       var video = getVideo();
-      if (!video || video.paused || video.ended) return; // 暂停中, finally 会重排
-      if (!S.client || !S.client.isReady()) return;      // 还没 ready, finally 会重排
+      if (!video || video.paused || video.ended) { why = '视频暂停/结束'; return; } // 暂停中, finally 会重排
+      if (!S.client || !S.client.isReady()) {
+        // 🔴 2026-10-29 (用户实测「重新进去接着看, 看再久都不总结剧情」):
+        //   以前这里静默 return —— 用户只看到「一句剧情总结都没写」,
+        //   完全不知道真正原因是【live 没连上】(live 没连上 → 摘要根本发不出去)。
+        //   现在最多每 2 分钟在聊天区明说一次, 免得又变成"找不着原因"。
+        var now = Date.now();
+        if (!S._noLiveWarnedAt || now - S._noLiveWarnedAt > 120000) {
+          S._noLiveWarnedAt = now;
+          appendSystemLine('⚠️ Gemini Live 还没连上 —— 剧情要靠它整理, 所以现在还没写。' + diagOneLine());
+        }
+        why = 'live 没连上';
+        return;      // 还没 ready, finally 会重排
+      }
+      S._noLiveWarnedAt = 0;
 
       // summaryBusy 为 false 但 pendingSummary 有值 = 实况在途 (实况是静默的, 不占 summaryBusy)
       if (watchSession.pendingSummary) {
@@ -1633,89 +2044,41 @@
         return;
       }
 
-      runStageSummary({ reason: '5 分钟到' });
+      diagPush('try', { seg: (watchSession.segCount || 0) + 1, forced: !!forced });
+      runStageSummary({ reason: forced ? '看门狗强制补一次' : '2 分钟到' }).then(function (ok) {
+        // 🔴 2026-10-29: 失败了就【60 秒后再试一次】, 别让用户干等 5 分钟。
+        //   (这会把 finally 里排好的那个 5 分钟后的定时器顶掉 —— 那是对的: 就是要早一点再试。)
+        if (ok) return;
+        // 这次也没写进去 —— 如果已经看了很久, 明确告诉用户「看了多久」
+        if (sinceMs && sinceMs >= WATCH_SUMMARY_INTERVAL_MS) {
+          var stnow = Date.now();
+          if (!S._staleWarnedAt || stnow - S._staleWarnedAt > 120000) {
+            S._staleWarnedAt = stnow;
+            appendSystemLine('⚠️ 已经看了 ' + Math.round(sinceMs / 60000) +
+              ' 分钟, 剧情还是没写进去 —— 我在重试, 你也可以稍等一下再看。' + diagOneLine());
+          }
+        }
+        if (!S.enabled || S._leaving) return;
+        // 🔴 2026-11-04: 「要不要换会话」的判断在 runStageSummary 的收尾里
+        //   (全文件唯一一处 S._needFreshSession = true) —— 那儿已经处理了
+        //   「失败不换 / 连着失败两次才换」。这里只管排下一次重试。
+        watchSession.lastSummaryStartedAt = totalPlayedMs();
+        scheduleStageSummary(SUMMARY_RETRY_DELAY_MS);
+      });
     } catch (e) {
       logWarn('阶段摘要调度异常:', (e && e.message) || e);
     } finally {
       // 本轮 5 分钟已满 → 下一轮从现在重新起算。
       // 但退房/禁用/要生成最终总结时不要再排 —— 那三种情况定时器本来就该停。
-      if (S.enabled && !S._leaving) {
+      // 🔴 2026-11-04: 短剧不排 (短剧的摘要是"每集一条", 不是"每 2 分钟一段")
+      if (S.enabled && !S._leaving && stageSummaryEnabled()) {
         watchSession.lastSummaryStartedAt = totalPlayedMs();
         scheduleStageSummary(retryInMs || undefined);
       }
+      if (why) diagPush('skip', { why: why, forced: !!forced });
     }
   }
 
-  // ============================================================
-  // 「此刻画面」实况 (2026-10-23)
-  // ============================================================
-  // 陪聊改走主 API 之后, 主 API 看不见画面 —— 它对剧情的认知全靠剧情记忆,
-  // 而剧情记忆是 5 分钟一段, 问"刚才是怎么了"会答得粗。
-  // 这一条通道让 Live 额外写一句"此刻屏幕上是谁在干什么",
-  // 覆盖式存进 watchSession.liveNow, 只给主 API 当上文用。
-  //
-  // 【为什么覆盖式而不是数组】
-  //   实况是"此刻"的快照。攒 20 条只会互相矛盾
-  //   ("张三站在门口" 和 "李四坐在床上" 堆一起, 主 API 只会更懵)。
-  //
-  // 【优先级】摘要 > 实况。
-  //   实况在摘要在途时跳过; 摘要在实况在途时等 3 秒再试 (见 tickStageSummary)。
-  function buildLiveNowInstruction() {
-    return [
-      '【【后台任务】】用一句话说说此刻屏幕上是什么。',
-      '',
-      '· 只写此刻【正在发生】的事: 画面里有谁、在做什么、在什么场景。',
-      '· 不要评价、不要抒情、不要评论剧情、不要提你和用户的互动。',
-      '· 控制在 40 字以内, 就一句话。',
-      '· 直接输出那句话本身, 不要加称呼、不要加解释。'
-    ].join('\n');
-  }
-
-  function requestLiveNow() {
-    if (!S.client || !S.client.isReady()) return Promise.resolve('');
-    return requestSummary('live', buildLiveNowInstruction(), {
-      silent: true,
-      timeoutMs: LIVE_NOW_TIMEOUT_MS
-    })
-      .then(function (text) {
-        var t = String(text || '').trim();
-        if (!t) return '';
-        watchSession.liveNow = { text: t, at: Date.now() };
-        log('[实况] ' + t);
-        return t;
-      })
-      .catch(function (err) {
-        logWarn('[实况] 失败:', (err && err.message) || err);
-        return '';
-      });
-  }
-
-  function tickLiveNow() {
-    if (!S.enabled || S._leaving) return;
-    if (!S.client || !S.client.isReady()) return;
-    if (watchSession.pendingSummary) return;   // 摘要在途 → 让路
-    if (watchSession.summaryBusy) return;       // 正在写摘要 → 让路
-    var video = getVideo();
-    if (!video || video.paused || video.ended) return;   // 画面没动, 不用重写
-    // 摘要快到期 → 这一轮实况让路 (摘要进的是剧情记忆, 优先级更高)
-    var sinceAnchor = totalPlayedMs() - (watchSession.lastSummaryStartedAt || 0);
-    if (sinceAnchor > WATCH_SUMMARY_INTERVAL_MS - LIVE_NOW_YIELD_BEFORE_SUMMARY_MS) return;
-    requestLiveNow();
-  }
-
-  function startLiveNowLoop() {
-    stopLiveNowLoop();
-    S.liveNowTimer = setInterval(tickLiveNow, LIVE_NOW_INTERVAL_MS);
-    log('开始「此刻画面」实况 (' + Math.round(LIVE_NOW_INTERVAL_MS / 1000) + ' 秒一次)');
-  }
-
-  function stopLiveNowLoop() {
-    if (S.liveNowTimer) {
-      clearInterval(S.liveNowTimer);
-      S.liveNowTimer = null;
-      log('已停止「此刻画面」实况');
-    }
-  }
 
   // ============================================================
   // 短剧 (2026-07 起的设计, 2026-10-19 大改)
@@ -1936,7 +2299,17 @@
     watchSession.segCount += 1;
     var item = { ep: watchSession.segCount, text: t, id: null };
     watchSession.segments.push(item);
-    persistEpMemory(item);
+    // 🔴 2026-11-04: 短剧模式下【不落库】。
+    //   段落记忆的 ep 是【段号】(从 1 起), 单集记忆的 ep 是【集号】(也从 1 起),
+    //   两者写的是同一张表、同一个主键 (id = "<剧名>#<ep>") → 必然互相覆盖:
+    //   "第 1 段"会把"第 1 集"顶掉, 面板上那一条就只剩半截。
+    //   短剧现在不跑阶段摘要, 这里只是最后一道保险 ——
+    //   万一以后谁又把它放开了, 也不能让段号跟集号撞车。
+    if (watchSession.kind === 'series') {
+      logWarn('短剧模式下不落「段落」记忆 (段号会跟集号撞主键, 把这一集顶掉)');
+    } else {
+      persistEpMemory(item);
+    }
     log('📺 记下第 ' + item.ep + ' 段剧情 (累计 ' + watchSession.segments.length + ' 段)');
     renderPlotPanel();
     return true;
@@ -1989,10 +2362,35 @@
     return true;
   }
 
+  /**
+   * 一集总结失败 → 聊天区明说 (2026-11-04)
+   *
+   * 【为什么必须说】实测 (探针 _reports/cinema-test/probe-series-summary.cjs,
+   *   让服务端不回话): 一集播完时 API 抽风 → 这一集的记忆直接没了, 而
+   *   聊天区一句提示都没有 → 用户以为看过了, 也不知道自己少了一集,
+   *   直到几集之后点「精炼」才发现素材不对。记忆页虽然有红字, 但
+   *   绝大多数时候用户根本不会去翻那一页。
+   */
+  function warnEpisodeSummaryFailed(ep, why) {
+    var msg = '⚠️ 第 ' + ep + ' 集没总结出来（' + (why || '未知原因') +
+      '）—— 60 秒后会自动重试一次；实在不行，重播这一集就能补上。';
+    appendSystemLine(msg);
+    logWarn(msg);
+  }
+
   /** 一集播完 → 要一条单集记忆 */
   function requestEpisodeSummary(ep) {
     if (S._leaving) return Promise.resolve('');
-    if (!S.client || !S.client.isReady()) return Promise.resolve('');
+    if (!S.client || !S.client.isReady()) {
+      // 🔴 2026-11-04: 原来这里【静默】返回 '' —— 用户只看到「这一集没总结」,
+      //   面板上没有红字, 日志里也没有, 完全查不出原因。
+      //   现在明说: Live 没连上 → 这一集没生成, 60 秒后会自动重试。
+      logWarn('第 ' + ep + ' 集没总结: Gemini Live 没就绪');
+      noteEpisodeFail(ep, 'Gemini Live 没连上, 这一集没能生成出来');
+      warnEpisodeSummaryFailed(ep, 'Gemini Live 没连上');
+      renderPlotPanel();
+      return Promise.resolve('');
+    }
 
     // 🔴 2026-10-27: 原来这里第三行是
     //     if (watchSession.pendingSummary) return Promise.resolve('');
@@ -2005,6 +2403,8 @@
       if (!ok) {
         logWarn('第 ' + ep + ' 集没总结: 摘要通道一直被占着');
         noteEpisodeFail(ep, '摘要通道一直被占着, 没能生成出来');
+        warnEpisodeSummaryFailed(ep, '摘要通道一直被占着');
+        renderPlotPanel();
         return '';
       }
       return doRequestEpisodeSummary(ep);
@@ -2033,15 +2433,34 @@
     instruction.push('⚠️ 正文【第一句必须以"第 ' + ep + ' 集，"开头】, 然后接剧情。');
     instruction.push('这是为了标明集号, 不是让你重复标题, 整段就正常写下去。');
     instruction.push('');
-    instruction.push('只输出正文, 不要客套、不要分析、不要"根据我的观察"这种说法。');
-    if (watchSession.episodeMemories.length) {
+
+    // 🔴 2026-11-05 (手机发热): 前情提要【并进这一集自己的指令】, 不再单独发一个回合。
+    //
+    //   以前每集播完换会话后, 会另发一个"只回一个好"的提要回合 (injectSeriesRecap)。
+    //   那一回合 = 一次完整的 Live 往返 (上传指令 → 等模型吐字 → 收一整段音频),
+    //   手机上就是一次实打实的射频往返 —— 看两集就白白多两个回合。
+    //   而短剧用 Live 的场合只有"写这一集的剧情"这一件事 (陪聊早就走主 API 了),
+    //   所以那份提要跟着【这一集总结】一起给模型就够了, 不必单开一回合。
+    //
+    //   内容跟以前那个独立回合【一模一样】(压缩提要 + 最近几集原文),
+    //   区别只是以前分两趟送, 现在一趟送完。
+    var recapForSummary = String((watchSession.seriesRecap && watchSession.seriesRecap.text) || '').trim();
+    if (recapForSummary) {
+      instruction.push('# 前情提要(前面几集的压缩版, 只作背景, 不要复述):');
       instruction.push('');
+      instruction.push(recapForSummary);
+      instruction.push('');
+    }
+    if (watchSession.episodeMemories.length) {
       instruction.push('前面已经记过的集(不要重复写, 只写这一集):');
       var recent = watchSession.episodeMemories.slice(-3);
       for (var i = 0; i < recent.length; i++) {
         instruction.push('第 ' + recent[i].ep + ' 集：' + recent[i].text);
       }
+      instruction.push('');
     }
+
+    instruction.push('只输出正文, 不要客套、不要分析、不要"根据我的观察"这种说法。');
 
     return requestSummary('episode', instruction.join('\n'))
       .then(function (text) {
@@ -2049,6 +2468,8 @@
         if (!t) {
           logWarn('第 ' + ep + ' 集没总结出内容');
           noteEpisodeFail(ep, '模型这次什么都没说');
+          warnEpisodeSummaryFailed(ep, '模型这次什么都没说');
+          renderPlotPanel();
           return '';
         }
         // 🔴 2026-10-19: addEpisodeMemory 自己会卡长度下限, 返回 false 就当这次没总结出来。
@@ -2056,6 +2477,8 @@
         //   于是那一集在数据上"看过了", 但其实什么也没记下来。
         if (!addEpisodeMemory(ep, t)) {
           noteEpisodeFail(ep, '这次只总结出几个字, 太短, 没存');
+          warnEpisodeSummaryFailed(ep, '这次只总结出几个字, 太短, 没存');
+          renderPlotPanel();
           return '';
         }
         return t;
@@ -2063,6 +2486,8 @@
       .catch(function (err) {
         logWarn('第 ' + ep + ' 集总结失败:', err.message);
         noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        warnEpisodeSummaryFailed(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        renderPlotPanel();
         return '';
       });
   }
@@ -2647,10 +3072,18 @@
     // 同步先把上一部残留的清掉 —— 慢一拍读回来也会串台
     watchSession.seriesRecap = null;
     watchSession.seriesRecapInjectPending = true;
+    // 🔴 2026-11-04: 标记"正在读库"。
+    //   以前没有这个标记 → 注入跑在【异步读库之前】, 那时 watchSession.seriesRecap
+    //   还是 null → 注入里"上次看到哪"(锚) 和"手动精炼的前情提要"全是空的,
+    //   而 injectSeriesRecap() 一进来就把 seriesRecapInjectPending 落闸 →
+    //   等库读完, tryInject() 再想注入时已经是空转 → 这两样【从来没喂给过模型】。
+    //   (实测: 库里明明有提要, 10 次注入一次都没有它。)
+    watchSession._crossReading = true;
 
     var CS = cinemaStorage();
     if (!CS || typeof CS.loadSeriesRecap !== 'function') {
       watchSession.seriesRecapInjectPending = false;   // 表都还没有, 后面也不会有
+      watchSession._crossReading = false;
       return;
     }
     // 记下这次的会话号: 切得比读盘快的话, 这一行的结果就过期了, 必须丢掉
@@ -2705,6 +3138,8 @@
 
     function tryInject() {
       if (!gotRecap || !gotEps) return;
+      // 🔴 2026-11-04: 库读完了 → 放行注入 (现在注入里才有锚 + 手动精炼的提要)
+      watchSession._crossReading = false;
       var rec = watchSession.seriesRecap;
       var pool = isSeries ? (watchSession.episodeMemories || []) : (watchSession.segments || []);
       // ⚠️ 2026-10-21: 长剧有两个字段, 提要(recapText)和锚(text)都算"有东西要注入"。
@@ -2759,6 +3194,22 @@
   /** Live 早就连着 (中途切剧) → 立刻注入; 还没连 → 留给 onClientState('ready')。 */
   function maybeInjectSeriesRecap() {
     if (!watchSession.seriesRecapInjectPending) return;
+    // 🔴 2026-11-04: 库还在读 → 先别注入。
+    //   这时候 watchSession.seriesRecap 还是 null, 注入进去的"上次看到哪"和
+    //   "手动精炼的前情提要"都是空的, 而且 injectSeriesRecap() 会把
+    //   seriesRecapInjectPending 落闸 → 库读完后的那次注入再也发不出去。
+    //   → 等库读完 (tryInject 里放行), 那时才有完整的内容可注入。
+    if (watchSession._crossReading) return;
+    // 🔴 2026-11-05 (手机发热): 短剧【不再单独发提要回合】。
+    //   以前每集换完会话都要另发一个"只回一个好"的回合, 那是白白多一次
+    //   Live 往返 (射频 + 等模型 + 收音频)。现在提要改成并进【这一集自己的
+    //   总结指令】里 (见 doRequestEpisodeSummary), 模型一次就想清楚了。
+    //   短剧用 Live 的场合只有"写剧情记忆"这一件事, 不再有别的用途。
+    //   长剧(film)保持原样 —— 它的阶段摘要靠会话里的上下文, 提要是锚。
+    if (watchSession.kind === 'series') {
+      watchSession.seriesRecapInjectPending = false;   // 落闸, 别再空转
+      return;
+    }
     if (!S.client || !S.client.isReady()) return;     // 等 ready
     injectSeriesRecap();
   }
@@ -2933,6 +3384,77 @@
       logWarn('删跨场提要失败:', e && e.message);
       return false;
     });
+  }
+
+  // ============================================================
+  // 摘要看门狗 (2026-10-29 用户实测「只总结了第一段, 之后就再也没总结」)
+  // ============================================================
+  // 历史上有多条路径会 stopStageSummary() 却【没人重排】——
+  //   ① resumeFrames() 里 live 还没 ready 就 return (iOS 切后台必断 WebSocket)
+  //   ② enable() 失败时 S.enabled = false
+  //   ③ onVideoSourceChanged() → disable() (换片)
+  // 只要撞上其中一条, 摘要定时器就没了, 之后每一轮 tick 都早退 → 一句都不写。
+  // 看门狗每 30 秒兜一次: 定时器不见了就补排, live 掉线就安排重连。
+  var SUMMARY_WATCHDOG_MS = 30000;
+  var summaryWatchdogTimer = null;
+
+  function startSummaryWatchdog() {
+    if (summaryWatchdogTimer) return;
+    summaryWatchdogTimer = setInterval(function () {
+      if (!S.enabled || S._leaving) return;
+      // 🔴 2026-10-29: 视频在不在播 —— 暂停时不该补排定时器
+      //   (pauseFrames 是【故意】停掉定时器的, 补排会白吃一轮)。
+      var vdog = getVideo();
+      var playing = !!(vdog && !vdog.paused && !vdog.ended);
+      // ① 摘要定时器不见了 → 补排一个
+      //    🔴 2026-11-04: 短剧不排阶段摘要, 所以这里也别补 ——
+      //    否则每 30 秒补一次、排完立刻被 tick 丢掉, 白转一圈还刷屏。
+      if (!watchSession.summaryTimer && playing && stageSummaryEnabled()) {
+        log('看门狗: 摘要定时器不见了, 补排一个');
+        scheduleStageSummary();
+      }
+      // ② ★★★ 权威调度 (2026-10-29 用户实测「两分钟后没有发起总结」):
+      //   不管定时器还在不在 —— 只要【已播放时长】够长、却还没写进剧情,
+      //   现在就强制发起一次。
+      //   以前完全依赖「定时器链」(tick → finally 里重排), 链上任何一环
+      //   被吃掉, 后面就永远不再发起, 而且现场一点线索都没有。
+      //   这里用【已播放时长】而不是墙钟 —— 暂停时不误触发。
+      //   🔴 2026-11-04: 短剧模式跳过 —— 短剧的摘要节奏是「每集一条」,
+      //   「每 2 分钟一段」那条长剧机制在短剧里只会抢通道 + 撞主键 + 重置会话。
+      if (playing && stageSummaryEnabled() && !watchSession.summaryBusy && !watchSession.pendingSummary &&
+          S.client && S.client.isReady()) {
+        var since = totalPlayedMs() - Math.max(
+          watchSession.lastSummaryOkPlayedMs || 0,
+          watchSession.lastSummaryStartedAt || 0);
+        if (since >= WATCH_SUMMARY_INTERVAL_MS) {
+          log('看门狗: 已播放 ' + Math.round(since / 1000) + 's 还没写进剧情, 强制补一次');
+          diagPush('forced', { sinceSec: Math.round(since / 1000) });
+          // 先把还挂着的那个定时器收掉, 免得强制这次跟它撞车
+          if (watchSession.summaryTimer) {
+            clearTimeout(watchSession.summaryTimer);
+            watchSession.summaryTimer = null;
+          }
+          // since 传进去 → 这次真的失败了才提示用户 (在 tick 的失败分支里推)
+          tickStageSummary(true, since);
+        }
+      }
+      // ② live 停在坏状态, 而且没在重连 → 安排重连
+      //    ⚠️ 只在 closed/error/idle 时管 —— connecting/connected 是正在建, 别插手
+      if (S.client && !_retryTimer && !watchSession.summaryBusy) {
+        var st = S.client.state;
+        if (st === 'closed' || st === 'error' || st === 'idle') {
+          logWarn('看门狗: live 停在 ' + st + ', 安排重连');
+          scheduleReconnect('live 长时间不可用');
+        }
+      }
+    }, SUMMARY_WATCHDOG_MS);
+  }
+
+  function stopSummaryWatchdog() {
+    if (summaryWatchdogTimer) {
+      clearInterval(summaryWatchdogTimer);
+      summaryWatchdogTimer = null;
+    }
   }
 
   function stopStageSummary() {
@@ -3150,6 +3672,7 @@
   }
   function clearRetry() {
     _retryCount = 0;
+    S._reconnectGaveUp = false;      // 真的连上了 → 那个「已放弃」的提示可以撤
     if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
   }
 
@@ -3206,10 +3729,25 @@
     }
 
     if (_retryCount >= MAX_RETRY) {
-      logWarn('重连次数用完 (' + MAX_RETRY + '), 放弃自动重连');
-      appendSystemLine('⚠️ 连续重连 ' + MAX_RETRY + ' 次仍失败，已停止自动重连。原因：' + reason +
-        '　可以在房间右上角 ⚙「设置」里确认 key 是否填对。');
-      renderStatus('closed', '重连失败');
+      // 🔴 2026-10-29 (用户实测「只总结了第一段, 之后就再也没总结」):
+      //   原来这里直接 return —— 【彻底放弃】→ live 永远回不来
+      //   → isReady() 永远为假 → 剧情摘要一句都不写 (只留下第一段)。
+      //   现在: 不放弃, 改成【每 60 秒继续重试】, 计数清零重来;
+      //   提示只说一次, 不刷屏。
+      if (!S._reconnectGaveUp) {
+        S._reconnectGaveUp = true;
+        appendSystemLine('⚠️ 连续重连 ' + MAX_RETRY + ' 次仍失败 —— 不会放弃, 改成每 60 秒再试一次。原因：' + reason +
+          '　可以在房间右上角 ⚙「设置」里确认 key 是否填对。');
+      }
+      logWarn('重连 ' + MAX_RETRY + ' 次仍失败, 改用 60 秒间隔继续重试');
+      renderStatus('connecting', '重连中 (60 秒一次)');
+      _retryCount = 0;
+      if (_retryTimer) clearTimeout(_retryTimer);
+      _retryTimer = setTimeout(function () {
+        _retryTimer = null;
+        if (!S.enabled || S._userDisabled || S._leaving) return;
+        attemptReconnect(flapped);
+      }, 60000);
       return;
     }
     var delay = RETRY_BASE_MS * Math.pow(2, _retryCount);
@@ -3222,6 +3760,19 @@
       _retryTimer = null;
       if (!S.enabled || S._userDisabled || S._leaving) return;
       if (!S.client) { enable(); return; }
+      attemptReconnect(flapped);
+    }, delay);
+  }
+
+  /**
+   * 真正去重连一次 (退避定时器到点了就调它)。
+   *
+   * 🔴 2026-10-29 抽出来: 退避到头 (MAX_RETRY 用完) 之后, 改成【每 60 秒重试一次】
+   *   也要走同一条重连逻辑, 不能另写一份 (不然两边的修复会走岔)。
+   */
+  function attemptReconnect(flapped) {
+    if (!S.enabled || S._userDisabled || S._leaving) return;
+    if (!S.client) { enable(); return; }
 
       // 🔴 2026-10-16 用户实测「连了断了连, 最后彻底连不上」的根因。
       //
@@ -3260,7 +3811,6 @@
           try { if (S.client) S.client.setResumeHandle(null); } catch (e) { /* noop */ }
           scheduleReconnect(err.message);
         });
-    }, delay);
   }
 
   // ============================================================
@@ -3273,7 +3823,17 @@
     if (state === 'ready') {
       if (!flapLast) clearRetry();
       flapLast = false;
-      appendSystemLine('✅ Gemini Live 已连接，正在持续接收视频画面（1 帧/秒）');
+      S.sessionFrames = 0;
+      diagPush('connect');
+      // 🔴 2026-11-04: 短剧每集结束会【主动】换一个干净会话 —— 那不是"断线重连",
+      //   是我们自己换的, 没必要每集都跟用户报一次"已连接" (一集一集刷屏)。
+      //   15 秒内算"刚才那次主动换的"; 超时就当普通重连, 照常报给用户。
+      var routine = !!(S._routineResetAt && (Date.now() - S._routineResetAt) < 15000);
+      S._routineResetAt = 0;
+      if (!routine) {
+        appendSystemLine('✅ Gemini Live 已连接，正在持续接收视频画面（每 ' +
+          Math.round(FRAME_INTERVAL_MS / 1000) + ' 秒一帧）');
+      }
       if (watchSession.closed || !watchSession.watchSessionId) {
         newWatchSession(S.chatId);
         appendSystemLine('📖 我会每隔几分钟整理一次剧情，攒着给你看。');
@@ -3294,11 +3854,19 @@
       if (v0 && !v0.paused && !v0.ended && !S.paused) markPlaying();
       scheduleStageSummary();
       renderPlotPanel();
+    } else if (state === 'error') {
+      // 🔴 2026-10-29: 之前 'error' 状态【完全没处理】——
+      //   live-client 连失败时会进 error, 于是连一次失败就永远不重连。
+      if (S.autoMode && !S._userDisabled && !S._leaving) {
+        diagPush('error', { why: String(detail || '') });
+        scheduleReconnect('连接出错: ' + (detail || '未知原因'));
+      }
     } else if (state === 'closed' && S.autoMode && !S._userDisabled) {
       // 🔴 2026-10-16: 断线这一刻先把在途的摘要请求作废 (理由见 abortPendingSummary)。
       //   少了这一句, 那个请求会赖到 45s 超时, 期间新一集一集都不再总结,
       //   而且模型吐的字全被它吞掉 —— 用户实测"看完一集没总结起, 重看一遍还是没有"。
       abortPendingSummary('连接断开');
+      diagPush('close', { why: String(detail || '') });
       // 非用户主动关闭 → 走 session resumption 重连
       scheduleReconnect(detail || '连接被关闭');
     }
@@ -3320,6 +3888,7 @@
     }
 
     S.enabled = true;
+    startSummaryWatchdog();
     S.framesSent = 0;
     S.paused = false;
     S._userDisabled = false;
@@ -3357,7 +3926,15 @@
         log('usage: total=' + meta.totalTokenCount + ' prompt=' + meta.promptTokenCount +
           ' response=' + meta.responseTokenCount);
       },
-      onGoAway: function () { appendSystemLine('⚠️ 服务端即将断开连接'); },
+      onGoAway: function () {
+        diagPush('goAway');
+        appendSystemLine('⚠️ 服务端即将断开连接');
+        // 🔴 2026-10-28: goAway 之后连接随时会关 —— 这段时间推的每一帧都会进
+        //   会话上下文, 把要交给重连用的存档点撑得巨大, 重连就又慢又容易失败。
+        //   用户看到的正是"播着播着卡住不动了"。→ 立刻停推, 等重连成功再恢复
+        //   (scheduleReconnect 成功后会 startFrameLoop)。
+        stopSendingFrames('服务端即将断开');
+      },
       onError: function (err) { appendSystemLine('⚠️ Gemini Live 错误: ' + err.message); }
     });
 
@@ -3410,9 +3987,16 @@
       })
       .catch(function (err) {
         log('连接失败:', err.message);
-        S.enabled = false;
+        // 🔴 2026-10-29 (用户实测「live 断了就再也不总结」):
+        //   原来这里 S.enabled = false —— 于是摘要那条路每次都早退,
+        //   而且再也没人安排重连 → live 永远回不来 → 剧情一句都不写。
+        //   现在: 保持 enabled, 把重连交给 scheduleReconnect (指数退避);
+        //   实在重连不上 (MAX_RETRY 用完) 才由它自己停。
         renderStatus('error', err.message);
-        appendSystemLine('❌ Gemini Live 连接失败: ' + err.message);
+        appendSystemLine('❌ Gemini Live 连接失败: ' + err.message + ' —— 正在重试…');
+        if (S.autoMode && !S._userDisabled && !S._leaving) {
+          scheduleReconnect('连接失败: ' + err.message);
+        }
         return false;
       });
   }
@@ -3420,8 +4004,21 @@
   function disable(reason) {
     log('停用 Gemini Live' + (reason ? ' (' + reason + ')' : ''));
     clearRetry();
+    stopSummaryWatchdog();
     stopStageSummary();      // 连 Live 都断了, 摘要定时器必须跟着停
     stopFrameLoop();
+    // 🔴 2026-11-04: 别让"一集总结失败后的自动重试"在退出后还活着
+    if (S._epRetryTimer) { clearTimeout(S._epRetryTimer); S._epRetryTimer = null; }
+    S._epRetryEp = 0;
+    // 🔴 2026-11-04: 必须【在 close 之前】把 _userDisabled 置真。
+    //   live-client 的 close() 会同步触发 socket 的 onclose → 把状态报成 'closed'
+    //   → 上层 onClientState('closed') 看到 "不是用户主动禁用" 就【排一次自动重连】
+    //   → 那个重连 2 秒后回来, 把刚连好的新连接又顶掉 (reconnect 会先关掉当前 socket)。
+    //   症状 (实测, 探针 _reports/cinema-test/probe-local-file-summary.cjs):
+    //     换本地文件 → 新连接刚建好 → 几秒后被重连顶掉 → 这一集开头那十几秒的画面
+    //     进了个被丢弃的会话 → 模型看不见; 聊天区还刷「连接断开 / 已重新连接」。
+    //   live-client 自己写着「主动关闭 → 不做自动重连」—— 那句前提就是这里。
+    S._userDisabled = true;
     if (S.client) {
       try { S.client.close(reason || 'disabled'); } catch (e) { /* noop */ }
       S.client = null;
@@ -3559,9 +4156,70 @@
   }
 
   /**
+   * 把要导出的 chunk 交给宿主写进【真实的】长期记忆, 等它回确认。
+   *
+   * ⚠️ 为什么必须等确认才清账 (2026-10-28):
+   *   沙盒里的 db.chats 是【假的】—— 以前它只把 longTermMemory 的最后一条
+   *   postMessage 给宿主, 前面几条全丢。于是: 导出切成 4 块, 只有最后 1 块到了
+   *   长期记忆, 剩下 3 块紧接着被"清账"从库里删掉 —— 界面报"✅ 已导出 4 条",
+   *   实际长期记忆里只有 1 条, 其余白看 (用户 2026-10-28 实测)。
+   *   → 现在: 宿主回 ok 才清账; 没回 ok (超时 / 宿主写失败) → 一行都不删。
+   */
+  var HOST_EXPORT_TIMEOUT_MS = 10000;
+  function requestHostExport(chunks) {
+    return new Promise(function (resolve) {
+      var hasHost = false;
+      try {
+        hasHost = !!(window.parent && window.parent !== window &&
+          typeof window.parent.postMessage === 'function');
+      } catch (e) { hasHost = false; }
+      if (!hasHost) {
+        resolve({ ok: false, error: '不在宿主里, 没法写进长期记忆' });
+        return;
+      }
+
+      var reqId = 'exp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      var done = false;
+
+      function cleanup() {
+        clearTimeout(timer);
+        try { window.removeEventListener('message', onMsg); } catch (e) { /* noop */ }
+      }
+      function onMsg(e) {
+        var d = e.data || {};
+        if (!d || d.type !== 'cinema:exportMemoryDone' || d.requestId !== reqId) return;
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve({ ok: !!d.ok, count: Number(d.count) || 0, error: d.error || '' });
+      }
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve({ ok: false, error: '宿主没回确认 (超时)' });
+      }, HOST_EXPORT_TIMEOUT_MS);
+
+      window.addEventListener('message', onMsg);
+      try {
+        window.parent.postMessage({
+          type: 'cinema:exportMemory',
+          requestId: reqId,
+          chunks: (chunks || []).map(function (c) { return { text: String(c.text || '') }; })
+        }, '*');
+      } catch (e) {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve({ ok: false, error: String((e && e.message) || e) });
+      }
+    });
+  }
+
+  /**
    * 导出。返回 Promise<{ok, count, error?}>。
    *
-   * ⚠️ 必须 await db.chats.put 成功才算数 —— 跟旧版写观影记忆一样的纪律。
+   * ⚠️ 必须等宿主回 ok 才算数 —— 跟旧版写观影记忆一样的纪律。
    *   "内存里 push 完了"不是写成功了。
    */
   function exportMemoriesToMemory() {
@@ -3577,16 +4235,14 @@
         renderPlotPanel();
         return { ok: false, count: 0, error: '还没有攒下的剧情记忆' };
       }
-      if (!chat.longTermMemory) chat.longTermMemory = [];
-      for (var i = 0; i < chunks.length; i++) {
-        chat.longTermMemory.push({
-          content: chunks[i].text,
-          timestamp: Date.now(),
-          source: 'cinema_watch_export'
-        });
-      }
-      return db.chats.put(chat).then(function () {
-        log('✅ 已导出 ' + chunks.length + ' 条到长期记忆');
+      // ⚠️ 2026-10-28: 不再自己 db.chats.put(chat) —— 沙盒里那个是假的,
+      //   只带得走最后一条 (见 requestHostExport 的注释)。
+      //   改成把全部 chunk 发给宿主, 宿主写进真实长期记忆并回 ack。
+      return requestHostExport(chunks).then(function (res) {
+        if (!res || !res.ok) {
+          throw new Error((res && res.error) || '宿主没确认写入');
+        }
+        log('✅ 已导出 ' + (res.count || chunks.length) + ' 条到长期记忆');
         return clearExported(chunks);
       });
     }).then(function (r) {
@@ -3728,6 +4384,7 @@
     markPaused();
     watchSession.playedMs = 0;
     watchSession.lastSummaryStartedAt = 0;
+    watchSession.lastSummaryOkPlayedMs = 0;
     S._leaving = true;
     disable('离开 Cinema Room');
     _autoTried = false;
@@ -3753,7 +4410,17 @@
   }
 
   function resumeFrames(reason) {
-    if (!S.enabled || !S.client || !S.client.isReady()) return;
+    if (!S.enabled) return;
+    // 🔴 2026-10-29 (用户实测「切后台回来后再也不总结」):
+    //   iOS PWA 切后台必断 WebSocket, 回来时 live 还没 ready。
+    //   原来这里直接 return → 摘要定时器永远不排 → 此后再也不总结。
+    //   现在: 就算 live 还没 ready, 也要把摘要定时器排上;
+    //   live 什么时候回来, 由看门狗负责盯。
+    if (!S.client || !S.client.isReady()) {
+      if (!S._leaving) scheduleStageSummary();
+      log('恢复发帧时 live 还没就绪, 摘要定时器照排' + (reason ? ' (' + reason + ')' : ''));
+      return;
+    }
     S.paused = false;
     // 计时恢复: 从头起算播放时长, 再按"这一轮还差多少"重新排定时器。
     markPlaying();
@@ -3762,6 +4429,19 @@
     }
     log('恢复发帧' + (reason ? ' (' + reason + ')' : ''));
     renderStatus('ready');
+  }
+
+  /**
+   * 只停推帧, 【不动】播放计时和摘要定时器。
+   *
+   * ⚠️ 跟 pauseFrames 的区别很重要:
+   *   pauseFrames 是"用户暂停了视频" —— 那里要 markPaused() 结账、要停摘要定时器。
+   *   这里只是"先别往 Live 里塞帧了"(服务端马上要断) —— 视频还在放, 计时要继续,
+   *   不然 5 分钟的账会被平白吃掉一轮。
+   */
+  function stopSendingFrames(reason) {
+    stopFrameLoop();
+    log('已停止推帧' + (reason ? ' (' + reason + ')' : ''));
   }
 
   function doSendUserText(text) {
@@ -3867,12 +4547,182 @@
     watchSession.currentPlotSummary = '';      // 单集记忆才是短剧的载体
     watchSession.summaryCount = 0;
     watchSession.summaryUpdatedAt = 0;
-    watchSession.lastSummaryStartedAt = 0;      // 下一集重新起 5 分钟
+    // 🔴 2026-11-04: 这里原来写 0 (= "从开房算起"), 于是 scheduleStageSummary
+    //   拿【跨集累计】的已播放时长去算剩余时间 → 看得越久, 阶段摘要发得越早,
+    //   最后变成"每换一集就立刻发一次"。短剧现在不跑阶段摘要了, 但看门狗
+    //   和别的逻辑还看这个基准 → 改成"这一集从现在开始重新计时"。
+    watchSession.lastSummaryStartedAt = totalPlayedMs();
+    // 🔴 2026-11-04: 记下【当前正在播的这一集】—— 用来判断上一集那个
+    //   自动重试还有没有必要 (换集了就放弃, 否则画面混在一起会串味)。
+    S._curEp = watchSession.nowPlayingEp || 0;
+    // 上一集总结失败 → 画面还留着(等 60 秒后重试)。用户已经换集了 →
+    //   放弃那次重试, 并把混在一起的画面清掉 —— 否则这一集的画面会跟新一集
+    //   混进同一个会话 → 新一集的单集剧情会串味。
+    if (S._epRetryTimer) {
+      var lostEp = S._epRetryEp;
+      clearTimeout(S._epRetryTimer);
+      S._epRetryTimer = null;
+      S._epRetryEp = 0;
+      log('上一集还在等自动重试, 但你已经换集了 —— 放弃那次重试, 并清掉混在一起的画面');
+      // ⚠️ 必须告诉用户: 刚才说过"60 秒后会自动重试", 现在不重试了,
+      //   不说清楚就是说话不算话 (用户会一直等那个自动补上)。
+      appendSystemLine('⚠️ 第 ' + lostEp + ' 集的自动重试因为你换集了取消了 —— ' +
+        '重播这一集就能补上。');
+      resetLiveSession('换集, 清掉上一集的画面');
+    }
     if (S.enabled) {
       markPlaying();                           // 新片马上要播, 接着起表
       scheduleStageSummary();
     }
     renderPlotPanel();
+  }
+
+  /**
+   * 换干净会话 (Live 的会话上下文是累积的, 不换会撑爆)。
+   *
+   * ⚠️「什么时候换」是这套机制里最容易出事的地方 (2026-11-04 连踩两次):
+   *   · 一集中途换 → 这一集的画面没了 → 单集剧情只剩尾巴
+   *   · 失败就换   → 失败那一段既没落库、画面也没了 → 整段剧情消失
+   * 所以换的时机必须是【安全点】: 一集与一集之间 / 一次摘要成功之后。
+   */
+  function resetLiveSession(reason) {
+    if (!S.enabled || S._leaving) return;
+    if (!S.client || typeof S.client.resetSession !== 'function') return;
+    if (!S.client.isReady()) return;            // 没连上就别动 (重连逻辑会管)
+    if (watchSession.pendingSummary || watchSession.summaryBusy) {
+      // 还有在途请求 (比如后台合并提要) —— 晚点再说, 别把它的结果掐断。
+      log('还有在途请求, 这一轮不换会话 (' + (reason || '') + ')');
+      return;
+    }
+    S._routineResetAt = Date.now();   // 'ready' 时别再刷「✅ Gemini Live 已连接」
+    S._needFreshSession = false;
+    S.sessionFrames = 0;
+    // 本地那个存档点也一起扔 —— 不然下次进影院会拿一个废 handle 去续,
+    // 服务端一收到 setup 就把连接掐掉 (症状是"连上秒断")。
+    try { saveHandle(null); } catch (e) { /* noop */ }
+    log('🔄 换干净会话 (' + (reason || '未说明') + ')');
+    diagPush('fresh');
+    try {
+      var p = S.client.resetSession();
+      if (p && typeof p.then === 'function') {
+        p.then(function () {
+          log('已换成干净会话');
+        }).catch(function (err) {
+          logWarn('换干净会话失败:', (err && err.message) || err);
+          S._routineResetAt = 0;
+          scheduleReconnect('换干净会话失败');
+        });
+      }
+    } catch (e) {
+      logWarn('换干净会话失败:', (e && e.message) || e);
+      S._routineResetAt = 0;
+    }
+  }
+
+  /**
+   * 一集播完 → 换干净会话 (短剧专用, 2026-11-04)
+   *
+   * 【为什么必须换】
+   *   Live 的会话上下文是【累积】的: 每一帧画面都算 token (官方 258 token/帧),
+   *   会话窗口只有 128,000 → 连着看好几集必然撑爆 (用户 2026-10-29 实测
+   *   「十五分钟左右浏览器崩溃闪退」)。不换 → 后面几集一集都不总结。
+   *
+   * 【为什么必须【在集与集之间】换, 不能在一集中间换】
+   *   一换, 会话里已经累积的画面全没了 → 模型只看得见换之后那几秒 →
+   *   这一集的单集剧情【只剩尾巴】(用户 2026-11-04 实测「最后总结的剧情只有半截」)。
+   *   → 所以: 一集播完、单集剧情写进库之后才换。下一集从零开始看,
+   *     这一集的全部画面都在它自己那个会话里 → 总结完整。
+   *
+   * 【换完要把前情提要重新喂一遍】
+   *   🔴 2026-11-05 改法: 不再【另发一个回合】喂, 改成把提要并进【下一集
+   *   自己的总结指令】里 (见 doRequestEpisodeSummary)。以前是每集换完会话
+   *   再单发一个"只回一个好"的回合 —— 那是一次白跑的 Live 往返(射频+等模型+
+   *   收音频), 看两集就多两趟, 手机上直接体现为发烫。
+   *   内容一份没少 (压缩提要 + 最近几集原文), 只是以前分两趟送, 现在一趟送完。
+   */
+  function resetSessionAfterEpisode(ep) {
+    // ⚠️ 置 false (不是 true): 不置的话 maybeInjectSeriesRecap() 会一直以为
+    //   "还有提要没喂", 每一次 Live ready 都会白空跑一趟。
+    watchSession.seriesRecapInjectPending = false;
+    resetLiveSession('第 ' + ep + ' 集结束');
+  }
+
+  /**
+   * 一集总结失败 → 先不换会话, 60 秒后自动重试一次 (2026-11-04)
+   *
+   * 【为什么救得回来】一集播完时, 这一集的画面还在 Live 会话里
+   *   (短剧是"一集结束才换会话")。所以只要失败原因是"模型没回话 / 超时 /
+   *   写太短", 画面就还在 → 重试时模型看到的还是这一集 → 能补上, 不用重播。
+   *   反过来说: 失败就换会话 = 把这一集的画面扔了 → 重试也救不回来。
+   *
+   * 【什么时候救不了】Live 断线 / 发不出去 → 会话已经没了 → 画面也没了
+   *   → 重试大概率还是失败 → 那就放弃, 面板上留红字, 用户重播这一集就能补。
+   *
+   * 【换集了就放弃】60 秒的窗口里用户可能已经点了下一集 → 下一集的画面会
+   *   混进同一个会话 → 重试出来的总结会串味 → 所以换集即放弃 (见
+   *   onSeriesEpisodeChanged)。
+   */
+  function scheduleEpisodeSummaryRetry(ep) {
+    if (!S.enabled || S._leaving) return;
+    // ⚠️ 2026-11-04: 可能【已经换集了】才等到这次失败。
+    //   典型场景: 模型 90 秒都没回话 (API 抽风), 用户等不及先点了下一集 →
+    //   等到 90 秒超时才发现"第 N 集没总结出来", 但那时候人已经在看第 N+1 集了。
+    //   这时这一集的画面已经跟新一集混在同一个会话里 → 重试出来的"第 N 集总结"
+    //   会串味 → 直接放弃, 而且要跟用户说清楚 (刚才说过"60 秒后会自动重试",
+    //   不说清楚就是说话不算话, 用户会一直等那个自动补上)。
+    //
+    //   ⚠️ 这里【不能】换会话: 新一集已经播了一会儿, 换掉就把新一集的画面也扔了。
+    //   (换集那一刻已经换过一次了 —— 见 onSeriesEpisodeChanged。)
+    if (S._curEp && S._curEp !== ep) {
+      log('第 ' + ep + ' 集已经换到第 ' + S._curEp + ' 集, 不再自动重试');
+      appendSystemLine('⚠️ 第 ' + ep + ' 集的自动重试取消了 —— 你已经换到第 ' + S._curEp +
+        ' 集，重播那一集就能补上。');
+      return;
+    }
+    if (S._epRetryTimer) { clearTimeout(S._epRetryTimer); S._epRetryTimer = null; }
+    S._epRetryEp = ep;
+    S._epRetryTimer = setTimeout(function () {
+      S._epRetryTimer = null;
+      var want = S._epRetryEp;
+      S._epRetryEp = 0;
+      if (!want || !S.enabled || S._leaving) return;
+      // 换集了就放弃 (画面混了, 重试会串味)
+      // ⚠️ 这里【不能】换会话: 走到这一步说明换集那一刻没拦住(没走 onSeriesEpisodeChanged),
+      //   新一集很可能已经播了一会儿 → 换掉就把新一集的画面也扔了。
+      //   放弃重试就够了, 画面留着给新一集。
+      if (S._curEp && S._curEp !== want) {
+        log('第 ' + want + ' 集已经换到第 ' + S._curEp + ' 集, 放弃自动重试');
+        appendSystemLine('⚠️ 第 ' + want + ' 集的自动重试取消了 —— 你已经换到第 ' + S._curEp +
+          ' 集，重播那一集就能补上。');
+        return;
+      }
+      if (!S.client || !S.client.isReady()) {
+        log('第 ' + want + ' 集重试时 Live 没就绪, 放弃');
+        resetLiveSession('第 ' + want + ' 集重试时 Live 没就绪');
+        return;
+      }
+      log('🔁 重试第 ' + want + ' 集的单集剧情');
+      requestEpisodeSummary(want).then(function (text) {
+        var ok = !!(text && String(text).trim());
+        if (ok) {
+          if (want > watchSession.seriesLastEp) watchSession.seriesLastEp = want;
+          renderPlotPanel();
+          appendSystemLine('✅ 第 ' + want + ' 集补记上了（刚才那次没总结出来，已自动重试补上）。');
+          // ⚠️ 这里必须走 resetSessionAfterEpisode, 不能只 resetLiveSession:
+          //   resetSessionAfterEpisode 会顺带把【前情提要】重新喂回新会话。
+          //   少这一步 → 下一集开播时模型手里是空白的(不知道上一集演到哪)
+          //   → 下一集的单集剧情就少了上一集的上下文。
+          resetSessionAfterEpisode(want);
+        } else {
+          appendSystemLine('⚠️ 第 ' + want + ' 集还是没总结出来 —— 重播这一集就能补上。');
+          // 失败 → 画面留着也没用了(用户会重播这一集) → 换干净会话, 重播从头看
+          resetLiveSession('第 ' + want + ' 集重试失败');
+        }
+      }).catch(function (err) {
+        logWarn('第 ' + want + ' 集重试失败:', err && err.message);
+        resetLiveSession('第 ' + want + ' 集重试失败');
+      });
+    }, EPISODE_SUMMARY_RETRY_MS);
   }
 
   /** 自然播放结束 → 停发帧, 不关 Live, 不退出房间, 用户还能继续聊 */
@@ -3899,14 +4749,26 @@
         // 🔴 2026-10-27: 只有【真的总结出来】才推进"看到第几集"。
         //   以前这里不看结果直接推进 —— 于是这一集在数据上"看过了",
         //   状态条也写着"看到第 N 集", 但库里根本没这一集, 用户自己都发现不了。
-        if (text && ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
+        var ok = !!(text && String(text).trim());
+        if (ok && ep > watchSession.seriesLastEp) watchSession.seriesLastEp = ep;
         renderPlotPanel();
         // 攒够一批评分压成跨场提要 (失败不丢数据, 各集都在库里)
-        return maybeMergeSeriesRecap();
+        return maybeMergeSeriesRecap().then(function () { return ok; });
+      }).then(function (ok) {
+        // 🔴 2026-11-04: 成功 → 换干净会话 (下一集从零开始看);
+        //   失败 → 【不换】! 画面还留着, 60 秒后自动重试一次 (见 scheduleEpisodeSummaryRetry)。
+        //   失败就换 = 把这一集的画面扔了 → 重试也救不回来 → 这一集白看。
+        if (ok) {
+          resetSessionAfterEpisode(ep);
+        } else {
+          scheduleEpisodeSummaryRetry(ep);
+        }
       }).catch(function (err) {
         logWarn('第 ' + ep + ' 集记录失败:', err.message);
         noteEpisodeFail(ep, '生成失败: ' + (err && err.message ? err.message : err));
+        warnEpisodeSummaryFailed(ep, '生成失败: ' + (err && err.message ? err.message : err));
         renderPlotPanel();
+        scheduleEpisodeSummaryRetry(ep);
       });
       return;
     }
@@ -3929,9 +4791,50 @@
     // 用户原话: "不足五分钟的剧情结束的时候总结一次"。
     // 播完这一刻 Live 还连着、帧还在发, 是唯一还能看到画面的时候;
     // 下一轮再播时, 这不到五分钟的内容就永远没人记得了。
-    if (gapMs >= 60000) {
-      runStageSummary({ reason: '影片播完, 补记最后一段', minGapMs: 60000 })
-        .then(function (ok) { if (ok) renderPlotPanel(); })
+    //
+    // ⚠️ 2026-11-04 (用户问的「本地上传一集一个文件的短剧, 播放结束会总结吗」):
+    //   判据要用【这个文件本身有多长】, 不能一刀切 60 秒。
+    //   · 文件本身 < 2 分钟 → 这一轮【就是】一集】→ 播完【必须】总结一次
+    //     (哪怕这一集只有 40 秒 —— 原来的 60 秒门槛会把这种文件整集丢掉, 一集白看)
+    //   · 文件 ≥ 2 分钟 → 长剧那套照旧: 每 2 分钟一段, 播完剩下那一截够 60 秒才补记
+    //
+    //   实测 (_reports/cinema-test/probe-local-file-summary.cjs):
+    //     90 秒 × 1 个文件 → 1 段 (91 帧, 覆盖整集)
+    //     40 秒 × 1 个文件 → 0 段  ← 旧写法 (低于 60 秒门槛, 整集丢掉)
+    var fileMs = 0;
+    try {
+      var vEnd = getVideo();
+      if (vEnd && vEnd.duration && isFinite(vEnd.duration)) fileMs = vEnd.duration * 1000;
+    } catch (e) { /* noop */ }
+    var isShortFile = fileMs > 0 && fileMs < WATCH_SUMMARY_INTERVAL_MS;
+    var needFinal = isShortFile ? gapMs > 0 : gapMs >= 60000;
+    if (needFinal) {
+      runStageSummary({
+        reason: isShortFile ? '短文件播完, 记这一集' : '影片播完, 补记最后一段',
+        minGapMs: isShortFile ? 0 : 60000
+      })
+        .then(function (ok) {
+          if (!ok) return;
+          // ⚠️ 2026-11-04: 补记成功后, 把【2 分钟窗口的起点】重置到现在。
+          //
+          // 【不重置会怎样】(实测 _reports/cinema-test/probe-local-file-summary.cjs)
+          //   本地上传一集一个文件的短剧 (每集 90 秒), 连着放 3 个文件:
+          //     旧写法 → 落【4 段】, 边界全跨集:
+          //       段1 = 文件1 全部(91 帧)
+          //       段2 = 文件2 的前 30 秒(27 帧)   ← 跟文件1 混在一段里
+          //       段3 = 文件2 的后 51 秒(51 帧)
+          //       段4 = 文件3 的前 55 秒(55 帧)
+          //       而且文件3 最后那 35 秒【直接丢了】—— 因为"离上次总结不到 60 秒",
+          //       播完不补记 (门槛 60 秒是当初为长剧定的)。
+          //   根因: 2 分钟窗口的起点 lastSummaryStartedAt 只有 tickStageSummary 的
+          //   收尾才会更新, 而"影片播完补记最后一段"走的是 runStageSummary 直调,
+          //   绕过了那个收尾 → 上一个文件的时长一直算进下一个文件的窗口里。
+          //
+          // 【重置之后】每个文件从零起算 → 一个文件正好一段, 互不跨集, 尾巴也不丢。
+          //   (长剧那套"每 2 分钟一段"照旧 —— 只是每次补记之后窗口重新起算。)
+          watchSession.lastSummaryStartedAt = totalPlayedMs();
+          renderPlotPanel();
+        })
         .catch(function (e) { logWarn('补记最后一段失败:', e && e.message); });
     } else if (gapMs > 0) {
       log('这一轮只看了 ' + Math.round(gapMs / 1000) + 's, 没什么可补记的');
@@ -3947,6 +4850,8 @@
     watchSession.summaryCount = 0;
     watchSession.summaryUpdatedAt = 0;
     watchSession.chatLog = [];
+    // 🔴 2026-10-29: 换片 → 上一部的画面不许漏过来
+    watchSession.liveNow = { text: '', at: 0, image: '' };
     plotEditing = null;
     S.canvas = null;
     S.ctx = null;
@@ -3973,6 +4878,13 @@
       }
     },
     getChatId: function () { return S.chatId; },
+    // 🔴 2026-10-29: 【阅后即焚】—— 主 API 看完那张画面就调用它, 立刻烧掉。
+    //   为什么: 图只对"这一次请求"有用, 留着只会越堆越多
+    //   (内存 / 备份 / 导出 / 草稿都跟着涨)。
+    burnLiveNowImage: function () {
+      if (watchSession.liveNow) watchSession.liveNow.image = '';
+      return true;
+    },
 
     // 🔴 2026-10-23 陪聊改走主 API 之后, cinema-chat.js 需要三样东西:
     //   ① 影院这边攒下的剧情记忆 + 此刻实况 (给主 API 当上文)
@@ -3998,12 +4910,13 @@
           return { ep: x.ep, text: x.text || '' };
         }),
         // 此刻画面 (单条覆盖式)
-        liveNow: watchSession.liveNow || { text: '', at: 0 }
+        liveNow: watchSession.liveNow || { text: '', at: 0, image: '' }
       };
     },
     // ---- 陪聊气泡 UI (由 cinema-chat.js 驱动) ----
     appendUserBubble: appendUserBubble,
     renderAssistantBubble: renderGeminiBubble,
+    finalizeAssistantBubble: finalizeAssistantBubble,
     resetBubble: resetBubble,
     appendSystemLine: appendSystemLine,
     recordAssistant: recordAssistantFinal,
@@ -4041,6 +4954,9 @@
     handleUserMessage: handleUserMessage,
     onVideoEnded: onVideoEnded,
     onVideoSourceChanged: onVideoSourceChanged,
+    // 🔴 2026-11-04: 本地影片的「作品名」—— 同一作品的几集共用一份底稿。
+    //   宿主在换片时调它 (见 cinema-room.js 的 setVideoSrc)。
+    setWorkName: setWorkName,
 
     // ---- 短剧 (2026-10-07) ----
     setSeries: setSeries,
@@ -4117,6 +5033,12 @@
         summaryUpdatedAt: watchSession.summaryUpdatedAt,
         summaryCount: watchSession.summaryCount,
         summaryBusy: watchSession.summaryBusy,
+        // 🔴 2026-10-29: 播放时间账 + 上次成功写进剧情的时刻 ——
+        //   「已播放多久却没写进剧情」是判断摘要链断没断的唯一硬指标。
+        playedMs: watchSession.playedMs,
+        playingSince: watchSession.playingSince,
+        lastSummaryOkPlayedMs: watchSession.lastSummaryOkPlayedMs,
+        lastSummaryStartedAt: watchSession.lastSummaryStartedAt,
         chatCount: watchSession.chatLog.length
       };
     },

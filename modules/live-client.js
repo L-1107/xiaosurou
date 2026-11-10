@@ -56,6 +56,15 @@
   //    我们视频是主输入, 不能照抄)
   var TURN_COVERAGE = 'TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO';
 
+  // 🔴 2026-10-28: 发送缓冲上限 (背压阈值)。
+  //
+  //   WebSocket 的 bufferedAmount 涨起来 = 服务端/网络跟不上, 而浏览器会
+  //   【无上限】把待发数据堆在内存里。影院这边 1 FPS × 每帧几十~上百 KB,
+  //   堵一分钟就是好几 MB —— 堵久了整页内存被打爆, 手机上就是
+  //   "看着看着卡住不动了, 退出影院外面也聊不了, 只有杀掉 app 才恢复"。
+  //   → 超过这个阈值就丢帧 (见 sendVideoFrame)。宁可少看几帧。
+  var MAX_BUFFERED_BYTES = 2 * 1024 * 1024;   // 2MB
+
   // ============================================================
   // 日志 (严格不打印任何凭据)
   // ============================================================
@@ -299,6 +308,20 @@
    *   { "realtimeInput": { "video": { "data": <base64>, "mimeType": "image/jpeg" } } }
    */
   LiveClient.prototype.sendVideoFrame = function (base64Jpeg, mimeType) {
+    // 🔴 2026-10-28: 背压保护 —— 缓冲太大就【丢这一帧】。
+    //
+    //   bufferedAmount 涨起来 = 服务端/网络跟不上, 而浏览器会【无上限】把待发
+    //   数据堆在内存里。1 FPS × 每帧几十~上百 KB, 堵 1 分钟就是好几 MB,
+    //   堵久了整页内存被打爆 —— 手机上表现就是"看着看着卡住不动了,
+    //   退出影院外面也聊不了, 只有杀掉 app 才恢复"(用户 2026-10-28 实测)。
+    //   → 宁可少看几帧, 也不能把内存吃光。丢帧会记数, 影院那边会提示用户。
+    if (this.ws && this.ws.readyState === 1 && typeof this.ws.bufferedAmount === 'number' &&
+        this.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+      this._droppedFrames = (this._droppedFrames || 0) + 1;
+      logWarn('帧被丢弃 (发送缓冲 ' + Math.round(this.ws.bufferedAmount / 1024) + 'KB 超阈值, 累计丢 ' +
+        this._droppedFrames + ' 帧)');
+      return false;
+    }
     return this._send({
       realtimeInput: {
         video: {
@@ -307,6 +330,23 @@
         }
       }
     });
+  };
+
+  /** 因背压丢掉的帧数 (影院那边用来给用户提示) */
+  LiveClient.prototype.getDroppedFrames = function () {
+    return this._droppedFrames || 0;
+  };
+
+  /**
+   * 现在发得出去吗? (发送缓冲没满)
+   *
+   * 🔴 2026-10-29: 影院那边先问这个, 满了就连帧都不用抽 ——
+   *   抽帧的 JPEG 编码 + base64 是白干的 (每帧 1.3MB 垃圾), 原来是先抽再丢。
+   */
+  LiveClient.prototype.canSendFrame = function () {
+    if (!this.ws || this.ws.readyState !== 1) return false;
+    if (typeof this.ws.bufferedAmount !== 'number') return true;
+    return this.ws.bufferedAmount <= MAX_BUFFERED_BYTES;
   };
 
   /**
@@ -473,7 +513,52 @@
     log('reconnect() 调用' + (had ? ' (带 handle, 保留上下文)' : ' (无 handle, 从头开始)'));
     this.setupDone = false;
     this.state = 'idle';      // 让 connect() 里的重入守卫放行
+
+    // 🔴 2026-10-29 (用户实测「live 断了怎么都重连不上」):
+    //   必须先处理掉【旧 socket】, 否则它会把这个新连接判死。
+    //
+    //   以前 reconnect() 只在「服务端先断开」之后才被调用 —— 那时旧 socket
+    //   早就 closed、onclose 也触发过了, 所以没人受害。
+    //   2026-10-29 新加的「摘要后换干净会话」(resetSession) 是【第一次在
+    //   连接还活着的时候主动重连】→ 旧 socket 还开着 → 踩雷:
+    //     旧 socket 的 onclose → self.setupDone = false + state = closed
+    //     → 而 self.ws 已经是新 socket 了 → 新连接被判死
+    //     → isReady() 永远为假 → 上层 waitUntilReady 超时 → 判定重连失败
+    //     → 再排一次重连 → 又留一个孤儿 socket → 死循环。
+    //   而且 isReady() 永远为假 → 剧情摘要那条路每次早退 → 一句都不写。
+    //
+    //   做法: 先把旧 socket 的回调【摘掉】(它之后怎么关都碰不到 self),
+    //   再关掉它, 最后把 this.ws 置空。
+    //   ⚠️ 只调 WebSocket 原生的 close(), 不调本文件的 close() ——
+    //      本文件的 close() 会把 _closingByUser 置真(那是"用户主动关闭"用的)。
+    var old = this.ws;
+    this.ws = null;
+    if (old) {
+      try {
+        old.onopen = null; old.onmessage = null; old.onerror = null; old.onclose = null;
+        old.close(1000, 'reconnect');
+      } catch (e) {
+        logWarn('关旧 socket 失败:', e && e.message);
+      }
+    }
     return this.connect();
+  };
+
+  /**
+   * 丢弃会话存档点, 下一个连接是【全新会话】。
+   *
+   * ⚠️ 为什么必须有这个 (2026-10-29, 用户实测「十五分钟左右浏览器崩溃闪退」):
+   *   Live 会话的输入预算有限 (131,072 token), 而每一帧画面都要算 image token
+   *   (官方: 258 tokens/tile)。带着 resume handle 重连 = 继承那个已经撑爆的上下文
+   *   → 服务端立刻再掐 → 重连风暴 → 手机狂热 + 闪退。
+   *   主动丢掉 handle 换干净会话, 上下文归零, 稳。
+   *   剧情记忆不靠这个连续 —— 靠提示词里带的【滚动锚】。
+   */
+  LiveClient.prototype.resetSession = function () {
+    this._resumeHandle = null;
+    this._resumable = false;
+    log('已丢弃会话存档点, 下一个连接是全新会话');
+    return this.reconnect();
   };
 
   /**

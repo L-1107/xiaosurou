@@ -29,12 +29,15 @@ const read = (rel) => fs.readFileSync(P(...rel.split('/')), 'utf8');
 
 let passed = 0;
 let failed = 0;
+// 机器可读失败清单（反向验证脚本靠它做集合比对，别删）
+const failedNames = [];
 function ok(name, detail) {
   passed++;
   console.log('  [PASS] ' + name + (detail ? '  ' + detail : ''));
 }
 function fail(name, detail) {
   failed++;
+  failedNames.push(name);
   console.log('  [FAIL] ' + name + (detail ? '  ' + detail : ''));
 }
 function check(name, cond, detail) {
@@ -43,6 +46,21 @@ function check(name, cond, detail) {
 }
 function section(title) {
   console.log('\n== ' + title + ' ==');
+}
+
+// 版本号比较：actual >= floor ?
+// ⚠️ 别再写死确切版本号（`/v=0\.0\.2[2-9]/` 这种）——
+//    每 bump 一次就会误报一次（2026-10-29 又撞上一次）。
+//    一律用「不低于 x.y.z」逐段比大小。
+function verGE(actual, floor) {
+  const a = String(actual || '').replace(/^v/, '').split('.').map(Number);
+  const b = String(floor || '').replace(/^v/, '').split('.').map(Number);
+  if (a.length !== b.length || a.some(n => !Number.isFinite(n))) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] > b[i]) return true;
+    if (a[i] < b[i]) return false;
+  }
+  return true;
 }
 
 
@@ -532,7 +550,11 @@ section('每日换装: 所有宠物都参与 + 衣服道具都进提示词（202
     }
   }, look);
   check('鹦鹉提示词里有今天的衣服', parrot.indexOf(look.outfit.en) >= 0, parrot);
-  check('鹦鹉提示词里有今天的道具', parrot.indexOf(look.icons[0].en) >= 0, parrot);
+  // ⚠️【2026-10-29】鹦鹉的道具里 "in its paws" 会改成 "in its beak"（鸟没有爪子）
+  //   → 参照物要跟着换，不然这条会误报。
+  const parrotIconEn = String(look.icons[0].en).replace(/in its paws?/g, 'in its beak');
+  check('鹦鹉提示词里有今天的道具（爪子已改成喙）',
+    parrot.indexOf(parrotIconEn) >= 0, parrot);
   check('鹦鹉提示词里没有中文', !/[一-龥]/.test(parrot), parrot);
 
   const cat = R.subjectForPet({ kind: 'cat', stage: 1, seed: 'seed-A', appearance: null }, look);
@@ -544,6 +566,9 @@ section('每日换装: 所有宠物都参与 + 衣服道具都进提示词（202
   // --- ④ 换装文字说明：所有种类都要有 ---
   const today = R.dayKey(Date.now());
   const todayLook = R.dailyLookFor([], today, 'seed-A', []);
+  // ⚠️【2026-10-29】鹦鹉用的是自己那套衣服 → 参照物也要带 kind
+  //   （不带 kind 就会拿「猫狗那身」当参照 → 误报"名册和图不是一个"）
+  const todayParrotLook = R.dailyLookFor([], today, 'seed-A', [], 'parrot');
   const parrotCn = R.formatPetAppearance({
     kind: 'parrot', stage: 1, seed: 'seed-A',
     appearance: {
@@ -552,7 +577,9 @@ section('每日换装: 所有宠物都参与 + 衣服道具都进提示词（202
     }
   });
   check('鹦鹉的说明里有今天这身（用户说「鹦鹉没看见换装文字说明」）',
-    parrotCn.indexOf(todayLook.outfit.cn) >= 0, parrotCn);
+    parrotCn.indexOf(todayParrotLook.outfit.cn) >= 0, parrotCn);
+  check('鹦鹉说明里的衣服是鹦鹉衣橱里的那件',
+    (R.PARROT_OUTFITS || []).some(o => o.cn === todayParrotLook.outfit.cn), todayParrotLook.outfit.cn);
   const catCn = R.formatPetAppearance({
     kind: 'cat', stage: 1, seed: 'seed-A',
     appearance: { kind: 'starter', identity: '小猫', palette: '', marking: '' }
@@ -575,6 +602,112 @@ section('每日换装: 所有宠物都参与 + 衣服道具都进提示词（202
     !/each cell fully filled/.test(imgSrc));
   check('还是六格 3×2（用户说动作数不改）',
     /3 columns by 2 rows grid of six equal SQUARE cells/.test(imgSrc));
+}
+
+// ============================================================
+// 鹦鹉换装: 「只有徽章，没有新衣服」(用户 2026-10-29 实测)
+// ============================================================
+// 【真因】探针 _reports/pet-test/print-real-prompt.cjs 把真正发出去的提示词打了出来:
+//   ① 六格姿态/布局全是【四足哺乳动物】的词("front paw raised" / "ears, tail, paws")
+//      → 让模型画鸟 + 抬前爪 → 它把鹦鹉画成毛球兽 → 人穿的衣服根本穿不上去
+//      → 只会把「胸口别个小东西」画成一枚徽章
+//   ② 那 72 件衣服里, 鸟穿不了一批(裙/连体衣/鞋/袜), 还有两件是「胸口别点小东西」
+//   ③ 道具表里一批写的是 "in its paws" → 鸟没有爪子 → 模型给它配上两只小爪
+// → 修法: 鹦鹉单独一套【鸟穿得上的衣服】+ 鸟的姿态 + 爪子改喙
+// ⚠️ 猫狗/幻兽一行不许动 (它们本来就是四足, paws 是对的)
+section('鹦鹉换装: 鸟的姿态 + 鸟穿得上的衣服 (2026-10-29)');
+{
+  const R = loadRules();
+  const nestSrc = read('modules/pet-nest.js');
+  const imgSrc = read('modules/pet-image.js');
+
+  // --- ① 鹦鹉衣橱 ---
+  // ⚠️ 这些断言必须【非空才有效】—— 空数组时 every/some 恒真 → 假绿
+  const po = R.PARROT_OUTFITS || [];
+  const hasWardrobe = po.length > 0;
+  check('鹦鹉有自己的一套衣服', hasWardrobe, po.length + ' 件');
+  check('鹦鹉衣服够换（≥ 16 件，一周不重样）', hasWardrobe && po.length >= 16, po.length + ' 件');
+  check('鹦鹉衣服没有鸟穿不了的（裙/连体衣/鞋/袜/围裙）',
+    hasWardrobe && !po.some(o => /dress|onesie|shoes|socks|apron|skirt|nightgown|hanfu|qipao|vest/i.test(o.en)),
+    po.filter(o => /dress|onesie|shoes|socks|apron|skirt|nightgown|hanfu|qipao|vest/i.test(o.en)).map(o => o.cn).join('、'));
+  check('鹦鹉衣服里没有四足的词（爪子/脚）',
+    hasWardrobe && !po.some(o => /paw|feet/i.test(o.en)));
+  check('鹦鹉衣服都是「一眼看得出是穿了什么」',
+    hasWardrobe && po.every(o => /wearing|holding|draped|carrying/.test(o.en)),
+    po.filter(o => !/wearing|holding|draped|carrying/.test(o.en)).map(o => o.cn).join('、'));
+  // ⚠️【2026-10-29 用户截图】「文字说明就没给鹦鹉安排衣服描述」——
+  //   用户看到的是「一顶小皇冠、头顶小行星的」: 前面是【道具】,
+  //   后面那个「头顶小行星的」本该是【衣服】, 可它其实是"顶在头上的一颗小行星",
+  //   根本不是衣服 → 画出来只是头顶一个小东西(看着像徽章) → 用户说"没有新衣服"。
+  //   → 鹦鹉的衣服必须是【穿在身上的】, 不能是"捧着/提着/叼着"那种(那是道具位)。
+  check('鹦鹉的衣服必须是【穿在身上】的（不是捧着/提着/叼着那种道具）',
+    hasWardrobe && po.every(o => !/^(holding|with a tiny|with a swirled)/.test(o.en)),
+    po.filter(o => /^(holding|with a tiny|with a swirled)/.test(o.en)).map(o => o.cn).join('、'));
+  check('鹦鹉衣服的中文名都是「穿着类」动词',
+    hasWardrobe && po.every(o => /^(戴着|围着|披着|背着|系着|套着|簪着|肩披)/.test(o.cn)),
+    po.filter(o => !/^(戴着|围着|披着|背着|系着|套着|簪着|肩披)/.test(o.cn)).map(o => o.cn).join('、'));
+  check('鹦鹉衣服没有重名', hasWardrobe && new Set(po.map(o => o.cn)).size === po.length);
+  const seriesCount = {};
+  po.forEach(o => { seriesCount[o.series] = (seriesCount[o.series] || 0) + 1; });
+  check('鹦鹉衣服 6 个系列都有（衣服和道具配套才成立）',
+    Object.keys(seriesCount).length === 6, JSON.stringify(seriesCount));
+  check('鹦鹉衣服每个系列至少 3 件（配套的道具才够挑）',
+    Object.keys(seriesCount).every(k => seriesCount[k] >= 3), JSON.stringify(seriesCount));
+
+  // --- ② 按种类选衣橱 ---
+  const plk = R.dailyLookFor([], '2026-01-01', 'seed-A', [], 'parrot');
+  check('鹦鹉的衣服来自鹦鹉衣橱',
+    po.some(o => o.cn === plk.outfit.cn), plk.outfit.cn);
+  const clk = R.dailyLookFor([], '2026-01-01', 'seed-A', [], 'cat');
+  check('猫的衣服还是来自原来那 72 件（不许被改坏）',
+    (R.BEAST_OUTFITS || []).some(o => o.cn === clk.outfit.cn), clk.outfit.cn);
+  check('鹦鹉和猫拿到的衣服不是同一件（不是把所有宠物都换了）',
+    plk.outfit.cn !== clk.outfit.cn, plk.outfit.cn + ' / ' + clk.outfit.cn);
+
+  // --- ③ 鹦鹉的爪子要改成喙 ---
+  // ⚠️ texts 要用「喝一杯拿铁」→ 记忆匹配会挑中【一杯热饮】(英文写的是 "in its paws")
+  //   不然随机挑到的道具可能压根没有 paws → 这条断言就假绿了
+  const plkBeak = R.dailyLookFor([], '2026-01-01', 'seed-A', ['今天喝了一杯拿铁'], 'parrot');
+  check('（前提）今天的道具英文里确实带爪子', /in its paws?/.test(plkBeak.icons[0].en), plkBeak.icons[0].en);
+  const breed = R.PARROT_BREEDS[0];
+  const parrotSubject = R.subjectForPet({
+    kind: 'parrot', stage: 1, seed: 'seed-A',
+    appearance: {
+      kind: 'parrot', breedKey: breed.key, identity: breed.label, palette: breed.colorCn,
+      marking: '心形胸羽', markEn: 'a small heart-shaped plume on the breast'
+    }
+  }, plkBeak);
+  check('鹦鹉提示词里没有爪子（in its paws）', !/in its paw/i.test(parrotSubject), parrotSubject);
+  check('鹦鹉提示词里道具改成了喙', /in its beak/i.test(parrotSubject), parrotSubject);
+  check('鹦鹉提示词里今天那件衣服在', parrotSubject.indexOf(plkBeak.outfit.en) >= 0, parrotSubject);
+  const catSubject = R.subjectForPet({ kind: 'cat', stage: 1, seed: 'seed-A', appearance: null }, clk);
+  check('猫的提示词还是爪子（猫有爪子，不许被改坏）', /in its paws/.test(catSubject) || !/in its paw/.test(catSubject), catSubject);
+
+  // --- ④ kind 得传到生图入口（不然姿态换不了）---
+  check('生图入口带着宠物的种类（鹦鹉要鸟的姿态）',
+    /kind: row\.kind/.test(nestSrc));
+  check('图集提示词按种类取姿态', /poseSetFor\(opts\.kind\)/.test(imgSrc));
+  check('蜕变提示词也按种类取姿态（日常换装走的是蜕变那条路）',
+    // ⚠️【2026-10-30】第三个参数以前写死是 undefined（参考图永远是上一张六格图集）。
+    //   现在参考图可能是【用户指定的一张单人像】→ 第三个参数变成一个变量（referenceNote）。
+    //   这里守住的是「options（o）必须传进去」—— kind 就在 o 里，姿态才换得掉。
+    /buildEvolvePrompt\(subject, change, [A-Za-z_$][\w$]*, o\)/.test(imgSrc));
+  check('鹦鹉用鸟的姿态（站着/展翅，不是抬起前爪）',
+    /perched/.test(imgSrc) && /one wing raised/.test(imgSrc) &&
+    /parrot:/.test(imgSrc));
+  check('布局里鸟说的是喙/翅膀/尾羽（不是耳朵爪子）',
+    /its beak, head, wings, tail feathers and outfit/.test(imgSrc));
+  check('四足那套原样保留（猫狗/幻兽不受影响）',
+    /its ears, tail, paws and outfit/.test(imgSrc) &&
+    /one front paw raised/.test(imgSrc));
+
+  // --- ⑤ 名册和图必须是同一套（这条最容易又犯: 鹦鹉换了自己的衣橱, 名册没跟上）---
+  check('名册那条路也带 kind（不然名册写的衣服和图上画的不是一个）',
+    /dailyLookFor\(behaviors, d,[\s\S]{0,200}?row && row\.kind/.test(nestSrc));
+  check('破壳那条路也带 kind',
+    /dailyLookFor\(behaviors, dayKey\(Date\.now\(\)\)[\s\S]{0,200}?prow && prow\.kind/.test(nestSrc));
+  check('今天这身的缓存按宠物存（生图算的那份，界面优先用它）',
+    /rememberLookFor\(pet, look\)/.test(nestSrc) && /cachedLookFor/.test(nestSrc));
 }
 
 // ============================================================
@@ -854,6 +987,11 @@ section('接线: 行为信号上报到宠物屋');
     /petNestAutoLookDay::/.test(nestSrc));
   check('画不成就跳过，不报错不影响别的', /换造型失败（忽略/.test(nestSrc));
   check('生图有每日上限兜底', /window\.PetImage\.CFG/.test(nestSrc) && /dailyLimit/.test(nestSrc));
+  // ⚠️【2026-10-29】这条卡的是「limit=0 的语义」:
+  //   limit=0 是【不限】, 不是【名额为零】。写成 if (used >= limit) 的话,
+  //   used=0 都会被拦 → 自动换装直接死掉。
+  check('自动换装的名额判断带 limit > 0（limit=0 是「不限」，不能当成「用满了」）',
+    /if \(limit > 0 && used >= limit\)/.test(nestSrc));
 }
 
 section('接线: index.html');
@@ -897,7 +1035,7 @@ section('接线: sw.js 预缓存');
   //   SW 一直吐缓存里的旧 index.html, 返回键根本不出现, 只 bump 模块版本号完全没用。
   //   所以这里锁一个下限: 任何再改 index.html 的活, CACHE_VERSION 必须 >= 这个值。
   const ver = m ? m[1].replace(/^v/, '').split('.').map(Number) : null;
-  const MIN = [0, 2, 78, 0];
+  const MIN = [0, 2, 98, 0];
   function verGte(a, b) {
     if (!a || a.length !== 4 || a.some((n) => !Number.isFinite(n))) return false;
     for (let i = 0; i < 4; i++) {
@@ -915,19 +1053,33 @@ section('接线: sw.js 预缓存');
   //   不 bump 的话手机上吃的是浏览器 HTTP 缓存里的旧模块，新功能（齿轮面板/饿死）根本不出现。
   //   这条断言把「改了 pet-nest.js / pet-nest.css / pet-image.js 却忘了 bump」变成会报红。
   const html = read('index.html');
+  // ⚠️【2026-10-29 修】原来这里是【写死确切版本号】(got === want)
+  //   → 每 bump 一次版本号就会误报一次 (2026-10-28 踩过一次, 这次又踩)
+  //   → 改成【不低于这个版本】: 逐段比大小
   const EXPECT_V = {
-    'modules/pet-nest.js': '0.0.23',
-    'modules/pet-image.js': '0.0.4',
-    'modules/pet-speech.js': '0.0.2',
-    'modules/backup-import-export.js': '0.0.39',
+    'modules/pet-nest.js': '0.0.27',
+    'modules/pet-image.js': '0.0.6',
+    'modules/pet-speech.js': '0.0.3',
+    'modules/backup-import-export.js': '0.0.40',
     'modules/data-management.js': '0.0.39',
-    'css/pet-nest.css': '0.0.13'
+    'css/pet-nest.css': '0.0.14'
   };
+  function verAtLeast(got, want) {
+    if (!got) return false;
+    const a = String(got).split('.').map(Number);
+    const b = String(want).split('.').map(Number);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = a[i] || 0, y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return true;
+  }
   for (const [file, want] of Object.entries(EXPECT_V)) {
     const re = new RegExp(file.replace(/[/.]/g, '\\$&') + '\\?v=([0-9.]+)');
     const got = (html.match(re) || [])[1];
-    check(file + ' 的 ?v= 已 bump 到 ' + want + '（不 bump 手机上吃旧版，新功能不出现）',
-      got === want, '实际 ' + (got || '没找到'));
+    check(file + ' 的 ?v= 不低于 ' + want + '（不 bump 手机上吃旧版，新功能不出现）',
+      verAtLeast(got, want), '实际 ' + (got || '没找到'));
   }
 }
 
@@ -1462,7 +1614,7 @@ section('调度守卫 + 代表词来源（真跑一遍）');
       },
       showToast: (text, type) => { toasts.push({ text: text, type: type }); },
       PetImage: {
-        CFG: { dailyLimit: 3 },
+        CFG: { dailyLimit: cfg.dailyLimit === undefined ? 3 : cfg.dailyLimit },
         todayCount: () => Number(cfg.used || 0),
         async generateAtlas() { calls.atlas++; throw new Error('探针：到这一步就停'); },
         async evolveAtlas() { calls.atlas++; throw new Error('探针：到这一步就停'); },
@@ -1497,8 +1649,16 @@ section('调度守卫 + 代表词来源（真跑一遍）');
   // --- 守卫 2: 每日上限 ---
   const g2 = makeSandbox({ lastLookDay: '', used: 3 });
   await g2.sandbox.window.PetNest.refreshDailyLook('pet-1');
-  check('每日上限用满了就不再画（dailyLimit=3）',
+  check('自动换装名额用满了就不再画（沙盒里 dailyLimit=3；线上默认 0=不限）',
     g2.calls.atlas === 0, 'atlas 调用 ' + g2.calls.atlas + ' 次');
+  // --- 守卫 2': dailyLimit = 0（不限次数）时, used 再大也不拦 ---
+  //   用户 2026-10-29：「生图次数, 不想要三次的限制, 反正画多少自己掌握」
+  //   → limit = 0 的含义是【不限名额】, 不是【名额是 0】。
+  //   所以【自动换装】这条路也不能再拿 used 去卡人。
+  const g2b = makeSandbox({ lastLookDay: '', used: 999, dailyLimit: 0 });
+  await g2b.sandbox.window.PetNest.refreshDailyLook('pet-1');
+  check('生图不限次数时（dailyLimit=0），用得再多也不会被拦（画多少用户自己掌握）',
+    g2b.calls.atlas === 1, 'atlas 调用 ' + g2b.calls.atlas + ' 次');
 
   // --- 前置闸门: 当天啥也没发生, 不画（没东西可挑, 硬画就是随机凑）---
   const g3 = makeSandbox({ lastLookDay: '', used: 0, noSignals: true });
@@ -1877,12 +2037,28 @@ section('桌宠菜单快捷照顾（喂食 / 摸摸 / 陪玩）');
   check('照顾项跟功能项之间有分隔线', /\.pn-menu-sep\s*\{/.test(css2));
 
   // ⑤ 版本号（SW 对 index.html 是 cache-first，不 bump 等于没改）
-  check('index.html 的 pet-nest.js ?v= 已 bump', /pet-nest\.js\?v=0\.0\.2[2-9]/.test(html2),
-    (html2.match(/pet-nest\.js\?v=([0-9.]+)/) || [])[1]);
-  check('index.html 的 pet-nest.css ?v= 已 bump', /pet-nest\.css\?v=0\.0\.1[3-9]/.test(html2),
-    (html2.match(/pet-nest\.css\?v=([0-9.]+)/) || [])[1]);
-  check('sw.js 的 CACHE_VERSION 已 bump', /const CACHE_VERSION = 'v0\.2\.8[2-9]\.\d+'/.test(sw2),
-    (sw2.match(/const CACHE_VERSION = '([^']+)'/) || [])[1]);
+  // ⚠️ 这两条原来写死 `0\.0\.2[2-9]` / `0\.0\.1[3-9]` —— bump 一次就误报一次，
+  //    改成「不低于 0.0.31 / 0.0.16」逐段比大小。
+  const petJsV = (html2.match(/pet-nest\.js\?v=([0-9.]+)/) || [])[1] || '';
+  const petCssV = (html2.match(/pet-nest\.css\?v=([0-9.]+)/) || [])[1] || '';
+  check('index.html 的 pet-nest.js ?v= 已 bump', verGE(petJsV, '0.0.34'), petJsV);
+  check('index.html 的 pet-nest.css ?v= 已 bump', verGE(petCssV, '0.0.18'), petCssV);
+  // ⚠️ 这里原来写死 `/v0\.2\.8[2-9]\.\d+/` —— 每 bump 一次就会误报一次
+  //   (2026-10-28 实测: sw.js 已经是 v0.2.84.0, 这条断言一直在报红;
+  //    2026-10-29 又撞上 v0.2.90.0)。改成【逐段比大小, 只要不低于就过】。
+  {
+    const cv = (sw2.match(/const CACHE_VERSION = '([^']+)'/) || [])[1] || '';
+    const parts = cv.replace(/^v/, '').split('.').map(Number);
+    const floor = [0, 2, 98, 0];   // 不低于 v0.2.98.0
+    let okCv = parts.length === 4;
+    if (okCv) {
+      for (let i = 0; i < 4; i++) {
+        if (parts[i] > floor[i]) { okCv = true; break; }
+        if (parts[i] < floor[i]) { okCv = false; break; }
+      }
+    }
+    check('sw.js 的 CACHE_VERSION 已 bump (不低于 v0.2.98.0)', okCv, cv);
+  }
 
   // ⑥ 行为：喂食走同一份 care()（扣粮食 + 涨饱腹 + 涨成长）
   const F = makeSandbox({ lastLookDay: '', used: 0, dom: true });
@@ -1963,12 +2139,659 @@ section('桌宠菜单快捷照顾（喂食 / 摸摸 / 陪玩）');
     !!ev && ev.action === 'comfort', ev ? 'action=' + ev.action : '没写事件');
 }
 
+  // ------------------------------------------------------------
+  section('桌宠命中区: 点空白不该有反应（2026-10-29 用户实测）');
+  {
+    const nestSrc2 = read('modules/pet-nest.js');
+
+    check('有 measureSpriteHitBoxes（运行时量图集的可见区）',
+      /function measureSpriteHitBoxes\s*\(/.test(nestSrc2));
+    check('pointerdown 里会判「点的是不是宠物身上」',
+      /pointerdown[\s\S]{0,600}?petPointOnPet\(/.test(nestSrc2));
+    const hitCalls = (nestSrc2.match(/petPointOnPet\(e\.clientX, e\.clientY\)/g) || []).length;
+    check('click 里也会判（不然点了空白还是弹菜单）',
+      hitCalls >= 2, '调用处 ' + hitCalls + ' 个 (pointerdown + click)');
+    check(
+      'rules 里暴露了 petHitTest（纯函数, 测试直接验算）',
+      /rules:\s*\{[\s\S]{0,400}?petHitTest/.test(nestSrc2));
+
+    // ---- 行为级: 把纯函数抠出来单独跑 ----
+    // petHitTest 是纯函数(只用参数), 所以能像 cinema-api-config.test.cjs
+    // 那样把它单独抠出来在 vm 里跑, 不用起整个宠物屋沙盒。
+    function extractTopFn(src, name) {
+      let start = src.indexOf('function ' + name + '(');
+      if (start < 0) return '';
+      const rest = src.slice(start + 1);
+      const m = rest.match(/\n  (?:function |const |let |var |\/\/ )/);
+      if (!m) return src.slice(start);
+      return src.slice(start, start + 1 + m.index);
+    }
+    const fnSrc = extractTopFn(nestSrc2, 'petHitTest');
+    check('能抠出 petHitTest 的源码', fnSrc !== '', fnSrc.length + ' 字符');
+    if (fnSrc) {
+      const sb = {};
+      vm.createContext(sb);
+      vm.runInContext(fnSrc, sb, { filename: 'petHitTest.js' });
+      const fn = sb.petHitTest;
+      check('抠出来的函数能调用', typeof fn === 'function');
+      if (typeof fn === 'function') {
+        // 第 0 帧宠物占中间 60%, 下面 25% 是空白
+        const boxes = [
+          { top: 0.10, right: 0.90, bottom: 0.75, left: 0.10 },
+          { top: 0.05, right: 0.95, bottom: 0.95, left: 0.05 },
+          { top: 0.10, right: 0.90, bottom: 0.75, left: 0.10 },
+          { top: 0.05, right: 0.95, bottom: 0.95, left: 0.05 },
+          { top: 0.10, right: 0.90, bottom: 0.75, left: 0.10 },
+          { top: 0.05, right: 0.95, bottom: 0.95, left: 0.05 }
+        ];
+        const rect = { left: 100, top: 100, width: 100, height: 100 };
+        check(
+          '点在宠物身上 → 算命中（能拖能弹菜单）',
+          fn(150, 140, rect, 0, boxes) === true);
+        check(
+          '★ 点在宠物下方的空白 → 不算命中（这就是用户抱怨的那块）',
+          fn(150, 190, rect, 0, boxes) === false);
+        check(
+          '★ 点在精灵盒外面 → 不算命中',
+          fn(150, 300, rect, 0, boxes) === false);
+        check(
+          '换到另一帧会按那一帧的包围盒判（帧和帧大小不同）',
+          fn(150, 190, rect, 1, boxes) === true);
+        check(
+          '量不到包围盒时保守放行（不会变成「点不到了」）',
+          fn(150, 190, rect, 0, null) === true);
+        check(
+          '矩形无效时保守放行',
+          fn(150, 190, { left: 0, top: 0, width: 0, height: 0 }, 0, boxes) === true);
+      }
+    }
+  }
+
+
+  // ------------------------------------------------------------
+  section('多套房间背景: 两套都能选（2026-10-29 用户要的）');
+  {
+    const nestSrc3 = read('modules/pet-nest.js');
+    const cssSrc3 = read('css/pet-nest.css');
+    const htmlSrc3 = read('index.html');
+    const swSrc3 = read('sw.js');
+
+    // 从源码里抠出一个函数的完整函数体（用于在 vm 里跑真代码）
+    function extractFn2(src, name) {
+      const start = src.indexOf('function ' + name + '(');
+      if (start < 0) return '';
+      const rest = src.slice(start + 1);
+      const m = rest.match(/\n  (?:function |const |let |var |\/\/ )/);
+      if (!m) return src.slice(start);
+      return src.slice(start, start + 1 + m.index);
+    }
+
+    check('有 ROOM_BACKGROUNDS 配置表',
+      /const ROOM_BACKGROUNDS = \[/.test(nestSrc3));
+    check('配置表里有两套背景（阳光小屋 + 星夜树屋）',
+      /id:\s*'light'/.test(nestSrc3) && /id:\s*'star'/.test(nestSrc3));
+    check('每套背景都带自己的站位和精灵大小',
+      (nestSrc3.match(/petW:\s*\d+/g) || []).length >= 2 &&
+      (nestSrc3.match(/maxPets:\s*\d+/g) || []).length >= 2);
+
+    // ---- 行为级: 把配置表抠出来在 vm 里跑 (不解析字符串, 直接跑真代码) ----
+    const cfgStart = nestSrc3.indexOf('const ROOM_BACKGROUNDS = [');
+    const cfgEnd = nestSrc3.indexOf('\n  ];', cfgStart);
+    const cfgBlock = cfgStart >= 0 && cfgEnd > cfgStart
+      ? nestSrc3.slice(cfgStart, cfgEnd + 4) : '';
+    check('能抠出 ROOM_BACKGROUNDS 配置表', cfgBlock !== '');
+    let rooms = [];
+    if (cfgBlock) {
+      const sb = {};
+      vm.createContext(sb);
+      // ⚠️ const 是词法绑定, 不会挂到 sandbox global 上 → 显式导出来
+      vm.runInContext(cfgBlock + '\n; globalThis.__ROOMS = ROOM_BACKGROUNDS;', sb,
+        { filename: 'roomBg.js' });
+      rooms = sb.__ROOMS || [];
+    }
+    check('配置表里有 2 套背景', rooms.length === 2, rooms.length + ' 套');
+    check('★ 每套最多站 3 只（用户：基本上只养一只，不需要 12 个槽位）',
+      rooms.length === 2 && rooms.every(r => r.maxPets >= 1 && r.maxPets <= 3),
+      rooms.map(r => r.id + ':' + r.maxPets).join(' '));
+    check('每套都有蛋的位置（没孵化的蛋要单独摆）',
+      rooms.length === 2 && rooms.every(r => (r.eggSpots || []).length >= 1),
+      rooms.map(r => r.id + ':' + ((r.eggSpots || []).length)).join(' '));
+
+    // ★ 精灵大一倍（用户原话：「给我把屋里的宠物弄大点，现在大一倍都可以，不然看都看不清」）
+    check('★ 精灵宽度 ≥ 40%（原来 21%，正好大一倍）',
+      rooms.length === 2 && rooms.every(r => r.petW >= 40 && r.petW <= 60),
+      rooms.map(r => r.id + ':' + r.petW + '%').join(' '));
+    check('★ 两套背景的精灵一样大（不能一套大一套小）',
+      rooms.length === 2 && rooms[0].petW === rooms[1].petW,
+      rooms.map(r => r.id + ':' + r.petW + '%').join(' '));
+    check('★ 蛋单独小一号（跟着精灵翻倍会糊住藤篮 / 床）',
+      rooms.length === 2 && rooms.every(r => r.eggW > 0 && r.eggW < r.petW),
+      rooms.map(r => r.id + ':' + r.eggW + '/' + r.petW).join(' '));
+    // ⚠️ 用户 2026-10-29 看完图后说「星夜图的蛋太小了差点没看见」→ 蛋必须有下限
+    check('★ 蛋够大，看得见（≥14%，不然用户说差点没看见）',
+      rooms.length === 2 && rooms.every(r => r.eggW >= 14),
+      rooms.map(r => r.id + ':' + r.eggW + '%').join(' '));
+
+    // ---- 脚到底落在哪儿（用户 2026-10-29：「老背景的宠物全部站在地毯外面去了」）----
+    // 公式（跟 CSS 一致）：
+    //   精灵是正方形 → 高 = 宽 = petW% * 场景宽；场景 aspect-ratio 2/3 → 高占场景高的 petW*2/3%
+    //   .pn-pet 整个按钮(sprite + 名字标签) 用 translate(-50%,-50%) 居中在 (left,top) 上
+    //   → 脚(精灵底) = rowY + (sprite高% - 标签高%) / 2，标签高 ≈ 4.4% 场景高
+    const SCENE_ASPECT = 2 / 3;
+    const LABEL_H_PCT = 4.4;
+    function feetPct(room) {
+      const spriteH = room.petW * SCENE_ASPECT;
+      return room.rowY + (spriteH - LABEL_H_PCT) / 2;
+    }
+    const lightRoom = rooms.find(r => r.id === 'light');
+    const starRoom = rooms.find(r => r.id === 'star');
+    // 阳光小屋的地毯 = 38%~62%（实测：浅色低饱和像素占比在 38%~62% 一段是高的）
+    // ⚠️ 断言必须【无条件求值】—— 不能用 if(lightRoom) 包着,
+    //    线上版没这间房时整条会被跳过 → 又变成假绿。
+    const lightFeet = lightRoom ? feetPct(lightRoom) : null;
+    check('★ 阳光小屋的宠物脚落在地毯上（地毯 38%~62%）',
+      lightFeet !== null && lightFeet >= 38 && lightFeet <= 62,
+      lightFeet !== null ? '脚在 ' + lightFeet.toFixed(1) + '%' : '没有这间房');
+    // 星夜树屋底部的蓝白圆毯 ≈ 84%~98%
+    const starFeet = starRoom ? feetPct(starRoom) : null;
+    check('★ 星夜树屋的宠物脚落在底部圆毯上（84%~98%）',
+      starFeet !== null && starFeet >= 84 && starFeet <= 98,
+      starFeet !== null ? '脚在 ' + starFeet.toFixed(1) + '%' : '没有这间房');
+    // ---- 3 只并排时左右不能裁边（精灵 42% 宽，间距不够就会切掉爪子尾巴）----
+    function edgeOf(room) {
+      const step = Math.min(room.rowSpread || 33, 66 / ((room.maxPets || 3) - 1));
+      const leftX = 50 - step * ((room.maxPets || 3) - 1) / 2;
+      const rightX = 50 + step * ((room.maxPets || 3) - 1) / 2;
+      return { left: leftX - room.petW / 2, right: rightX + room.petW / 2 };
+    }
+    const eL = lightRoom ? edgeOf(lightRoom) : null;
+    const eS = starRoom ? edgeOf(starRoom) : null;
+    check('★ 3 只并排左右不裁边（边缘在 0%~100% 之间）',
+      !!eL && !!eS && eL.left >= 0 && eL.right <= 100 && eS.left >= 0 && eS.right <= 100,
+      (eL && eS)
+        ? ('阳光小屋 ' + eL.left.toFixed(1) + '%~' + eL.right.toFixed(1) + '%  ' +
+           '星夜树屋 ' + eS.left.toFixed(1) + '%~' + eS.right.toFixed(1) + '%')
+        : '没有这两间房');
+
+    // ---- 蛋要整个落在容器里，不能凸出去 ----
+    // 实测（探针 probe-measure-nest.cjs / probe-measure-basket.cjs 裁图量出来的）：
+    //   阳光小屋的藤篮（绒面 + 前沿）x 70%~91%, y 30%~42%
+    //   星夜树屋的巢里白绒面           x 51.5%~85%, y 47%~56%
+    const EGG_BOX = {
+      light: { left: 70, right: 91 },
+      star: { left: 51.5, right: 85 }
+    };
+    const eggEdges = [];
+    rooms.forEach(function (r) {
+      const box = EGG_BOX[r.id];
+      if (!box) return;
+      (r.eggSpots || []).forEach(function (s) {
+        const w = s.w || r.eggW;
+        eggEdges.push({ id: r.id, left: s.x - w / 2, right: s.x + w / 2, box: box });
+      });
+    });
+    check('★ 蛋要整个落在篮子里 / 巢里（不能凸出去）',
+      eggEdges.length > 0 && eggEdges.every(function (e) {
+        return e.left >= e.box.left - 0.01 && e.right <= e.box.right + 0.01;
+      }),
+      eggEdges.map(function (e) {
+        return e.id + ' ' + e.left.toFixed(1) + '%~' + e.right.toFixed(1) + '% (要 ' +
+          e.box.left + '%~' + e.box.right + '%)';
+      }).join(' | '));
+
+    const light = rooms.find(r => r.id === 'light');
+    const star = rooms.find(r => r.id === 'star');
+
+    // ---- 行为级: roomSpotFor（站位必须跟着「真的有几只」走） ----
+    // ⚠️ 下面的断言必须【无条件求值】—— 不能整块塞进 if(前置条件) 里。
+    //    以前塞进 if 之后: 线上版(根本没这个函数)整块被跳过,
+    //    断言一条都没报红 → 变成「假绿」(2026-10-29 反向验证当场抓到)。
+    const spotFnSrc = extractFn2(nestSrc3, 'roomSpotFor');
+    check('能抠出 roomSpotFor 的源码', spotFnSrc !== '');
+    let spot = null;
+    if (spotFnSrc && light) {
+      const sb3 = {};
+      vm.createContext(sb3);
+      vm.runInContext(cfgBlock + '\n' + spotFnSrc + '\n; globalThis.__spot = roomSpotFor;',
+        sb3, { filename: 'roomSpot.js' });
+      spot = sb3.__spot;
+    }
+    const s1 = (spot && light) ? spot(light, 0, 1) : null;
+    check('★ 只有 1 只 → 站正中间（x=50，不能歪在左上角）',
+      !!s1 && Math.abs(s1.x - 50) < 0.01, s1 ? 'x=' + s1.x : '没跑起来');
+
+    const a2 = (spot && light) ? spot(light, 0, 2) : null;
+    const b2 = (spot && light) ? spot(light, 1, 2) : null;
+    check('2 只 → 左右对称、都不贴边',
+      !!a2 && !!b2 && Math.abs((a2.x + b2.x) - 100) < 0.01 && a2.x > 10 && b2.x < 90,
+      a2 && b2 ? (a2.x + ' / ' + b2.x) : '没跑起来');
+
+    const x3 = (spot && light) ? [0, 1, 2].map(i => spot(light, i, 3).x) : null;
+    check('3 只 → 均匀铺开且左右对称',
+      !!x3 && Math.abs((x3[0] + x3[2]) - 100) < 0.01 && Math.abs(x3[1] - 50) < 0.01 &&
+      x3[0] > 5 && x3[2] < 95,
+      x3 ? x3.join(' / ') : '没跑起来');
+
+    const over = (spot && light) ? spot(light, 9, 9) : null;
+    check('★ 超过 maxPets 的也不会掉出画面',
+      !!over && over.x >= 5 && over.x <= 95, over ? 'x=' + over.x : '没跑起来');
+
+    check('★ 两套背景的站位互不相同（换背景 = 换房间，不是换贴图）',
+      !!light && !!star && light.rowY !== star.rowY,
+      light && star ? (light.rowY + ' vs ' + star.rowY) : '没跑起来');
+
+    // ---- 行为级: splitPetsForRoom（蛋不占地面的名额） ----
+    // ⚠️ 这条以前是源码级断言（只查「源码里有没有 eggPets 这个词」）→
+    //    拆函数以后那两个字样还在 → 断言照样绿 → 假绿。
+    //    改成【在 vm 里跑真函数】，看它到底分没分对。
+    const splitFnSrc = extractFn2(nestSrc3, 'splitPetsForRoom');
+    const hatchFnSrc = extractFn2(nestSrc3, 'isHatchKind');
+    check('能抠出 splitPetsForRoom 的源码', splitFnSrc !== '');
+    let split = null;
+    if (splitFnSrc && hatchFnSrc) {
+      const sb4 = { HATCH_KINDS: ['egg', 'parrot'] };
+      vm.createContext(sb4);
+      vm.runInContext(hatchFnSrc + '\n' + splitFnSrc + '\n; globalThis.__split = splitPetsForRoom;',
+        sb4, { filename: 'petSplit.js' });
+      split = sb4.__split;
+    }
+    const sp = split ? split([
+      { kind: 'cat', stage: 1 }, { kind: 'egg', stage: 0 },
+      { kind: 'parrot', stage: 0 }, { kind: 'dog', stage: 2 }
+    ]) : null;
+    check('★ 蛋单独分一堆（不占地面的名额）',
+      !!sp && sp.eggPets.length === 2 && sp.floorPets.length === 2,
+      sp ? ('蛋 ' + sp.eggPets.length + ' 只 / 地上 ' + sp.floorPets.length + ' 只') : '没跑起来');
+    check('★ 分对了：只有 stage=0 的蛋类进蛋堆',
+      !!sp && sp.eggPets.every(p => p.stage === 0) &&
+      sp.floorPets.every(p => !(p.stage === 0 && (p.kind === 'egg' || p.kind === 'parrot'))),
+      sp ? sp.eggPets.map(p => p.kind).join(',') + ' | ' + sp.floorPets.map(p => p.kind).join(',') : '');
+    check('★ renderScene 真的调用了 splitPetsForRoom（不是自己又写一遍）',
+      /splitPetsForRoom\(state\.pets\)/.test(nestSrc3));
+
+    // 所有站位坐标都得在画面内
+    const allSpots = rooms.flatMap(r => (r.eggSpots || []).concat([{ x: r.rowY, y: r.rowY }]));
+    check('所有站位坐标都在 0~100 之间（不会跑出画面）',
+      allSpots.length > 0 && allSpots.every(s =>
+        s.x >= 0 && s.x <= 100 && s.y >= 0 && s.y <= 100),
+      allSpots.length + ' 个坐标');
+
+    // ---- renderScene 必须查表 ----
+    check('renderScene 不再写死坐标（22 + (i % 4) * 19 这种必须没了）',
+      !/22 \+ \(i % 4\) \* 19/.test(nestSrc3));
+    check('★ 不再一次性渲染 12 只（槽位减到 3）',
+      !/state\.pets\.slice\(0,\s*12\)/.test(nestSrc3));
+    check('renderScene 从当前背景取站位（走 roomSpotFor）',
+      /roomSpotFor\(/.test(nestSrc3));
+    check('renderScene 从当前背景取精灵大小',
+      /--pn-pet-w/.test(nestSrc3));
+    check('renderScene 会换掉背景图本身',
+      /pn-room-image/.test(nestSrc3) && /roomImg\.setAttribute\('src'/.test(nestSrc3));
+
+    // ---- CSS: 精灵宽度走变量 ----
+    check('CSS 里 .pn-pet 的宽度走 var(--pn-pet-w, 42%)',
+      /width:\s*var\(--pn-pet-w,\s*42%\)/.test(cssSrc3));
+    check('★ CSS 里 max-width 不能还卡在 128px（会把放大的精灵掐回原大小）',
+      !/\.pn-pet\s*\{[^}]*max-width:\s*128px/.test(cssSrc3) &&
+      /\.pn-pet\s*\{[^}]*max-width:\s*300px/.test(cssSrc3));
+    check('CSS 里蛋单独小一号 (.pn-pet-egg)',
+      /\.pn-pet\.pn-pet-egg/.test(cssSrc3));
+
+    // ---- HTML: 按钮 + 对话框 ----
+    check('index.html 里有 🎨 换背景按钮',
+      /id="pn-room-switch"/.test(htmlSrc3));
+    check('index.html 里有换背景对话框',
+      /id="pn-room-dialog"/.test(htmlSrc3) && /id="pn-room-list"/.test(htmlSrc3));
+    check('背景图有 id（JS 要换它的 src）',
+      /id="pn-room-image"/.test(htmlSrc3));
+
+    // ---- 素材 + 预缓存 ----
+    const starImg = P('assets/pet-nest/room-star.webp');
+    check('新背景素材在（assets/pet-nest/room-star.webp）',
+      fs.existsSync(starImg),
+      fs.existsSync(starImg) ? Math.round(fs.statSync(starImg).size / 1024) + ' KB' : '没有');
+    check('sw.js 预缓存里有新背景（断网时也要能开）',
+      /\.\/assets\/pet-nest\/room-star\.webp/.test(swSrc3));
+
+    // ---- 行为级: currentRoomBackground ----
+    const fnSrc2 = extractFn2(nestSrc3, 'currentRoomBackground');
+    check('能抠出 currentRoomBackground 的源码', fnSrc2 !== '');
+    if (fnSrc2 && cfgBlock) {
+      function runWith(storage) {
+        const sb2 = {
+          ROOM_BACKGROUNDS: rooms,
+          STORAGE_KEYS: { roomBackground: 'petNestRoomBackground' },
+          localStorage: {
+            getItem: function (k) { return (k in storage) ? storage[k] : null; },
+            setItem: function (k, v) { storage[k] = String(v); }
+          }
+        };
+        vm.createContext(sb2);
+        vm.runInContext(cfgBlock + '\n' + fnSrc2, sb2, { filename: 'roomBgFn.js' });
+        return sb2.currentRoomBackground;
+      }
+      const get1 = runWith({});
+      const g1 = get1 ? get1() : null;
+      check('没选过时回默认那套（老用户看到的还是原来那张）',
+        !!g1 && g1.id === 'light', g1 ? g1.id : '没跑起来');
+
+      const get2 = runWith({ petNestRoomBackground: 'star' });
+      const g2 = get2 ? get2() : null;
+      check('★ 选了星夜树屋就返回星夜树屋',
+        !!g2 && g2.id === 'star', g2 ? g2.id : '没跑起来');
+
+      const get3 = runWith({ petNestRoomBackground: '不存在的' });
+      const g3 = get3 ? get3() : null;
+      check('存了乱七八糟的 id → 照样回默认那套（不能白屏）',
+        !!g3 && g3.id === 'light', g3 ? g3.id : '没跑起来');
+    }
+  }
+
+  // ============================================================
+  // 「用户指定的初始形象（垫图）」· 2026-10-30
+  //   用户原话：
+  //   「我之前宠物系统的设计是每天换装的时候，拿头一天的图去垫图画新衣服新形象，
+  //     结果因为每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了，
+  //     时间久了肯定更严重，我想改成以后用用户指定的形象去垫」
+  //
+  //   → 每天换装的【参考图】必须换成用户指定的那张固定图，不是上一张。
+  // ============================================================
+  section('用户指定的初始形象（垫图）：不再拿上一张图当垫');
+  {
+    const nestSrc4 = read('modules/pet-nest.js');
+    const imgSrc4 = read('modules/pet-image.js');
+    const htmlSrc4 = read('index.html');
+    const cssSrc4 = read('css/pet-nest.css');
+
+    /**
+     * 起一个能真跑 generateNewLook 的沙盒，记录 evolveAtlas 收到的【参考图】和 options。
+     * cfg.baseBlob = 用户指定的初始形象；不给就没有（→ 走老行为）。
+     */
+    function makeSpeciesSandbox(cfg) {
+      cfg = cfg || {};
+      const day = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const calls = { evolve: [], generate: 0 };
+      const rows = {
+        pets: {
+          'pet-1': {
+            id: 'pet-1', kind: cfg.kind || 'cat', stage: cfg.stage === undefined ? 0 : cfg.stage,
+            seed: 'seed-A', createdAt: 1, name: '糖糖',
+            satiety: 60, settledAt: Date.now(),
+            assetRef: 'asset-prev'
+          }
+        },
+        events: {}, stages: {}, days: {}, turns: {},
+        assets: {
+          'asset-prev': { id: 'asset-prev', petId: 'pet-1', stage: 0, blob: 'BLOB_PREV' }
+        },
+        speciesImages: {},
+        dailyNotes: [],
+        dailySignals: [{ day: day, type: 'listening', at: Date.now() }]
+      };
+      if (cfg.baseBlob) {
+        rows.speciesImages['pet-1'] = { petId: 'pet-1', blob: cfg.baseBlob, name: 'base.png' };
+      }
+      const meta = { 'petNestAutoLookDay::pet-1': '' };
+      const OBJ = ['pets', 'events', 'stages', 'days', 'turns', 'meta', 'assets', 'speciesImages'];
+      const ARR = ['dailySignals', 'dailyNotes'];
+      let autoId = 0;
+      const d = {};
+      for (const n of OBJ.concat(ARR)) {
+        const isArr = ARR.indexOf(n) >= 0;
+        const listOf = () => (isArr ? rows[n] : Object.keys(rows[n]).map(k => rows[n][k]));
+        d[n] = {
+          async get(k) {
+            if (n === 'meta') return meta[k] === undefined ? undefined : { key: k, value: meta[k] };
+            if (isArr) return rows[n].find(r => r.id === k);
+            return rows[n][k];
+          },
+          async put(v) {
+            if (n === 'meta') { meta[v.key] = v.value; return v.key; }
+            if (isArr) { rows[n].push(v); return v.id; }
+            // ⚠️ speciesImages 的主键是 petId（不是 id）→ 假 Dexie 也要认
+            const k = (v.id || v.key || v.petId || ('auto' + (++autoId)));
+            rows[n][k] = v; return k;
+          },
+          async delete(k) {
+            if (n === 'meta') { delete meta[k]; return; }
+            if (isArr) {
+              const i = rows[n].findIndex(r => r.id === k);
+              if (i >= 0) rows[n].splice(i, 1);
+              return;
+            }
+            delete rows[n][k];
+          },
+          async update(k, patch) {
+            if (rows[n] && rows[n][k]) Object.assign(rows[n][k], patch);
+            return 1;
+          },
+          where(field) {
+            return {
+              equals(v) {
+                return { async toArray() { return listOf().filter(r => r[field] === v); } };
+              }
+            };
+          },
+          orderBy(field) {
+            const api = {
+              async first() {
+                return listOf().slice().sort((a, b) => Number(a[field] || 0) - Number(b[field] || 0))[0];
+              },
+              async toArray() {
+                return listOf().slice().sort((a, b) => Number(a[field] || 0) - Number(b[field] || 0));
+              },
+              reverse() { return api; },
+              limit() { return api; }
+            };
+            return api;
+          },
+          async toArray() { return listOf(); }
+        };
+      }
+      d.version = () => d;
+      d.stores = () => d;
+      d.open = async () => d;
+
+      const quiet = { log() {}, warn() {}, error() {}, info() {} };
+      const sandbox = {
+        console: quiet,
+        setTimeout: (fn, ms) => ({ fn: fn, ms: ms }),
+        clearTimeout: () => {},
+        setInterval: (fn, ms) => ({ fn: fn, ms: ms }),
+        clearInterval: () => {},
+        TextEncoder,
+        crypto: { randomUUID: () => 'test-uuid-0000' },
+        localStorage: { getItem: () => null, setItem() {} },
+        document: {
+          readyState: 'loading',       // 不进 init()
+          addEventListener() {},
+          getElementById: () => null,
+          createElement: () => ({
+            className: '', textContent: '', src: '', alt: '', type: '',
+            children: [], dataset: {}, style: {},
+            classList: { add() {}, remove() {}, contains() { return false; } },
+            setAttribute() {}, removeAttribute() {},
+            appendChild(c) { this.children.push(c); return c; },
+            append() { this.children.push(...arguments); }
+          }),
+          createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+          querySelectorAll: () => []
+        },
+        Dexie: function () { return d; },
+        state: { chats: {} },
+        showToast: () => {},
+        PetImage: {
+          CFG: { dailyLimit: 0, autoLookBudget: 0 },
+          todayCount: () => 0,
+          async generateAtlas() { calls.generate++; throw new Error('探针：到这一步就停'); },
+          async evolveAtlas(subject, change, refBlob, opts) {
+            calls.evolve.push({ subject: subject, change: change, refBlob: refBlob, opts: opts });
+            throw new Error('探针：到这一步就停');
+          },
+          async saveAsset() { return { id: 'asset-new' }; }
+        }
+      };
+      sandbox.window = sandbox;
+      sandbox.globalThis = sandbox;
+      vm.createContext(sandbox);
+      vm.runInContext(read('modules/pet-nest.js'), sandbox, { filename: 'pet-nest.js' });
+      return { sandbox: sandbox, calls: calls, rows: rows };
+    }
+
+    // ===== 行为级：参考图到底传了谁 =====
+    const sbBase = makeSpeciesSandbox({ baseBlob: 'BLOB_BASE' });
+    await sbBase.sandbox.window.PetNest.refreshDailyLook('pet-1');
+    const evBase = sbBase.calls.evolve[0];
+    check('★ 设了初始形象 → 垫图用的是【用户指定的那张】，不是上一张',
+      !!evBase && evBase.refBlob === 'BLOB_BASE',
+      '垫图 = ' + (evBase ? String(evBase.refBlob) : '根本没调蜕变'));
+    check('★ 参考图类型标成 portrait（提示词必须换成单人像那套）',
+      !!evBase && !!evBase.opts && evBase.opts.referenceKind === 'portrait',
+      String(evBase && evBase.opts ? evBase.opts.referenceKind : '没有'));
+    check('★ 有参考图时颜色跟参考图走（keepColors 那条路没被改坏）',
+      !!evBase && /same colours as the reference image/i.test(String(evBase.subject)),
+      evBase ? String(evBase.subject).slice(0, 120) : '没跑起来');
+
+    const sbNoBase = makeSpeciesSandbox({});
+    await sbNoBase.sandbox.window.PetNest.refreshDailyLook('pet-1');
+    const evNo = sbNoBase.calls.evolve[0];
+    check('没设初始形象 → 还是拿上一张图当垫（老行为没被改坏）',
+      !!evNo && evNo.refBlob === 'BLOB_PREV',
+      '垫图 = ' + (evNo ? String(evNo.refBlob) : '根本没调蜕变'));
+    check('没设初始形象 → 参考图类型还是 atlas',
+      !!evNo && !!evNo.opts && evNo.opts.referenceKind === 'atlas',
+      String(evNo && evNo.opts ? evNo.opts.referenceKind : '没有'));
+
+    // ===== 存储层 =====
+    check('Dexie 升到 v4 并加了 speciesImages 表（一只宠物一张，主键 petId）',
+      /version\(4\)\.stores\([\s\S]{0,600}?speciesImages:\s*'&petId'/.test(nestSrc4));
+    check('有 getSpeciesImage / setSpeciesImage / clearSpeciesImage 三个口子',
+      /function getSpeciesImage/.test(nestSrc4) &&
+      /function setSpeciesImage/.test(nestSrc4) &&
+      /function clearSpeciesImage/.test(nestSrc4));
+    check('取不到初始形象时返回 null（不能抛，老数据还没升表）',
+      /function getSpeciesImage[\s\S]{0,400}?return null/.test(nestSrc4));
+
+    // ===== 小屋管理面板里那一栏（用户 2026-10-30：「怎么把 UI 做到总设置里去了？
+    //   宠物屋不是有单独的设置按钮吗？给我拆了换到宠物屋里」）=====
+    check('初始形象那一栏在小屋管理面板（⚙）里，不是总设置页',
+      /id="pn-manage-dialog"[\s\S]{0,3000}?id="pn-species-list"/.test(htmlSrc4));
+    check('小屋管理面板里有传图入口',
+      /id="pn-manage-dialog"[\s\S]{0,3000}?id="pn-species-input"/.test(htmlSrc4) &&
+      /accept="image\/\*"/.test(htmlSrc4));
+    check('★ 总设置页里不许再有这一栏（用户明确要求拆走）',
+      !/sec-pet-species/.test(htmlSrc4) &&
+      !/settings-header">宠物初始形象/.test(htmlSrc4));
+    check('CSS 有初始形象那几行样式（行/缩略图/按钮）',
+      // ⚠️ 后面要跟「{」—— 光搜 .pn-species-row 的话, 把它改名成 .pn-species-rowX 也能过（假绿）
+      /\.pn-species-row\s*\{/.test(cssSrc4) && /\.pn-species-thumb\s*\{/.test(cssSrc4) &&
+      /\.pn-species-btn\s*\{/.test(cssSrc4));
+    check('小屋管理面板里的那一块有专门的样式（标题/说明/列表）',
+      /\.pn-species-block\s*\{/.test(cssSrc4) &&
+      /\.pn-species-title\s*\{/.test(cssSrc4) &&
+      /\.pn-species-hint\s*\{/.test(cssSrc4));
+    check('开小屋管理面板时会重画那一栏（领养了新宠物列表不能是旧的）',
+      /renderManageList/.test(nestSrc4) && /renderSpeciesList/.test(nestSrc4) &&
+      /renderSpeciesList\(\);/.test(nestSrc4));
+
+    // ===== 提示词 =====
+    check('pet-image.js 里有「单张图参考图」那段提示词常量',
+      /PORTRAIT_REFERENCE_NOTE/.test(imgSrc4) && /SINGLE PICTURE/.test(imgSrc4));
+    check('单人像参考图时明确说「忽略参考图里的衣服和背景」',
+      /IGNORE everything else in the reference image/.test(imgSrc4));
+    check('参考图类型会一路传进提示词（referenceKind → referenceNote）',
+      /referenceKind/.test(imgSrc4) && /referenceKind/.test(nestSrc4));
+    check('上传的图会先处理成方形 PNG（裁方 + 缩到上限）',
+      /function prepareSpeciesImage/.test(imgSrc4) &&
+      /SPECIES_IMAGE_MAX/.test(imgSrc4) &&
+      /image\/png/.test(imgSrc4));
+  }
+
+  // ============================================================
+  // 桌宠: 养了两只能自己选显示哪一只 (2026-11-04)
+  // ============================================================
+  // 【用户原话】"如果我养俩只宠物, 可不可以自己选择一只宠物显示在聊天框上做桌宠,
+  //             现在好像是默认第一只显示"
+  // 【原来】currentDesktopPet() 里写死 `st.pets[0]` —— pets 按 createdAt 排,
+  //   所以永远是【最早领养的那只】, 养了第二只也换不了。
+  // 【现在】存一个「选中的 pet id」(localStorage, 显示偏好不落宠物表),
+  //   选了就用选的那只; 那只不在了(饿死删掉/清数据)就回落第一只。
+  section('桌宠: 养了两只可以自己选显示哪一只 (2026-11-04)');
+  {
+    const nestSrc = read('modules/pet-nest.js');
+    const htmlSrc = read('index.html');
+    const speechSrc = read('modules/pet-speech.js');
+    const R = loadRules();
+    const pick = R.pickDesktopPet;
+
+    // ---- 纯函数: 该显示哪一只 ----
+    const A = { id: 'a', name: '小白' };   // 先领养
+    const B = { id: 'b', name: '小花' };   // 后领养
+    check('pickDesktopPet 暴露给测试了', typeof pick === 'function');
+    if (typeof pick === 'function') {
+      check('没选过 → 第一只(= 最早领养的那只, 老行为不变)',
+        pick([A, B], '') === A, '拿到了 ' + (pick([A, B], '') || {}).name);
+      check('选了第二只 → 就是第二只',
+        pick([A, B], 'b') === B, '拿到了 ' + (pick([A, B], 'b') || {}).name);
+      check('选回第一只 → 第一只',
+        pick([A, B], 'a') === A);
+      check('选的那只已经没了 → 回落第一只(不显示空白)',
+        pick([A, B], 'ghost') === A, '拿到了 ' + (pick([A, B], 'ghost') || {}).name);
+      check('只有一只时怎么选都是它',
+        pick([B], 'a') === B && pick([B], '') === B);
+      check('一只都没有 → null (别炸)', pick([], 'a') === null && pick(null, 'a') === null);
+      check('列表里有脏数据(缺 id)也不炸',
+        pick([null, A], 'a') === A);
+    }
+
+    // ---- 接线: 桌宠真的按选的那只画 ----
+    check('currentDesktopPet 用的是 pickDesktopPet(列表, 选中的那只)',
+      /const pet = pickDesktopPet\(st\.pets, want\)/.test(nestSrc));
+    check('选中的那只不在了会清掉失效记录',
+      /if \(want && \(!pet \|\| pet\.id !== want\)\) setDesktopPetId\(''\)/.test(nestSrc));
+    check('选择存在 localStorage(显示偏好, 不为它升 db 版本)',
+      /desktopPetId: 'petNestDesktopPetId'/.test(nestSrc) &&
+      /localStorage\.getItem\(STORAGE_KEYS\.desktopPetId\)/.test(nestSrc));
+    check('PetNest 导出了 desktopPetId / isDesktopPet',
+      /desktopPetId: desktopPetId,/.test(nestSrc) &&
+      /isDesktopPet: isDesktopPet,/.test(nestSrc));
+
+    // ---- UI: 在哪儿选 ----
+    check('照顾弹窗里有「让它当桌宠」按钮', htmlSrc.includes('id="pn-deskpet-btn"'));
+    check('打开某只宠物的弹窗时会同步这个按钮的状态',
+      /const deskBtn = el\('pn-deskpet-btn'\)/.test(nestSrc));
+    check('已经是桌宠时按钮写「聊天框里就是它」并禁用',
+      /already \? '✔ 聊天框里就是它' : '让它当桌宠'/.test(nestSrc) &&
+      /deskBtn\.disabled = already \|\| isEggPet/.test(nestSrc));
+    check('还是颗蛋的不给当桌宠(没有模样可显示)',
+      /deskBtn\.disabled = already \|\| isEggPet/.test(nestSrc) &&
+      nestSrc.includes('它还是颗蛋，没有模样可以显示在聊天框上'));
+    check('点了会存下选择并立刻重画',
+      /function chooseDesktopPet\(petId\)/.test(nestSrc) &&
+      /deskBtn\.onclick = function \(\) \{ chooseDesktopPet\(pet\.id\); \}/.test(nestSrc) &&
+      /setDesktopPetId\(petId\);[\s\S]{0,300}await refreshAll\(\)/.test(nestSrc));
+    // 禁用态必须看得出「不能点」—— 2026-10-26 那两个说话开关就吃过这个亏(灰着不说原因)
+    check('禁用的按钮有看得见的样式(不是点了没反应)',
+      /\.pn-btn:disabled\s*\{[\s\S]{0,120}opacity/.test(read('css/pet-nest.css')));
+
+    // ---- 说话: 只有桌宠本人才把泡泡挂在自己头上 ----
+    // 以前桌宠固定第一只, "谁说话都画在同一个身上"看着还凑合;
+    // 现在能换了 → 不判就是张冠李戴(小白的台词冒在小花头上)。
+    check('说话前会先问「这只就是桌宠吗」',
+      /window\.PetNest\.isDesktopPet\(petRow\.id\)/.test(speechSrc));
+    check('不是桌宠的那只不往桌宠身上画泡泡',
+      /const canBubble = !o\.silent && speakerIsDeskPet/.test(speechSrc) &&
+      /if \(canBubble\) showBubble\(/.test(speechSrc));
+    check('不是桌宠说的那句话改成 toast(不白说)',
+      /!o\.silent && \(!canBubble \|\| !desktopPetVisible\(\)\)/.test(speechSrc));
+  }
+
   printSummary();
 })().catch(e => { console.error(e); process.exit(1); });
-
 function printSummary() {
   console.log('\n================================');
   console.log('通过 ' + passed + ' / 失败 ' + failed);
+  console.log('__FAILURES__' + failedNames.join(''));
   console.log('================================');
   if (failed > 0) process.exit(1);
 }

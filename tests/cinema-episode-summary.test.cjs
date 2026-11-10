@@ -92,7 +92,7 @@ function makeLiveSandbox(opts) {
     nowPlayingEp: 0,
     seriesTitle: '某部短剧'
   };
-  const calls = { requestSummary: [], addEpisodeMemory: [], abort: [], warns: [] };
+  const calls = { requestSummary: [], addEpisodeMemory: [], abort: [], warns: [], resetSession: [], chat: [], retry: [] };
 
   const sandbox = {
     console: console,
@@ -146,6 +146,19 @@ function makeLiveSandbox(opts) {
       watchSession.pendingSummary = null;
       watchSession.summaryGhostUntil = Date.now() + 3000;
       return true;
+    },
+    // 🔴 2026-11-04: 一集播完会【换干净会话】(短剧专用) —— 这里是假的, 只记一下
+    resetSessionAfterEpisode: function (ep) {
+      calls.resetSession.push(ep);
+    },
+    // 🔴 2026-11-04: 失败之后会排一次 60 秒后的自动重试 —— 这里是假的, 只记一下
+    //   (真实现跑在 tests/cinema-series-summary.test.cjs 里, 那边装的是整个模块)
+    scheduleEpisodeSummaryRetry: function (ep) {
+      calls.retry.push(ep);
+    },
+    // 🔴 2026-11-04: 失败时聊天区要说一句 (只记, 不真的往 DOM 里塞)
+    appendSystemLine: function (text) {
+      calls.chat.push(String(text));
     }
   };
   sandbox.window = sandbox;
@@ -158,6 +171,7 @@ function makeLiveSandbox(opts) {
     'yieldChannelToEpisodeSummary',
     'noteEpisodeFail',
     'clearEpisodeFail',
+    'warnEpisodeSummaryFailed',
     'requestEpisodeSummary',
     'doRequestEpisodeSummary',
     'onVideoEnded'
@@ -265,6 +279,31 @@ async function main() {
     check('跟"没存进库"是两段 (两种病)', live.indexOf('persistWarnHtml') >= 0 &&
       live.indexOf('没存进库') >= 0);
     check('失败记录有独立的存放处', /episodeErrors:\s*\[\]/.test(live));
+  }
+
+  // ------------------------------------------------------------
+  section('⑦ 失败 → 排自动重试 + 聊天区说一声; 成功 → 换干净会话 (2026-11-04)');
+  {
+    const { sandbox, watchSession, calls } = makeLiveSandbox({ addOk: false });
+    watchSession.nowPlayingEp = 3;
+    sandbox.onVideoEnded();
+    await tick(80);
+    check('失败 → 排了 60 秒后的自动重试', calls.retry.length === 1 && calls.retry[0] === 3,
+      'retry=' + JSON.stringify(calls.retry));
+    check('失败 → 没有换干净会话 (画面要留着给重试用)', calls.resetSession.length === 0,
+      'resetSession=' + JSON.stringify(calls.resetSession));
+    check('失败 → 聊天区说了「没总结出来」',
+      calls.chat.some(function (l) { return /第 3 集没总结出来/.test(l); }),
+      JSON.stringify(calls.chat));
+  }
+  {
+    const { sandbox, watchSession, calls } = makeLiveSandbox();
+    watchSession.nowPlayingEp = 3;
+    sandbox.onVideoEnded();
+    await tick(80);
+    check('成功 → 没有排重试', calls.retry.length === 0, 'retry=' + JSON.stringify(calls.retry));
+    check('成功 → 换了干净会话', calls.resetSession.length === 1 && calls.resetSession[0] === 3,
+      'resetSession=' + JSON.stringify(calls.resetSession));
   }
 
   // ------------------------------------------------------------

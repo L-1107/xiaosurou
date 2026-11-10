@@ -65,8 +65,104 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // ============================================================
+  // 🛟 开库看门狗 (2026-11-02)
+  //
+  // 【为什么加这个】
+  //   用户实测「app 白屏起不来」。查下来是: db.open() 一直 pending
+  //   (IndexedDB 的升级请求被别的连接挡住了), 而启动链要等库
+  //   (init-event-bindingsA.js → await loadAllDataFromDB()) →
+  //   首页永远出不来, 控制台又一条红字都没有 —— 纯白屏, 根本猜不到原因。
+  //
+  // 【这个看门狗干什么】
+  //   开库超过 20 秒还没好, 就把「可能的原因 + 怎么办」直接摆到屏幕上,
+  //   别再让人对着白屏干等。以后再出这个问题, 一眼就知道是数据库卡住了。
+  // ============================================================
+  var dbStallTimer = null;
+  var dbStallNode = null;
+
+  function clearDbStallNotice() {
+    if (dbStallTimer) { clearTimeout(dbStallTimer); dbStallTimer = null; }
+    if (dbStallNode && dbStallNode.parentNode) {
+      dbStallNode.parentNode.removeChild(dbStallNode);
+    }
+    dbStallNode = null;
+  }
+
+  function showDbStallNotice(headline, detail) {
+    if (dbStallNode) return;
+    try {
+      var box = document.createElement('div');
+      box.id = 'db-stall-notice';
+      box.setAttribute('style', [
+        'position:fixed', 'left:50%', 'top:50%', 'transform:translate(-50%,-50%)',
+        'z-index:2147483647', 'width:min(420px,86vw)',
+        'background:#fffaf0', 'color:#3c3026', 'border:2px solid #9a6b3f',
+        'border-radius:14px', 'padding:20px 22px', 'line-height:1.75',
+        'font-size:15px', 'box-shadow:0 14px 44px rgba(0,0,0,.3)', 'text-align:left'
+      ].join(';'));
+
+      var h = document.createElement('div');
+      h.textContent = headline;
+      h.setAttribute('style', 'font-weight:700;font-size:17px;margin-bottom:10px');
+      box.appendChild(h);
+
+      var p = document.createElement('div');
+      p.textContent = detail;
+      p.setAttribute('style', 'font-size:14px');
+      box.appendChild(p);
+
+      var tip = document.createElement('div');
+      tip.setAttribute('style', 'margin-top:12px;font-size:13px;opacity:.78');
+      tip.textContent = '先试: 把 330 的所有页面/窗口全部关掉(最好连浏览器整个退出一次), 再重新打开。';
+      box.appendChild(tip);
+
+      var btn = document.createElement('button');
+      btn.textContent = '重新加载';
+      btn.setAttribute('style', [
+        'margin-top:16px', 'padding:9px 20px', 'border:1px solid #9a6b3f',
+        'background:#9a6b3f', 'color:#fff', 'border-radius:9px',
+        'font-size:15px', 'cursor:pointer'
+      ].join(';'));
+      btn.addEventListener('click', function () { location.reload(); });
+      box.appendChild(btn);
+
+      document.body.appendChild(box);
+      dbStallNode = box;
+    } catch (e) {
+      // 提示画不出来就算了, 千万别因为提示失败把 app 弄挂
+    }
+  }
+
+  // 被 init-db-schema.js 的 blocked 事件调用 (那边会先注册监听)
+  // ⚠️ 这个文件里没有 global 这个标识符 —— 它是别的文件 IIFE 的形参,
+  //    这里必须用 window.xxx, 写成 global.xxx 会直接 ReferenceError。
+  window.markDbBlocked = function () {
+    showDbStallNotice(
+      '数据库升级被挡住了',
+      '还有别的 330 页面/窗口开着旧版本, 占着数据库不让升级 —— 关掉它们就会自动恢复。'
+    );
+  };
+
+  dbStallTimer = setTimeout(function () {
+    if (window.dbReady) return;
+    showDbStallNotice(
+      '数据库还没打开',
+      '打开本地数据库超过 20 秒还没完成。多半是数据库在升级, 或者被别的 330 页面挡住了。'
+    );
+  }, 20000);
+
   // 确保数据库完全打开和就绪
   window.dbReady = false;
+
+  // 【这里刻意没有"版本自动跟进"】
+  //   2026-11-03 试过一版: 开库前先 await indexedDB.databases() 看磁盘版本,
+  //   比代码新就 db.version(磁盘版本).stores({}) 顶上去。实测【不能用】:
+  //     · await 会让出事件循环, 这期间别的模块已经访问 db 触发了 Dexie 自动开库
+  //       → 再调 db.version() 直接报 Cannot add version when database is open
+  //     · 而 Dexie 自己就带这个兜底: 发现磁盘 schema 跟代码不一致时,
+  //       会自己 workaround 并抬高 native 版本号, 实测【不会】抛 VersionError
+  //   ⇒ 与其自己写一套半吊子的, 不如交给 Dexie。主库版本停在 72 才是根本解法。
   window.dbReadyPromise = db.open().then(() => {
     console.log('数据库已完全初始化并打开');
     console.log('数据库表状态检查:', {
@@ -76,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
       messagesType: typeof db.messages
     });
     window.dbReady = true;
+    clearDbStallNotice();
     // 触发自定义事件通知数据库已就绪
     window.dispatchEvent(new Event('dbready'));
 
@@ -86,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }).catch(err => {
     console.error('数据库打开失败:', err);
     window.dbReady = false;
+    showDbStallNotice('数据库打开失败', ((err && err.message) || String(err)));
     throw err;
   });
 
@@ -368,13 +466,25 @@ document.addEventListener('DOMContentLoaded', () => {
    */
   function wrapDatabaseOperations() {
     if (!db || !window.dbReady) return;
-    
-    const originalPut = Dexie.Table.prototype.put;
-    const originalAdd = Dexie.Table.prototype.add;
-    const originalDelete = Dexie.Table.prototype.delete;
+
+    // ⚠️ 2026-11-03: Dexie 4 的 CDN 构建 (unpkg.com/dexie/dist/dexie.js) 里
+    //   【没有 Dexie.Table】—— 实测那份文件里连 "Dexie.Table" 这个字符串都搜不到。
+    //   以前这里直接取 Dexie.Table.prototype.put, 只要这段跑到就必抛
+    //   TypeError: Cannot read properties of undefined (reading 'prototype'),
+    //   于是每次启动控制台都留一条红字。功能不受影响, 但极容易把人带偏 ——
+    //   排查"起不来"的时候, 这条红字会让人以为是什么别的地方坏了。
+    //   (反过来也是证据: 用户控制台里【没有】这条红字, 说明 window.dbReady 从没变 true,
+    //    也就是数据库压根没打开过 —— 跟 db.open() 永久 pending 那个诊断对得上。)
+    //   这里没 Table 就安静跳过: 操作日志少了这一层而已, 不影响任何数据。
+    const TableCtor = (typeof Dexie !== 'undefined' && Dexie) ? Dexie.Table : null;
+    if (!TableCtor || !TableCtor.prototype) return;
+
+    const originalPut = TableCtor.prototype.put;
+    const originalAdd = TableCtor.prototype.add;
+    const originalDelete = TableCtor.prototype.delete;
     
     // 包装 put 操作
-    Dexie.Table.prototype.put = function(data, key) {
+    TableCtor.prototype.put = function(data, key) {
       const tableName = this.name;
       
       // 记录操作日志
@@ -385,7 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     // 包装 add 操作
-    Dexie.Table.prototype.add = function(data, key) {
+    TableCtor.prototype.add = function(data, key) {
       const tableName = this.name;
       
       // 记录操作日志
@@ -396,7 +506,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     // 包装 delete 操作
-    Dexie.Table.prototype.delete = function(key) {
+    TableCtor.prototype.delete = function(key) {
       const tableName = this.name;
       
       // 记录操作日志

@@ -511,6 +511,12 @@
     const record = {
       id: id,
       name: name,
+      // 🔴 2026-11-04: 作品名 —— 同一部作品的几集填【一样的名字】, 就共用一份
+      //   剧情底稿/前情提要 (key = film:<chatId>:<作品名>)。
+      //   不填 = 不分组 (老行为: 同一个聊天里所有本地影片共用一份, 换到别的作品会串台)。
+      //   ⚠️ 这个字段【不用建索引】→ 不用升 db 版本 (主库升版本有风险,
+      //   见记忆里「IndexedDB 升版被挡住 = 整个 app 白屏」那条)。
+      workName: String(m.workName || '').trim(),
       // 本地影片 = 存 Blob; 在线片源 = 只存 URL 字符串 (体积可忽略)
       size: file ? (file.size || 0) : 0,
       type: file ? (file.type || '') : '',

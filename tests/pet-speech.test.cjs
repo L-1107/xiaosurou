@@ -670,7 +670,22 @@ section('接线：index.html / sw.js / 聊天渲染 / AI 上下文');
   check('sw.js 预缓存里有 pet-speech.js', sw.includes("'./modules/pet-speech.js'"));
   check('sw.js 的 fetch 拦截里有 pet-speech.js', sw.includes("url.includes('/modules/pet-speech.js')"));
   const cv = (sw.match(/const CACHE_VERSION = '([^']+)'/) || [])[1];
-  check('sw.js 的 CACHE_VERSION 已经 bump 到 v0.2.83.0', cv === 'v0.2.83.0', String(cv));
+  // ⚠️ 这里原来写死 'v0.2.83.0' —— CACHE_VERSION 每 bump 一次就误报一次
+  //   (2026-10-28 实测: sw.js 早就到 v0.2.84.0 了, 这个断言一直在报红,
+  //    跟宠物说话没关系, 是【测试自己过期了】)。
+  //   → 改成"不低于 v0.2.83.0": 守住"必须 bump 过"这件事, 又不被后面的 bump 打脸。
+  const cvParts = String(cv || '').replace(/^v/, '').split('.').map(Number);
+  const cvAtLeast = (v, min) => {
+    if (!v.length || !Number.isFinite(v[0])) return false;
+    for (let i = 0; i < min.length; i++) {
+      if (!Number.isFinite(v[i])) return false;
+      if (v[i] > min[i]) return true;
+      if (v[i] < min[i]) return false;
+    }
+    return true;
+  };
+  check('sw.js 的 CACHE_VERSION 已经 bump（不低于 v0.2.98.0）',
+    cvAtLeast(cvParts, [0, 2, 83, 0]), String(cv));
 
   // ③ 聊天框渲染
   check('chat-interface.js 认得 pet_say', /msg\.type === 'pet_say'/.test(chatSrc));

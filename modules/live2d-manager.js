@@ -1159,8 +1159,9 @@
       if (expressionsEmptyEl) expressionsEmptyEl.style.display = 'none';
       let html = expressions.map(e => {
         // v0.5.0 P1.5: 表情按钮 label 显示 "中文名 (英文id)" 让 user 看得懂, AI 仍用 e.id (英文) 触发
-        const cn = EXPRESSION_CN_LABELS[e.id] || e.name;
-        const label = cn ? (cn + ' ' + e.name) : e.name;
+        // 表情 id 本身就是中文时 (cn === name), 别拼成 "闭眼 闭眼" —— 同一个名字只显示一次。
+        const cn = EXPRESSION_CN_LABELS[e.id] || '';
+        const label = (cn && cn !== e.name) ? (cn + ' ' + e.name) : (cn || e.name);
         return '<button type="button" class="live2d-manager-debug-btn" ' +
           'data-action="expression" ' +
           'data-id="' + escapeHtml(e.id) + '" ' +

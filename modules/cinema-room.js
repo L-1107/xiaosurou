@@ -177,6 +177,15 @@
     '    </div>',
     '    <div class="cinema-source-pane" data-src-pane="local">',
     '      <div class="cinema-source-desc">从手机里选一个视频文件，存进本地片单。选完就能播，进度会自动记住。</div>',
+    // 🔴 2026-11-04 作品名: 同一部作品的几集填【一样的名字】, 就共用一份剧情底稿/
+    //   前情提要 (换到下一集时模型还知道上一集演了什么)。
+    //   留空 = 不分组 (同一个聊天里所有本地影片共用一份, 会互相串台)。
+    '      <div class="cinema-work-row">',
+    '        <input type="text" id="cinema-work-name" class="cinema-work-name" list="cinema-work-name-list"',
+    '               placeholder="作品名（选填）" aria-label="作品名" autocomplete="off" autocorrect="off" spellcheck="false">',
+    '        <datalist id="cinema-work-name-list"></datalist>',
+    '      </div>',
+    '      <div class="cinema-source-desc cinema-work-hint">同一作品填一样的名字（可以下拉选以前用过的）。留空 = 不分组。</div>',
     '      <button class="cinema-source-go" id="cinema-src-local">选择本地视频</button>',
     '    </div>',
     // ---- 短剧库 (2026-10-07) ----
@@ -350,6 +359,9 @@
       addBtn: document.getElementById('cinema-add-btn'),
       drawerAdd: document.getElementById('cinema-drawer-add'),
       fileInput: document.getElementById('cinema-file-input'),
+      // 🔴 2026-11-04: 作品名 (同一部作品的几集共用一份剧情底稿)
+      workName: document.getElementById('cinema-work-name'),
+      workNameList: document.getElementById('cinema-work-name-list'),
       diagBox: document.getElementById('cinema-diag-box'),
       diagToggle: document.getElementById('cinema-diag-toggle'),
       closeBtn: document.getElementById('cinema-room-close'),
@@ -406,7 +418,7 @@
     bindEvents();
     initKeyboardMode();   // 🧪 实验 C 已还原 (2026-10-08): 跟打字卡顿无关
     startPerfWatchdog();
-    startTimelineProbe();  // 🧪 诊断探针 v2 (时间线)
+    watchAmbientGeometry();   // 2026-11-05: 屏幕尺寸一变, 环境光的几何缓存就作废
     return els;
   }
 
@@ -503,160 +515,30 @@
     setTimeout(tick, 1000);
   }
 
-  // 🧪 诊断探针 v2 (2026-10-08) —— 时间线记录器
+  // 🧪 诊断探针 v2 已整个删掉 (2026-11-05)
   //
-  // 上一版有两个硬伤, 害我下了错结论:
-  //   ① 采样从 focusin 之后 400ms 才开始, 把「点击 → 冻结」整段漏掉了。
-  //      实测真值: 6 秒窗口只跑出 8 帧 = 主线程冻了约 9 秒。
-  //   ② 只记帧数, 看不到「卡死前最后一个事件是什么」。
+  //   它是 2026-10-08 为了查「点击 → 冻结」加的实验代码: 每帧 1 次 rAF +
+  //   1 个微任务 + 1 个 setTimeout(0), 外加 12 个全局事件监听 + visualViewport
+  //   + MutationObserver, 还有一个自己的 rAF 帧循环 —— 也就是说它在影院里
+  //   【自己开了一条 60fps 的常驻循环】。
   //
-  // 这版重做(三条都来自 Gemini 的建议):
-  //   A. 日志极轻 —— 热路径里只往扁平数组 push「时间戳 + 事件名」,
-  //      一个字符都不打。iOS Safari 往 console 打对象本身就可能阻塞,
-  //      所以一律不在事件里 console.log, 全攒着, 结束后一次性 dump。
-  //   B. 从 touchstart 就开始记, 不等 focus —— 这才看得到点击到卡死的完整链路。
-  //   C. 同时量四样, 一眼分清是「同步宏任务卡死」还是「微任务队列被撑爆」:
-  //        帧间隔       : rAF 实际间隔, 超过阈值就是主线程被占住
-  //        宏任务延迟   : setTimeout(0) 的排队延迟 = 事件循环被长任务堵住
-  //        微任务延迟   : rAF 里排一个微任务, 量它多久才轮到
-  //        DOM 变更次数 : MutationObserver 回调次数
+  //   那次实验的结论早就拿到了 (键盘弹起 → 视口变矮 → 整个房间 resize →
+  //   毛玻璃重采样), 探针却一直留在生产代码里白烧电。真机发热实测里,
+  //   沙盒单独看是凉的, 宿主+沙盒叠起来才烫 —— 这条自己跑的帧循环
+  //   属于"沙盒自己也在烧"的一部分, 删掉它没有代价。
   //
-  // 用法(用户侧, 不装任何东西):
-  //   进影院 → 正常操作 → 复现卡顿 → ⚙设置 →「诊断(出问题时展开)」→ 截图
-  //   冻结超过 2 秒会自动 dump 一次, 也会在每次开设置面板时 dump。
+  //   下面只保留真正还在用的东西: 诊断收集器 diagLogPush
+  //   (Live 的连上/断开/丢帧/剧情成败都往那儿塞, 出事时截图给我看)。
   // --------------------------------------------------------------------------
-  var TL = [];                 // [相对毫秒, 事件名] —— 扁平, 不存对象
-  var TL_T0 = 0, TL_MAX = 120;
-  var tlLast = 0, tlMicroAt = 0, tlMacroAt = 0;
-  var tlFrames = 0, tlMut = 0;
-  var tlGapMax = 0, tlGapN = 0;
-  var tlMicroMax = 0, tlMacroMax = 0;
-  var tlDumped = false, tlDumping = false;
-
-  function tlMark(name, prio) {
-    if (prio) { if (TL.length >= TL_MAX) TL.shift(); }
-    else if (TL.length >= TL_MAX) return;
-    TL.push([Math.round(performance.now() - TL_T0), name]);
-  }
-
-  // 时间线正文单独存一份, 由 renderDiagBox 一并渲染。
-  // ⚠️ 不逐条走 diagLogPush: 那会 120 次重渲染 + 120 次 console.log,
-  //    iOS Safari 往 console 打东西本身就可能阻塞 —— 那探针就自己制造卡顿了。
-  var TL_TEXT = '';
-
-  function tlDump(reason) {
-    if (tlDumping) return;
-    tlDumping = true;
-    try {
-      var head = '[时间线] ' + reason +
-        ' | 帧数=' + tlFrames +
-        ' 最长帧=' + tlGapMax + 'ms(×' + tlGapN + ')' +
-        ' 微任务最慢=' + tlMicroMax + 'ms' +
-        ' 宏任务最慢=' + tlMacroMax + 'ms' +
-        ' DOM变更=' + tlMut;
-      var lines = ['  ' + head];
-      for (var i = 0; i < TL.length; i++) {
-        lines.push('  +' + TL[i][0] + 'ms  ' + TL[i][1]);
-      }
-      lines.push('  [时间线] ---- 共 ' + TL.length + ' 条记录, 结束 ----');
-      TL_TEXT = lines.join('\n');
-      diagLogPush(head);          // 一次进日志, 顺带触发一次 renderDiagBox
-      tlDumped = true;
-    } catch (e) { /* 诊断绝不能影响主流程 */ }
-    tlDumping = false;
-  }
-
-  function startTimelineProbe() {
-    if (!els || !els.root) return;
-    TL_T0 = performance.now();
-    tlLast = TL_T0;
-    tlMark('探针启动, 房间已打开');
-
-    // C1. 帧循环: 量帧间隔 + 每帧排一个微任务量它的延迟
-    requestAnimationFrame(function loop(now) {
-      tlFrames++;
-      var gap = now - tlLast;
-      tlLast = now;
-      if (gap > 200) {
-        tlGapN++;
-        if (gap > tlGapMax) tlGapMax = Math.round(gap);
-        tlMark('⛔ 主线程空转 ' + Math.round(gap) + 'ms', true);
-        // 冻过 2 秒就自动 dump 一次(冻结期间的事件补记在后面)
-        if (gap > 2000) setTimeout(function () { tlDump('检测到 ' + Math.round(gap / 100) / 10 + 's 冻结'); }, 300);
-      }
-      // 微任务: 每帧只排一个, 不会自己撑爆队列
-      var m0 = performance.now();
-      Promise.resolve().then(function () {
-        var d = performance.now() - m0;
-        if (d > tlMicroMax) tlMicroMax = Math.round(d);
-        if (d > 50) tlMark('微任务延迟 ' + Math.round(d) + 'ms', true);
-      });
-      // 宏任务: setTimeout(0) 多久才轮到 = 事件循环有没有被长任务堵住
-      var t0 = performance.now();
-      setTimeout(function () {
-        var d2 = performance.now() - t0;
-        if (d2 > tlMacroMax) tlMacroMax = Math.round(d2);
-      }, 0);
-      requestAnimationFrame(loop);
-    });
-
-    // B. 从 touchstart 就开始记(捕获阶段), 不等 focus
-    var EV = ['touchstart', 'touchend', 'mousedown', 'click',
-              'focus', 'blur', 'focusin', 'focusout',
-              'input', 'beforeinput', 'compositionstart', 'compositionend'];
-    for (var i = 0; i < EV.length; i++) {
-      (function (name) {
-        document.addEventListener(name, function (e) {
-          var extra = '';
-          if (name === 'focusin' || name === 'focus') {
-            var t = e.target;
-            extra = ' → ' + (t && (t.id || t.className || t.tagName) || '?');
-          }
-          tlMark('◆ ' + name + extra);
-        }, true);
-      })(EV[i]);
-    }
-
-    // visualViewport 事件也记(只记次数, 不打对象)
-    try {
-      var vv = global.visualViewport;
-      if (vv) {
-        var vvn = { resize: 0, scroll: 0 };
-        vv.addEventListener('resize', function () {
-          vvn.resize++; tlMark('● vv.resize #' + vvn.resize);
-        });
-        vv.addEventListener('scroll', function () {
-          vvn.scroll++; tlMark('● vv.scroll #' + vvn.scroll);
-        });
-        global.__cinemaVVCount = vvn;
-      }
-    } catch (e) { /* noop */ }
-
-    // DOM 变更次数 —— 观察器风暴的信号
-    // ⚠️ 只看 body 的【直接子级】, 不开 subtree。
-    //    开 subtree 的话每次任何深层 DOM 变动都会回调, 那它自己就成了开销,
-    //    探针反而制造问题(Gemini 提醒过: 探针必须极轻)。直接子级已经够
-    //    捕捉「影院被挂进/移出 body」这类关键变化。
-    try {
-      var mo = new MutationObserver(function (list) {
-        tlMut += list.length;
-        if (tlMut <= 20) tlMark('◇ body 子级变动 #' + tlMut);
-      });
-      mo.observe(document.body, { childList: true });
-      global.__cinemaTLMut = mo;
-    } catch (e) { /* noop */ }
-
-    // 开设置面板时也 dump 一次(用户主动来看的时刻)
-    if (els.diagToggle) {
-      els.diagToggle.addEventListener('click', function () {
-        if (tlDumped) return;
-        tlDump('打开诊断面板时手动采集');
-      });
-    }
-
-    global.__cinemaTL = function () { tlDump('手动触发'); };
-    global.__cinemaTLMark = tlMark;
-  }
+  // 🔴 2026-10-29: 把已有的诊断收集器暴露给 cinema-live.js。
+  //   Live 那边的连上/断开/丢帧/剧情成败也进这个框 ——
+  //   用户「⚙设置 → 底部『诊断』→ 截图」一次就能给我全部硬数据。
+  //
+  // ⚠️ 2026-11-05: 原来这行是挂在【诊断探针】函数体里面的 ——
+  //   探针整个删掉的时候差点把它一起带走。cinema-live.js 还在用这个出口
+  //   (tests/cinema-heat.test.cjs 有断言), 所以它现在独立存在,
+  //   不再跟任何探针绑在一起 —— 以后再删别的东西也不会误伤它。
+  global.__cinemaDiagPush = diagLogPush;
 
   // --------------------------------------------------------------------------
   // 事件绑定
@@ -910,7 +792,16 @@
     // ---- Gemini 3.8 Live 钩子 (cinema-live.js) ----
     // 视频开始播 → 自动连 (没 key 会静默跳过)
     els.video.addEventListener('play', function () {
-      if (global.CinemaLive) global.CinemaLive.autoConnect('video play');
+      if (!global.CinemaLive) return;
+      global.CinemaLive.autoConnect('video play');
+      // 🔴 2026-10-29 (用户实测「总结一段以后再过两分钟没有发起总结」):
+      //   必须补这一句 —— 'pause' 事件调 pauseFrames(), 它会
+      //     ① stopStageSummary()  销毁摘要定时器
+      //     ② markPaused()        把播放时间账冻结 (playingSince=0)
+      //   而 autoConnect() 在「已经连上」时只干 S.paused=false 就 return,
+      //   定时器和播放时间账双双失修, 之后全靠看门狗兜 ——
+      //   用户拖一下进度条 / 切一下 app 回来, 摘要就再也不发起了。
+      global.CinemaLive.resumeFrames('video play');
     });
     els.video.addEventListener('pause', function () {
       if (global.CinemaLive && global.CinemaLive.isEnabled()) global.CinemaLive.pauseFrames('video pause');
@@ -944,18 +835,27 @@
     } catch (e) { /* 拿不到配额就跳过检查 */ }
 
     let record;
+    // 🔴 2026-11-04: 作品名 —— 同一部作品的几集填一样的名字, 就共用一份
+    //   剧情底稿/前情提要 (key = film:<chatId>:<作品名>)。
+    //   留空 = 不分组 (老行为)。
+    const workName = readWorkName();
     try {
-      record = await S.addFilm(file, { name: stripExt(file.name) });
+      record = await S.addFilm(file, { name: stripExt(file.name), workName: workName });
     } catch (e) {
       reportError('保存失败', describeSaveError(e));
       return;
     }
+    if (workName) rememberWorkName(workName);
 
     await refreshList();
     if (softWarn && softWarn.warn) {
       showCapacityWarn(
-        '本地影片已 ' + S.formatBytes(softWarn.total) + '，超过 300MB 提醒线。' +
-        '可以继续添加，但手机存储吃紧时影片可能被系统清理，建议删掉不常看的。'
+        '本地影片已 ' + S.formatBytes(softWarn.total) + '，超过 300MB 提醒线。\n\n' +
+        '① 存储：手机空间吃紧时影片可能被系统清理，建议删掉不常看的。\n' +
+        '② 播放：大文件在手机上播容易【播一截就卡住】（片源要整个塞进手机内存，' +
+        '解码 + 推帧一起抢资源，页面会卡死，退出影院外面也聊不了）。\n' +
+        '长剧建议改用「短剧库 / 在线片源」那条路 —— 电脑那边放文件，手机流式播，' +
+        '不占手机内存，也不会卡。'
       );
     }
     await playFilm(record.id);
@@ -963,6 +863,56 @@
 
   function stripExt(name) {
     return String(name || '').replace(/\.[^/.]+$/, '');
+  }
+
+  // --------------------------------------------------------------------------
+  // 作品名 (2026-11-04)
+  // --------------------------------------------------------------------------
+  // 【为什么需要】本地影片的剧情底稿 key 原来只有 'film:'+chatId —— 同一个聊天里
+  //   【所有】本地影片共用一份 → 换到完全不相干的另一部作品, 也会把上一部的剧情
+  //   灌给模型 (串台)。用户原话: "我是疑惑怎么区分这个新文件是不是跟上一个文件
+  //   属于同一个动漫"。
+  // 【现在】同一部作品的几集填【一样的作品名】→ 共用一份底稿 → 换到下一集时,
+  //   模型还知道上一集演了什么; 不同作品名 → 各存各的, 不串台。
+  //   留空 = 老行为 (一个聊天里共用一份)。
+  const WORK_NAMES_KEY = 'cinema.workNames';
+
+  function readWorkName() {
+    try {
+      const el = els.workName;
+      return el ? String(el.value || '').trim() : '';
+    } catch (e) { return ''; }
+  }
+
+  function listWorkNames() {
+    try {
+      const raw = localStorage.getItem(WORK_NAMES_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && x) : [];
+    } catch (e) { return []; }
+  }
+
+  function rememberWorkName(name) {
+    const w = String(name || '').trim();
+    if (!w) return;
+    const arr = listWorkNames().filter(x => x !== w);
+    arr.unshift(w);
+    try { localStorage.setItem(WORK_NAMES_KEY, JSON.stringify(arr.slice(0, 20))); } catch (e) { /* noop */ }
+    refreshWorkNameList();
+  }
+
+  /** 把以前用过的作品名灌进 datalist → 点输入框能下拉选, 不用手打 */
+  function refreshWorkNameList() {
+    try {
+      const dl = els.workNameList;
+      if (!dl) return;
+      while (dl.firstChild) dl.removeChild(dl.firstChild);
+      listWorkNames().forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w;
+        dl.appendChild(opt);
+      });
+    } catch (e) { /* noop */ }
   }
 
   function describeSaveError(e) {
@@ -1053,7 +1003,14 @@
 
     // Gemini: 换片 = 旧 watch session 作废, 重开一轮
     // (旧 session 的剧情摘要是临时记忆, 不会写长期记忆, 直接丢弃)
-    if (global.CinemaLive) global.CinemaLive.onVideoSourceChanged();
+    if (global.CinemaLive) {
+      // 🔴 2026-11-04: 先告诉它这部片子属于哪部作品 (同作品共用一份底稿),
+      //   再让它换片 —— 顺序反了的话, 换片过程里会按【上一部】的 key 去读底稿。
+      if (typeof global.CinemaLive.setWorkName === 'function') {
+        global.CinemaLive.setWorkName(film.workName || '');
+      }
+      global.CinemaLive.onVideoSourceChanged();
+    }
 
     currentFilmId = film.id;
     pendingResumeTime = resumeTime || 0;
@@ -1234,10 +1191,58 @@
   // blob URL 是同源的, 所以 drawImage 不会被跨域污染挡住。
   // --------------------------------------------------------------------------
 
-  const AMBIENT_INTERVAL = 1800;
+  // 🔴 2026-11-05 (手机发热): 原来这一块是"每 1.8 秒烧一次电", 现在改了:
+  //   ① 采样间隔 1.8s → 4s。这层柔光本来就是跟着画面慢慢变的装饰,
+  //      4 秒完全看不出来, 但 drawImage + getImageData (GPU→CPU 两次同步
+  //      回读) 的次数少了一半以上。
+  //   ② 不再每次 getBoundingClientRect。旧代码每重打一次光就【读两遍布局】,
+  //      紧接着又写 style.width/height/top —— 写完再读, iOS 每次都被逼着
+  //      把整页重新排一遍版。现在几何尺寸缓存起来, 只有屏幕真的变了才重算。
+  //   ③ 颜色几乎没变就不重写 background。整层柔光是一整块 radial-gradient,
+  //      重写一次 = 整屏重绘一次。
+  const AMBIENT_INTERVAL = 4000;
   let ambientCanvas = null;
   let lastAmbientAt = 0;
   let ambientFallbackRgb = null;
+
+  // 大屏几何 (相对 ambient 所在的那层墙) —— 只在屏幕真的变了的时候重算
+  let ambientGeo = null;
+  let ambientGeoDirty = true;
+  let ambientGeoObserver = null;
+  // 上一次【真正写进 style】的尺寸和颜色, 用来判断这次要不要重写
+  let ambientAppliedW = -1, ambientAppliedH = -1, ambientAppliedTop = '';
+  let ambientAppliedRgb = null, ambientAppliedAlpha = -1;
+
+  function measureAmbientGeo() {
+    ambientGeoDirty = false;
+    ambientGeo = null;
+    if (!els.ambient || !els.screen) return;
+    const host = els.ambient.parentElement;
+    if (!host) return;
+    const s = els.screen.getBoundingClientRect();
+    const p = host.getBoundingClientRect();
+    if (!s || !p || !s.width || !p.width) return;
+    ambientGeo = { w: s.width, h: s.height, top: s.top - p.top };
+  }
+
+  function ensureAmbientGeo() {
+    if (ambientGeoDirty || !ambientGeo) measureAmbientGeo();
+    return ambientGeo;
+  }
+
+  /** 屏幕尺寸变了 (换片换朝向 / 转屏 / 窗口缩放) → 几何缓存作废, 下次重算 */
+  function watchAmbientGeometry() {
+    if (ambientGeoObserver || !els.screen) return;
+    try {
+      if (typeof ResizeObserver === 'function') {
+        ambientGeoObserver = new ResizeObserver(function () { ambientGeoDirty = true; });
+        ambientGeoObserver.observe(els.screen);
+      }
+    } catch (e) { /* noop */ }
+    try {
+      global.addEventListener('resize', function () { ambientGeoDirty = true; });
+    } catch (e) { /* noop */ }
+  }
 
   function updateAmbient(force) {
     if (!els.ambient) return;
@@ -1283,22 +1288,42 @@
 
   function paintAmbient(rgb, alpha) {
     if (!els.ambient) return;
-    const s = els.screen.getBoundingClientRect();
-    const host = els.ambient.parentElement.getBoundingClientRect();
-    if (!s.width || !host.width) return;
-    const w = s.width * 2.5;
-    const h = Math.max(s.height * 2.2, 190);
-    els.ambient.style.width = w + 'px';
-    els.ambient.style.height = h + 'px';
-    els.ambient.style.top = (s.top - host.top - (h - s.height) / 2) + 'px';
-    els.ambient.style.background =
-        'radial-gradient(closest-side, rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + '),' +
-        ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.34).toFixed(3) + ') 55%,' +
-        ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0) 100%)';
+    const geo = ensureAmbientGeo();
+    if (!geo) return;
+    const w = geo.w * 2.5;
+    const h = Math.max(geo.h * 2.2, 190);
+    const top = (geo.top - (h - geo.h) / 2) + 'px';
+
+    // 几何变了才写尺寸; 颜色几乎没变就不碰 background (整屏重绘不便宜)
+    const geoChanged = (w !== ambientAppliedW || h !== ambientAppliedH || top !== ambientAppliedTop);
+    const rgbChanged = !(ambientAppliedRgb &&
+      Math.abs(ambientAppliedRgb[0] - rgb[0]) <= 6 &&
+      Math.abs(ambientAppliedRgb[1] - rgb[1]) <= 6 &&
+      Math.abs(ambientAppliedRgb[2] - rgb[2]) <= 6 &&
+      ambientAppliedAlpha === alpha);
+    if (!geoChanged && !rgbChanged) return;
+
+    if (geoChanged) {
+      els.ambient.style.width = w + 'px';
+      els.ambient.style.height = h + 'px';
+      els.ambient.style.top = top;
+      ambientAppliedW = w; ambientAppliedH = h; ambientAppliedTop = top;
+    }
+    if (rgbChanged) {
+      ambientAppliedRgb = [rgb[0], rgb[1], rgb[2]];
+      ambientAppliedAlpha = alpha;
+      els.ambient.style.background =
+          'radial-gradient(closest-side, rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + '),' +
+          ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.34).toFixed(3) + ') 55%,' +
+          ' rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0) 100%)';
+    }
   }
 
   function stopAmbient() {
     if (els.ambient) els.ambient.classList.remove('is-on');
+    // 颜色缓存清掉 —— 下一段片子重新打光时一定要重写一次
+    ambientAppliedRgb = null;
+    ambientAppliedAlpha = -1;
   }
 
   // --------------------------------------------------------------------------
@@ -1346,6 +1371,7 @@
     setDrawer(false);
     setChatPanel(false);
     els.srcSheet.classList.add('open');
+    refreshWorkNameList();   // 🔴 2026-11-04: 作品名下拉 (以前用过的)
   }
 
   function closeSourceSheet() {
@@ -2083,8 +2109,7 @@
 
   function renderDiagBox() {
     if (!els.diagBox) return;
-    var tail = TL_TEXT ? ('\n\n' + TL_TEXT) : '';
-    if (!diagLog.length) { els.diagBox.textContent = '（暂无记录）' + tail; return; }
+    if (!diagLog.length) { els.diagBox.textContent = '（暂无记录）'; return; }
     // 顶上带一行环境信息 —— 出问题时第一眼就能知道是什么浏览器在跑
     var ua = '';
     try {
@@ -2092,7 +2117,7 @@
       ua = m ? m[0] : (navigator.userAgent.slice(0, 40) || '?');
     } catch (e) { ua = '?'; }
     var head = '浏览器: ' + ua + '  ·  ' + (global.CinemaStorage ? '存储层已就绪' : '存储层未加载');
-    els.diagBox.textContent = head + '\n' + '─'.repeat(20) + '\n' + diagLog.join('\n') + tail;
+    els.diagBox.textContent = head + '\n' + '─'.repeat(20) + '\n' + diagLog.join('\n');
   }
 
   // 看门狗: iOS 上偶尔 change 就是不来 (选择器弹了又关 / 系统弹窗抢焦点 /
@@ -2596,12 +2621,32 @@
     if (h > 0) els.root.style.setProperty('--cinema-topbar-h', h + 'px');
   }
 
+  // --------------------------------------------------------------------------
+  // 【房间开没开】的标记 (2026-10-28)
+  //
+  //   宿主要判断"沙盒里的房间还开不开", 靠的是同源读 iframe 的 DOM
+  //   (见下面 bindSandboxEntry 里的 watchSandboxRoom)。
+  //   挂在 documentElement 上: 沙盒整个重载后 body 是新的, 而 documentElement
+  //   也是新的 —— 两种情况宿主读到的都是"没有标记", 但【都要】把 iframe 收掉,
+  //   所以放哪儿都够用; 放 documentElement 是因为 body 上的 class 还会被别的逻辑动。
+  // --------------------------------------------------------------------------
+  var ROOM_OPEN_ATTR = 'data-cinema-room-open';
+
+  function markRoomOpen() {
+    try { document.documentElement.setAttribute(ROOM_OPEN_ATTR, '1'); } catch (e) { /* noop */ }
+  }
+
+  function markRoomClosed() {
+    try { document.documentElement.removeAttribute(ROOM_OPEN_ATTR); } catch (e) { /* noop */ }
+  }
+
   async function open() {
     ensureDom();
     initVisualViewport();
     els.root.classList.add('open');
     els.root.setAttribute('aria-hidden', 'false');
     document.body.classList.add('cinema-room-active');
+    markRoomOpen();
     syncTopbarHeight();
     // 人设绑定: 用当前正在用的那个角色 (跟旧观影一致: 打开时绑定 activeChat)
     if (global.CinemaLive) {
@@ -2668,6 +2713,7 @@
     els.root.classList.remove('open');
     els.root.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('cinema-room-active');
+    markRoomClosed();
     setDrawer(false);
     setChatPanel(false);
     setSettingsSheet(false);
@@ -2699,7 +2745,9 @@
   // 版本戳: 只为一眼确认「手机上跑的到底是哪一份代码」。
   // PWA 有 service worker 缓存, 用户看到的经常是旧版, 没有戳根本分不清。
   // 每次改动影院都顺手改这里。
-  global.__CINEMA_VER = '0.30.2';
+  // 🔴 2026-11-04: 顺手跟 ?v= 对齐 (以前 ?v= 是 0.34.0, 这里还停在 0.33.0,
+  //   看着像两份代码, 排查时白白分神)。
+  global.__CINEMA_VER = '0.34.1';
 
   global.CinemaRoom = {
     open: open,
@@ -2750,6 +2798,45 @@
     let frame = null;
     let ready = false;
     let vvRelay = null;
+
+    // 🔴 2026-10-28 宿主侧兜底: 沙盒那边【不吭声】了, 宿主自己把 iframe 收掉。
+    //
+    //   【为什么必须有】用户实测: 退出影院后"外面也不能聊天, 只有大退才恢复"。
+    //   真凶就是这个 iframe: position:fixed + inset:0 + z-index:2147483647
+    //   —— 整个屏幕都在它下面, 连宿主顶栏和"再点一次退出"那个按钮都在它底下。
+    //   而宿主收掉它的唯一途径 = 沙盒发来一条 cinema:closed (沙盒 body 摘 class 时发)。
+    //   那条消息只要没到 (沙盒退出流程中途抛异常 / 沙盒被重载 / 沙盒崩了),
+    //   整个 app 就被一个黑 iframe 盖死 —— 外面一点都点不动, 只有杀掉 app 进程才恢复。
+    //
+    //   【怎么做】不依赖沙盒配合: 宿主直接读 iframe 的 DOM (同源, 读得到),
+    //   看房间还开不开。开 → 留着; 没了 (或者沙盒那边整个重载了) → 宿主自己收掉。
+    var sandboxRoomSeen = false;
+    var sandboxWatchTimer = null;
+
+    function watchSandboxRoom() {
+      if (!frame) return;
+      var doc = null;
+      try { doc = frame.contentDocument; } catch (e) { return; }
+      if (!doc || !doc.documentElement) return;   // 还没加载好, 等下一轮
+      var open = doc.documentElement.getAttribute('data-cinema-room-open');
+      if (open === '1') { sandboxRoomSeen = true; return; }
+      // 房间没开。
+      // ⚠️ 还没进过房间的时候【不能】收 —— 那会儿沙盒还在开机页/选片页,
+      //   收了用户刚点开影院就没了。
+      if (!sandboxRoomSeen) return;
+      closeSandbox('沙盒那边房间没了');
+    }
+
+    function startSandboxWatch() {
+      stopSandboxWatch();
+      sandboxRoomSeen = false;
+      try { sandboxWatchTimer = setInterval(watchSandboxRoom, 700); } catch (e) { /* noop */ }
+    }
+
+    function stopSandboxWatch() {
+      if (sandboxWatchTimer) { try { clearInterval(sandboxWatchTimer); } catch (e) {} }
+      sandboxWatchTimer = null;
+    }
 
     // ---- 键盘视口转发 ----
     // iframe 里的 window.visualViewport【不会反映 iOS 键盘】(键盘影响的是顶层
@@ -2821,7 +2908,16 @@
               _mainApiCfg = {
                 proxyUrl: String(cfg.proxyUrl),
                 apiKey: String(cfg.apiKey),
-                model: String(cfg.model)
+                model: String(cfg.model),
+                // ⚠️【2026-10-29 用户要求】「影院主 API 聊天不能走谷歌直连吗？加上」
+                //   主 API 是谷歌原生地址(…/v1beta/models/…) 时, 沙盒【不能自己拼】
+                //   /chat/completions (那是 OpenAI 兼容的路径) → 必须走 Gemini 原生格式。
+                //   沙盒里没有 isGeminiNativeUrl / toGeminiRequestData(那两个在 utils.js /
+                //   ai-response.js, 沙盒没加载) → 所以这个标记由【宿主】判定后告诉沙盒,
+                //   真正的请求也由宿主代打(见 cinema:geminiRequest)。
+                isGeminiNative: (typeof window.isGeminiNativeUrl === 'function')
+                  ? !!window.isGeminiNativeUrl(String(cfg.proxyUrl))
+                  : false
               };
             }
             return _mainApiCfg;
@@ -2843,6 +2939,78 @@
     }
 
     // ---- 把当前活跃聊天打包给沙盒(只要 Gemini Live 需要的那几项) ----
+    function currentChatObject() {
+      try {
+        if (typeof state === 'undefined' || !state || !state.activeChatId) return null;
+        return (state.chats && state.chats[state.activeChatId]) || null;
+      } catch (e) { return null; }
+    }
+
+    /** 宿主这边跟陪聊有关的全局设置 —— 沙盒自己没有 globalSettings */
+    function pickGlobalSettings() {
+      const gs = (typeof state !== 'undefined' && state && state.globalSettings) || {};
+      return {
+        enableStreaming: gs.enableStreaming === true,
+        apiTemperature: gs.apiTemperature,
+        apiTopP: gs.apiTopP,
+        apiPresencePenalty: gs.apiPresencePenalty,
+        apiFrequencyPenalty: gs.apiFrequencyPenalty,
+        maxMemory: gs.maxMemory
+      };
+    }
+
+    /**
+     * 组装影院陪聊要用的上下文 (2026-10-28 新增)
+     *
+     * 【为什么在宿主这边做】
+     *   影院跑在 iframe 沙盒 (cinema-sandbox/index.html) 里, 那个页面只加载了
+     *   7 个文件 —— 没有 message-store.js (外面聊天框的历史)、memory-summary.js
+     *   (长期记忆)、settings-presets.js (提示词预设)、ai-response.js (变量替换)。
+     *   沙盒自己算不了这些 → 全部由宿主算好, 通过 postMessage 发过去。
+     *
+     * 【跟主聊天同源 —— 不是另写一套】
+     *   history    —— CinemaChat.buildHistoryMessages (同一套过滤/时间戳/称呼)
+     *   memoryText —— CinemaChat.buildMemoryContext (向量记忆优先, 同一套)
+     *   promptText —— CinemaChat.renderPromptText (主聊天的提示词预设)
+     */
+    async function buildCinemaHostContext(c, queryText) {
+      const ctx = { promptText: '', history: [], memoryText: '' };
+      if (!c) return ctx;
+      const CC = global.CinemaChat;
+      // ---- 长期记忆 ----
+      try {
+        if (CC && typeof CC.buildMemoryContext === 'function') {
+          ctx.memoryText = String(await CC.buildMemoryContext(c, queryText || '') || '');
+        }
+      } catch (e) { /* 回落普通记忆 */ }
+      if (!ctx.memoryText) {
+        try {
+          if (typeof global.getMemoryContextForPrompt === 'function') {
+            ctx.memoryText = String(global.getMemoryContextForPrompt(c) || '');
+          }
+        } catch (e) { /* noop */ }
+      }
+      // ---- 外面聊天框的历史 ----
+      try {
+        if (CC && typeof CC.buildHistoryMessages === 'function') {
+          const h = await CC.buildHistoryMessages(c);
+          ctx.history = (h || []).map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: String(m.content || ''),
+            timestamp: Number(m.timestamp) || 0,
+            senderName: m.senderName || ''
+          })).filter(m => m.content.trim());
+        }
+      } catch (e) { /* noop */ }
+      // ---- 主聊天的提示词预设 (已渲染好变量) ----
+      try {
+        if (CC && typeof CC.renderPromptText === 'function') {
+          ctx.promptText = String(await CC.renderPromptText(c, ctx.memoryText) || '');
+        }
+      } catch (e) { /* noop */ }
+      return ctx;
+    }
+
     function currentChatPayload() {
       try {
         if (typeof state === 'undefined' || !state || !state.activeChatId) return null;
@@ -2869,7 +3037,9 @@
           watchTogetherSettings: {
             geminiApiKey: (c.watchTogetherSettings && c.watchTogetherSettings.geminiApiKey) || ''
           },
-          longTermMemory: Array.isArray(c.longTermMemory) ? c.longTermMemory.slice(-5) : []
+          longTermMemory: Array.isArray(c.longTermMemory) ? c.longTermMemory.slice(-5) : [],
+          // 🔴 2026-10-28: 陪聊要的全局设置 (沙盒自己没有 state.globalSettings)
+          globalSettings: pickGlobalSettings()
         };
       } catch (e) { return null; }
     }
@@ -2881,14 +3051,196 @@
       // 🔴 2026-10-27: 顺带把主 API 配置也解出来给沙盒 (沙盒自己解析不了)。
       //   解析是异步的, 所以 init 里那份可能是 null —— 这条消息是补发的, 两条都留着。
       pushMainApiConfig();
+      // 🔴 2026-10-28: 上下文也异步 (要读消息表 + 向量记忆) —— 算好再补发一份。
+      //   不能塞进 init 里: 那会让开房多等一两秒。
+      pushCinemaContext('');
     }
 
-    function closeSandbox() {
-      if (!frame) return;
+    /** 把上下文补发给沙盒 (算好之后) */
+    function pushCinemaContext(queryText) {
+      const c = currentChatObject();
+      if (!c || !frame) return Promise.resolve(null);
+      return buildCinemaHostContext(c, queryText).then(ctx => {
+        if (!frame) return null;
+        try {
+          frame.contentWindow.postMessage({ type: 'cinema:context', requestId: '', context: ctx }, '*');
+        } catch (e) { /* noop */ }
+        return ctx;
+      }).catch(() => null);
+    }
+
+    // =========================================================================
+    // 🔴 2026-11-05 宿主静默: 影院 iframe 打开时, 宿主这些常驻任务一起停
+    //
+    // 【为什么】用户 A/B/C 三组真机实测:
+    //   A 宿主单独开着         → 冷冰冰
+    //   C 影院沙盒单独看一集   → 冷冰冰
+    //   B 宿主里套着影院看一集 → 开始发烫 (再聊天更烫)
+    // ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】。
+    //
+    // 宿主在 iframe 底下【一个像素都看不见】, 却还在全速跑:
+    //   · 54 个全屏面板 + 约 20 条 infinite 动画 + 顶栏毛玻璃
+    //     → CSS 那头停 (见 cinema-room.css 的「宿主静默」段)
+    //   · 后台活动模拟 / AI 提醒扫描 / 无声智能保活 (含屏幕 WakeLock)
+    //   · 桌宠的换帧定时器
+    // 影院开着的时候这些一个都用不上 → 打开就静默, 退出再醒。
+    //
+    // 【恢复原则】只恢复【进影院之前就在跑】的那些 (由 background-activity.js
+    //   自己记), 不给用户凭空多开一个后台活动。
+    // =========================================================================
+    function pauseHostTimers() {
+      try {
+        if (typeof global.pauseHostBackgroundTasks === 'function') global.pauseHostBackgroundTasks();
+      } catch (e) { /* noop */ }
+      try {
+        var pn = global.PetNest;
+        if (pn && typeof pn.pauseDesktopPet === 'function') pn.pauseDesktopPet();
+      } catch (e) { /* noop */ }
+    }
+
+    function resumeHostTimers() {
+      try {
+        if (typeof global.resumeHostBackgroundTasks === 'function') global.resumeHostBackgroundTasks();
+      } catch (e) { /* noop */ }
+      try {
+        var pn = global.PetNest;
+        if (pn && typeof pn.resumeDesktopPet === 'function') pn.resumeDesktopPet();
+      } catch (e) { /* noop */ }
+    }
+
+    function closeSandbox(reason) {
+      stopSandboxWatch();
+      // ⚠️ 以前这里是 "if (!frame) return;" —— 于是 frame 已经是 null 的时候,
+      //   body 上的 cinema-room-active 永远摘不掉: 宿主页面一直是 position:fixed,
+      //   整页点不动。现在即使没有 frame 也把 class 摘干净。
+      if (!frame) {
+        if (document.body) document.body.classList.remove('cinema-room-active');
+        resumeHostTimers();
+        return;
+      }
       try { frame.remove(); } catch (e) {}
       frame = null; ready = false;
       unbindViewportRelay();
       if (document.body) document.body.classList.remove('cinema-room-active');
+      resumeHostTimers();
+    }
+
+    // =========================================================================
+    // 影院 → 宿主的写回 (2026-10-28)
+    // =========================================================================
+
+    /**
+     * 剧情记忆导出: 把沙盒发来的【全部】chunk 写进真实的长期记忆。
+     * 写成功才回 ok —— 沙盒收到 ok 才清账, 没写成功一行都不删。
+     */
+    function handleCinemaExport(d) {
+      const reply = function (payload) {
+        if (!frame) return;
+        try {
+          frame.contentWindow.postMessage(Object.assign({
+            type: 'cinema:exportMemoryDone', requestId: d && d.requestId
+          }, payload || {}), '*');
+        } catch (e) { /* noop */ }
+      };
+      const c = currentChatObject();
+      if (!c) { reply({ ok: false, error: '没有找到角色会话' }); return; }
+      const chunks = (d && Array.isArray(d.chunks)) ? d.chunks : [];
+      if (!chunks.length) { reply({ ok: false, error: '没有要导出的内容' }); return; }
+      try {
+        if (!Array.isArray(c.longTermMemory)) c.longTermMemory = [];
+        let n = 0;
+        for (const ch of chunks) {
+          const text = String((ch && ch.text) || '').trim();
+          if (!text) continue;
+          c.longTermMemory.push({
+            content: text,
+            timestamp: Date.now(),
+            source: 'cinema_watch_export'
+          });
+          n++;
+        }
+        if (!n) { reply({ ok: false, error: '内容是空的' }); return; }
+        if (global.db && global.db.chats && global.db.chats.put) {
+          global.db.chats.put(c)
+            .then(function () { reply({ ok: true, count: n }); })
+            .catch(function (e) {
+              reply({ ok: false, error: (e && e.message) || '写库失败' });
+            });
+        } else {
+          reply({ ok: false, error: '宿主数据库还没开' });
+        }
+      } catch (e) {
+        reply({ ok: false, error: (e && e.message) || '未知错误' });
+      }
+    }
+
+    /** 影院里说的话 → 写进主聊天历史 (外面也看得见, 影院下一句也接得上) */
+    function handleCinemaChatMessage(d) {
+      const c = currentChatObject();
+      const m = d && d.message;
+      if (!c || !m || !String(m.content || '').trim()) return;
+      try {
+        if (global.messageStore && typeof global.messageStore.addMessageToChat === 'function') {
+          global.messageStore.addMessageToChat(c, {
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: String(m.content || ''),
+            timestamp: Number(m.timestamp) || Date.now(),
+            senderName: m.senderName || c.name || ''
+          }).catch(function () { /* 存不下也不能影响影院 */ });
+        }
+      } catch (e) { /* noop */ }
+    }
+
+    /**
+     * 沙盒请宿主【代打谷歌原生请求】（2026-10-29 用户要求：
+     * 「影院主 API 聊天不能走谷歌直连吗？加上」）
+     *
+     * 【为什么要宿主代打】影院跑在 iframe 沙盒里，沙盒只加载 7 个文件 —— 没有
+     *   ai-response.js / utils.js → 沙盒里【没有】toGeminiRequestData /
+     *   getGeminiResponseText / isGeminiNativeUrl。
+     *   沙盒自己拼 OpenAI 兼容的 `/chat/completions` 打到谷歌原生地址上 → 404。
+     *   → 所以：地址是不是谷歌原生由宿主判定（isGeminiNative 标记随 apiConfig 过去），
+     *     真正的请求也由宿主发（这个函数）。
+     *
+     * 【带上那张阅后即焚的图也没问题】
+     *   toGeminiRequestData 会把 OpenAI 格式的 image_url 转成 Gemini 的 inline_data。
+     */
+    async function handleCinemaGeminiRequest(d) {
+      var reqId = d && d.requestId;
+      function reply(payload) {
+        if (!frame || !reqId) return;
+        try {
+          frame.contentWindow.postMessage(Object.assign({
+            type: 'cinema:geminiResponse', requestId: reqId
+          }, payload || {}), '*');
+        } catch (e) { /* noop */ }
+      }
+      try {
+        if (typeof window.toGeminiRequestData !== 'function') {
+          reply({ ok: false, error: '宿主缺少 toGeminiRequestData，谷歌直连用不了' });
+          return;
+        }
+        var cfg = await resolveMainApiConfig();
+        if (!cfg) { reply({ ok: false, error: '主 API 没配好（地址 / API Key / 模型缺一个）' }); return; }
+        var g = window.toGeminiRequestData(
+          cfg.model, cfg.apiKey, String((d && d.systemPrompt) || ''),
+          Array.isArray(d && d.messages) ? d.messages : []);
+        var res = await fetch(g.url, g.data);
+        if (!res.ok) {
+          var errText = await res.text().catch(function () { return ''; });
+          reply({ ok: false, error: '谷歌直连 ' + res.status + ' ' + String(errText).slice(0, 200) });
+          return;
+        }
+        var data = await res.json();
+        var text = (typeof window.getGeminiResponseText === 'function')
+          ? window.getGeminiResponseText(data)
+          : (((data.candidates && data.candidates[0] && data.candidates[0].content &&
+              data.candidates[0].content.parts) || [])
+            .map(function (p) { return p.text || ''; }).join(''));
+        reply({ ok: true, text: text });
+      } catch (e) {
+        reply({ ok: false, error: String((e && e.message) || e) });
+      }
     }
 
     window.addEventListener('message', function (e) {
@@ -2898,6 +3250,36 @@
       if (d.type === 'cinema:needChat') sendChat();
       else if (d.type === 'cinema:ready') { ready = true; sendChat(); pushViewport(); }
       else if (d.type === 'cinema:closed') closeSandbox();
+      // 🔴 2026-10-28: 陪聊要最新的上下文 (外面聊天框的历史 + 长期记忆 + 提示词)。
+      //   沙盒算不了这些 → 宿主算, 按 query 取 (向量记忆按 query 检索)。
+      else if (d.type === 'cinema:needContext') {
+        const c = currentChatObject();
+        buildCinemaHostContext(c, d.query).then(ctx => {
+          if (!frame) return;
+          try {
+            frame.contentWindow.postMessage({
+              type: 'cinema:context', requestId: d.requestId, context: ctx
+            }, '*');
+          } catch (e) { /* noop */ }
+        }).catch(() => { /* noop */ });
+      }
+      // 🔴 2026-10-28: 影院的剧情记忆导出 → 写进【真实的】长期记忆。
+      //   ⚠️ 为什么不能靠沙盒自己写: 沙盒里的 db.chats 是假的, 它只把 longTermMemory
+      //   的【最后一条】发过来, 前面几条全丢 (用户实测: 导出说成功了, 实际只进去最后一块,
+      //   其它全被"清账"删掉, 白看)。→ 现在沙盒把全部 chunk 发过来, 这里一次性写进去,
+      //   写成功才回 ok, 沙盒收到 ok 才清账。没写成功一行都不删。
+      else if (d.type === 'cinema:exportMemory') {
+        handleCinemaExport(d);
+      }
+      // 🔴 2026-10-28: 影院里说的话也要进主聊天历史 (用户原话: "影院的会话就是要主聊天知道啊")
+      else if (d.type === 'cinema:chatMessage') {
+        handleCinemaChatMessage(d);
+      }
+      // 🔴 2026-10-29: 主 API 是【谷歌原生】地址时, 沙盒自己打不了 (它没有
+      //   toGeminiRequestData) → 沙盒把请求交给宿主代打, 宿主回文本。
+      else if (d.type === 'cinema:geminiRequest') {
+        handleCinemaGeminiRequest(d);
+      }
       else if (d.type === 'cinema:keyChanged') {
         // 用户在影院设置面板里改了 key → 写回当前聊天记录
         try {
@@ -2944,6 +3326,7 @@
     sbtn.addEventListener('click', function () {
       if (frame) { closeSandbox(); return; }   // 再点一次 = 退出沙盒
       if (document.body) document.body.classList.add('cinema-room-active');
+      pauseHostTimers();   // 2026-11-05: 宿主静默 (CSS 那头是 display:none)
       bindViewportRelay();
       frame = document.createElement('iframe');
       frame.id = 'cinema-sandbox-frame';
@@ -2954,6 +3337,7 @@
         'background:#16111a;';
       document.body.appendChild(frame);
       frame.addEventListener('load', function () { sendChat(); pushViewport(); });
+      startSandboxWatch();
     });
   }
 

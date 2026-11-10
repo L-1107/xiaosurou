@@ -57,6 +57,172 @@
   }
 
   // ============================================================
+  // 宿主上下文通道 (2026-10-28 新增)
+  //
+  // 【为什么必须有这条通道】
+  //   影院跑在 iframe 沙盒 (cinema-sandbox/index.html) 里, 那个页面只加载了
+  //   7 个文件: dexie / live-client / cinema-storage / cinema-img /
+  //   cinema-room / cinema-live / cinema-chat。
+  //   【没有】 message-store.js (外面聊天框的历史)、memory-summary.js (长期记忆)、
+  //   settings-presets.js (提示词预设)、ai-response.js (变量替换)。
+  //   → 沙盒自己拿不到这些, 所以【全部由宿主算好, 通过 postMessage 发过来】。
+  //
+  // 【上下文里有什么】
+  //   promptText —— 主聊天的提示词预设(已渲染好变量, 但还没剥 JSON 指令系统)
+  //   history    —— 外面聊天框最近 N 条(已格式化成 "(时间) 名字: 内容")
+  //   memoryText —— 长期记忆正文(向量记忆优先, 跟主聊天同一套)
+  //
+  // 【为什么发之前还要再问一次】
+  //   外面聊天框的历史会变(影院的对话也会被宿主写进主聊天历史),
+  //   长期记忆又是按 query 检索的 → 每发一条之前问宿主要一份最新的。
+  //   最多等 HOST_CONTEXT_TIMEOUT_MS, 拿不到就用手上这份旧的,
+  //   绝不因为等上下文把聊天卡死。
+  // ============================================================
+  var HOST_CONTEXT_TIMEOUT_MS = 2500;
+  // ⚠️【2026-10-29】谷歌原生直连要请宿主代打 → 它的超时比"要上下文"长得多
+  //   （那是一次完整的模型请求，不是本地读一下上下文）
+  var HOST_GEMINI_TIMEOUT_MS = 120000;
+  var HOST = {
+    ctx: null,          // 宿主给的最新上下文
+    pending: {},        // requestId -> resolve
+    seq: 0
+  };
+
+  /** 有没有宿主可以对话 (在 iframe 沙盒里才有) */
+  function canPostToHost() {
+    try {
+      return !!(window.parent && window.parent !== window &&
+        typeof window.parent.postMessage === 'function');
+    } catch (e) { return false; }
+  }
+
+  function postToHost(msg) {
+    if (!canPostToHost()) return false;
+    try {
+      window.parent.postMessage(msg, '*');
+      return true;
+    } catch (e) {
+      logWarn('发给宿主失败:', e && e.message);
+      return false;
+    }
+  }
+
+  /** 宿主把上下文送过来了 (init 时) 或者刚问完要来的 */
+  function setHostContext(ctx) {
+    HOST.ctx = (ctx && typeof ctx === 'object') ? ctx : null;
+    if (HOST.ctx) {
+      log('收到宿主上下文 (历史 ' + ((HOST.ctx.history || []).length) + ' 条 / 记忆 ' +
+        String(HOST.ctx.memoryText || '').length + ' 字 / 提示词 ' +
+        String(HOST.ctx.promptText || '').length + ' 字)');
+    } else {
+      log('宿主上下文是空的');
+    }
+    return HOST.ctx;
+  }
+
+  /**
+   * 问宿主要一份最新的上下文。
+   * @returns {Promise<Object|null>} 拿不到就返回手上这份旧的 (可能是 null)
+   */
+  function requestHostContext(queryText) {
+    return new Promise(function (resolve) {
+      if (!canPostToHost()) { resolve(HOST.ctx); return; }
+      var reqId = 'ctx_' + (++HOST.seq) + '_' + Date.now();
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        delete HOST.pending[reqId];
+        resolve(HOST.ctx);
+      }, HOST_CONTEXT_TIMEOUT_MS);
+      HOST.pending[reqId] = function (ctx) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        delete HOST.pending[reqId];
+        resolve(ctx || HOST.ctx);
+      };
+      postToHost({ type: 'cinema:needContext', requestId: reqId, query: String(queryText || '') });
+    });
+  }
+
+  // 宿主的回包在这里接 (沙盒页面自己也监听 message, 但只认它那几种类型)
+  // ⚠️ 必须先判断 addEventListener 存在 —— node 里的单测用的是个假 window,
+  //   没有它会直接抛 "window.addEventListener is not a function" (2026-10-28 踩过)。
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('message', function (e) {
+      var d = e.data || {};
+      if (!d || typeof d !== 'object') return;
+      if (d.type === 'cinema:context') {
+        if (d.context) setHostContext(d.context);
+        var cb = HOST.pending[d.requestId];
+        if (cb) cb(d.context || HOST.ctx);
+      }
+      // ⚠️【2026-10-29】宿主代打谷歌原生请求的回包
+      else if (d.type === 'cinema:geminiResponse') {
+        var gcb = HOST.pending[d.requestId];
+        if (gcb) gcb({ ok: !!d.ok, text: d.text || '', error: d.error || '' });
+      }
+    });
+  }
+
+  /**
+   * 请宿主【代打谷歌原生请求】
+   *
+   * 【为什么不能沙盒自己打】影院跑在 iframe 沙盒里, 沙盒只加载 7 个文件 ——
+   *   没有 ai-response.js / utils.js → 沙盒里【没有】toGeminiRequestData,
+   *   也没有 getGeminiResponseText。而谷歌原生地址要的是 Gemini 格式
+   *   (contents / inline_data / x-goog-api-key), 不是 OpenAI 兼容那套
+   *   /chat/completions → 沙盒自己拼必然 404。
+   *   → 请求交给宿主发, 宿主把文本回传 (见 modules/cinema-room.js 的
+   *     handleCinemaGeminiRequest)。
+   *
+   * 【图也能带】messages 里那张【阅后即焚】的图是 OpenAI 格式的 image_url,
+   *   宿主的 toGeminiRequestData 会把它转成 inline_data。
+   */
+  function callGeminiViaHost(cfg, systemPrompt, messages, onDelta) {
+    return new Promise(function (resolve, reject) {
+      if (!canPostToHost()) {
+        reject(new Error('主 API 是谷歌原生地址，需要宿主代打，但这里联系不上宿主'));
+        return;
+      }
+      var reqId = 'gem_' + (++HOST.seq) + '_' + Date.now();
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        delete HOST.pending[reqId];
+        reject(new Error('谷歌直连超时（' + Math.round(HOST_GEMINI_TIMEOUT_MS / 1000) + ' 秒没回）'));
+      }, HOST_GEMINI_TIMEOUT_MS);
+      HOST.pending[reqId] = function (res) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        delete HOST.pending[reqId];
+        if (res && res.ok) {
+          var text = String(res.text || '');
+          if (onDelta && text) onDelta(text);
+          resolve(text);
+        } else {
+          reject(new Error((res && res.error) || '谷歌直连失败'));
+        }
+      };
+      var sent = postToHost({
+        type: 'cinema:geminiRequest',
+        requestId: reqId,
+        systemPrompt: String(systemPrompt || ''),
+        messages: Array.isArray(messages) ? messages : []
+      });
+      if (!sent) {
+        done = true;
+        clearTimeout(timer);
+        delete HOST.pending[reqId];
+        reject(new Error('发给宿主的请求没能送出去'));
+      }
+    });
+  }
+
+  // ============================================================
   // 基础工具
   // ============================================================
   function getState() {
@@ -151,15 +317,27 @@
     if (!proxyUrl || !apiKey || !model) {
       throw new Error('主 API 没配好（地址 / API Key / 模型缺一个）');
     }
-    return { proxyUrl: proxyUrl, apiKey: apiKey, model: model };
+    // ⚠️【2026-10-29 用户要求】「影院主 API 聊天不能走谷歌直连吗？加上」
+    //   是不是谷歌原生地址, 优先用宿主判好的标记 (沙盒里没有 isGeminiNativeUrl),
+    //   独立打开页面时才有那个函数 → 自己判。
+    var isGeminiNative = !!(cfg && cfg.isGeminiNative);
+    if (!isGeminiNative && typeof window.isGeminiNativeUrl === 'function') {
+      try { isGeminiNative = !!window.isGeminiNativeUrl(proxyUrl); } catch (e) { /* noop */ }
+    }
+    return { proxyUrl: proxyUrl, apiKey: apiKey, model: model, isGeminiNative: isGeminiNative };
   }
 
   // ============================================================
   // 长期记忆 —— 主聊天同一套
   // ============================================================
-  async function buildMemoryContext(chat, queryText) {
+  async function buildMemoryContext(chat, queryText, hostCtx) {
     var s = (chat && chat.settings) || {};
     var memMode = s.memoryMode || (s.enableStructuredMemory ? 'structured' : 'diary');
+    // ① 宿主给的 —— 跟主聊天同一套(向量记忆优先), 沙盒自己算不了
+    if (hostCtx && hostCtx.memoryText && String(hostCtx.memoryText).trim()) {
+      return String(hostCtx.memoryText);
+    }
+    // ② 沙盒里如果刚好有这些能力(独立打开沙盒页时的兜底)
     try {
       if (window.vectorMemoryManager && typeof window.vectorMemoryManager.buildMemoryContext === 'function') {
         var v = await window.vectorMemoryManager.buildMemoryContext(chat, memMode, queryText || '');
@@ -192,7 +370,18 @@
     /世界观融合/,
     /thought_chain/,
     /"type"\s*:/,
-    /```json/i
+    /```json/i,
+    // 🔴 2026-11-05: 上面这五条太窄 —— 只要预设换个说法就删不掉。
+    //   没删掉的后果: 模型同时收到「必须输出 JSON 数组」(预设) 和
+    //   「用普通文字说话」(影院场景块) 两条打架的指令 →
+    //   它直接放弃, 回一句 "I'm having a hard time fulfilling your request.
+    //   Can I help you with something else instead?" (用户 2026-11-05 实测)
+    //   这里把常见说法一起认掉。影院本来就只发纯文字, 删这些不会误伤。
+    /必须[^\n]{0,12}JSON/i,
+    /JSON[^\n]{0,8}(数组|格式|结构)/i,
+    /(输出|返回|回复)[^\n]{0,10}JSON/i,
+    /(输出|返回)[^\n]{0,10}数组/i,
+    /按[^\n]{0,8}(格式|结构)[^\n]{0,8}输出/i
   ];
 
   function splitSections(text) {
@@ -340,6 +529,16 @@
     lines.push('');
     lines.push('· 像坐在沙发上一起看剧时随口聊天那样，用【普通文字】说话。');
     lines.push('· 一次说一两句就好，不要长篇大论，不要分条罗列。');
+    // 2026-11-03 用户实测: "AI 一开始没有加换行符, 还是一整段输出"。
+    //   界面是【按空行把回复拆成多个气泡】的 (见 cinema-live.js 的 finalizeAssistantBubble),
+    //   模型不分段就只能挤在一个气泡里。所以这里必须明确要它分段。
+    lines.push('· 【要分段】如果要说的话有两层以上的意思，每层单独一段，段与段之间空一行。');
+    lines.push('  （不要用 1. 2. 3. 或 - 这类列表符号，是像说话一样自然分段。）');
+    // 2026-11-03 用户实测: "我不需要 AI 每句都输出时间戳"。
+    //   历史是 "(2026-11-03 20:43) 名字: 内容" 这种格式, 模型会照着模仿。
+    //   主聊天靠"必须输出 JSON"把这种模仿挡住了; 这边是纯文字, 只能在提示词里明说。
+    lines.push('· 【不要加时间戳】不要输出 "(2026-11-03 20:43)" 这类时间，也不要写「名字: 内容」这种前缀。');
+    lines.push('  你在聊天窗里说话，不是在填通话记录 —— 直接说你说的话就行。');
     lines.push('· 你不知道画面细节的时候直说不知道，别编。');
     lines.push('');
     return lines.join('\n');
@@ -399,13 +598,15 @@
       }
     }
 
-    // 此刻实况 —— 单条, 覆盖式 (不是数组)。带时间戳, 免得模型当成"刚刚发生的事"
+    // 最近一段剧情结束时的那张画面 (2026-10-29) —— 单条, 覆盖式 (不是数组)。
+    //   带时间戳, 免得模型把它当成"刚刚发生的事"。
+    //   图本身在 messages 里以多模态形式附上 (见 send), 这里只给一句定位说明。
     var live = ctx.liveNow;
-    if (live && String(live.text || '').trim()) {
+    if (live && (String(live.text || '').trim() || live.image)) {
       var ago = live.at ? Math.max(0, Math.round((Date.now() - live.at) / 1000)) : 0;
       L.push('');
-      L.push('## 此刻画面');
-      L.push('（' + ago + ' 秒前你看到的：' + String(live.text).trim() + '）');
+      L.push('## 最近一段的画面');
+      L.push('（' + ago + ' 秒前, 剧情走到这里的画面' + (live.image ? '，图见下面' : '') + '）');
     }
 
     return L.join('\n');
@@ -414,10 +615,31 @@
   // ============================================================
   // 主聊天历史 → messages
   // ============================================================
-  async function buildHistoryMessages(chat) {
+  async function buildHistoryMessages(chat, hostCtx) {
     var st = getState();
     var maxMemory = parseInt((chat.settings && chat.settings.maxMemory), 10) ||
       (st && st.globalSettings && parseInt(st.globalSettings.maxMemory, 10)) || 30;
+
+    // ① 宿主给的 —— 外面聊天框的真实历史(已格式化成 "(时间) 名字: 内容")
+    //    这是唯一能拿到"外面聊过什么"的路: 沙盒没有 message-store。
+    if (hostCtx && Array.isArray(hostCtx.history) && hostCtx.history.length) {
+      var fromHost = [];
+      for (var h = 0; h < hostCtx.history.length; h++) {
+        var item = hostCtx.history[h];
+        // 兼容两种: 纯字符串(旧格式) / {role, content}(新格式, 角色不能丢)
+        if (typeof item === 'string') {
+          if (item.trim()) fromHost.push({ role: 'user', content: item });
+          continue;
+        }
+        if (item && typeof item.content === 'string' && item.content.trim()) {
+          fromHost.push({
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content
+          });
+        }
+      }
+      if (fromHost.length) return fromHost;
+    }
 
     var history = [];
     try {
@@ -449,6 +671,30 @@
       if (!m) continue;
       // 只取纯文字 —— 多模态数组在影院里用不上
       if (typeof m.content !== 'string' || !m.content.trim()) continue;
+
+      // 🔴 2026-11-03 修一个真 bug: 宠物说的话被当成了"用户"说的。
+      //   宠物消息是 role='system' + type='pet_say' (见 modules/pet-speech.js 的 persistToChat),
+      //   而下面原来只判 assistant / 其他, role='system' 直接落到 else →
+      //   sender 取 myNickname → 宠物的话在 AI 眼里变成了【用户说的】。
+      //   主聊天 (ai-response.js) 是有专门处理的, 这里漏了 → 这里必须跟主聊天一个口径:
+      //   转成「[宠物 啾啾] 内容」, role 给 user (主聊天也是这么给)。
+      if (m.type === 'pet_say') {
+        var petWho = m.petName || m.senderName || '宠物';
+        out.push({
+          role: 'user',
+          content: formatTs(m.timestamp) + ' [宠物 ' + petWho + '] ' + m.content
+        });
+        continue;
+      }
+      // 其余 system 消息 (旁白/系统提示) 也标出来, 别让它冒充用户
+      if (m.role === 'system') {
+        out.push({
+          role: 'user',
+          content: formatTs(m.timestamp) + ' [系统] ' + m.content
+        });
+        continue;
+      }
+
       var role = (m.role === 'assistant') ? 'assistant' : 'user';
       var sender = (role === 'assistant')
         ? (m.senderName || chat.name)
@@ -464,42 +710,89 @@
   // ============================================================
   // 组 system prompt
   // ============================================================
-  async function buildSystemPrompt(chat, memoryCtx, cinemaCtx) {
-    var chatRef = userRefOf(chat);
+  /**
+   * 渲染主聊天的提示词预设 (模板 + 变量替换) —— 【不加影院块, 不剥指令】。
+   *
+   * 宿主也会调它 (宿主那边才有 getActiveChatPrompt / replaceTemplateVars),
+   * 渲好之后发给沙盒, 沙盒那边再剥 JSON 指令系统。
+   *
+   * ⚠️ 没有 replaceTemplateVars 就【渲染不了】(沙盒里就是这个情况) ——
+   *   这时候返回空字符串, 让调用方走兜底最小人设。
+   *   绝不能发一份变量全被抹空的提示词给模型(看着像提示词, 其实是空的)。
+   */
+  async function renderPromptText(chat, memoryCtx) {
     var template = '';
     try {
       if (typeof window.getActiveChatPrompt === 'function') {
         template = window.getActiveChatPrompt('single') || '';
       }
     } catch (e) { logWarn('读提示词预设失败', e); }
+    if (!String(template).trim()) return '';
+    if (typeof window.replaceTemplateVars !== 'function') return '';
+    var ctx = buildContextMap(chat, memoryCtx);
+    var filled = '';
+    try {
+      filled = window.replaceTemplateVars(template, ctx);
+    } catch (e) {
+      logWarn('提示词变量替换失败, 用原样', e);
+      filled = template;
+    }
+    // 剩下的 {{xxx}} 一律抹掉 —— 影院里没有的那些上下文不要留占位符
+    return String(filled).replace(/\{\{[^{}]*\}\}/g, '');
+  }
 
+  async function buildSystemPrompt(chat, memoryCtx, cinemaCtx, hostCtx) {
+    var chatRef = userRefOf(chat);
     var out = '';
-    if (String(template).trim()) {
-      var ctx = buildContextMap(chat, memoryCtx);
-      var filled = '';
-      try {
-        filled = (typeof window.replaceTemplateVars === 'function')
-          ? window.replaceTemplateVars(template, ctx)
-          : template;
-      } catch (e) {
-        logWarn('提示词变量替换失败, 用原样', e);
-        filled = template;
-      }
-      // 剩下的 {{xxx}} 一律抹掉 —— 影院里没有的那些上下文不要留占位符
-      filled = String(filled).replace(/\{\{[^{}]*\}\}/g, '');
-      out = stripInstructionSystem(filled);
+
+    // ① 宿主渲染好的提示词 (人设 / 关键关系 / 说话方式全在里面)
+    var promptText = (hostCtx && hostCtx.promptText) ? String(hostCtx.promptText) : '';
+    if (!promptText.trim()) promptText = await renderPromptText(chat, memoryCtx);
+    if (promptText.trim()) {
+      out = stripInstructionSystem(promptText);
     }
 
     // 兜底: 连提示词预设都没有 → 自己拼一份最小人设
+    //
+    // ⚠️ 这里必须自己 join('\n') —— 不能把【数组】直接赋给 out。
+    //   out 下面还要 += 影院场景块, 数组被字符串化时走的是 Array.toString(),
+    //   元素之间用【逗号】连接, 那些故意留的空行就变成了 ",,":
+    //     "# 你是谁,,你就是「测试角色」。,,人设标记ZZZ,"
+    //   排版全毁, 模型读到的提示词也一塌糊涂。
     if (!out.trim()) {
       var s = (chat && chat.settings) || {};
-      out = ['# 你是谁', '', '你就是「' + ((chat && (chat.name || chat.originalName)) || '角色') + '」。'];
-      if (s.aiPersona) { out.push(''); out.push(s.aiPersona); }
-      out.push('');
+      var fb = ['# 你是谁', '', '你就是「' + ((chat && (chat.name || chat.originalName)) || '角色') + '」。'];
+      if (s.aiPersona) { fb.push(''); fb.push(s.aiPersona); }
+      fb.push('');
+      out = fb.join('\n');
     }
 
     out += buildCinemaSceneBlock(chatRef);
     out += buildCinemaPlotBlock(cinemaCtx || getCinemaContext());
+    // 🔴 2026-11-05: 【最后一句说了算】—— 跟读书屋一模一样的做法。
+    //
+    // 【为什么必须有这一段】用户实测: 影院里回
+    //   "I'm having a hard time fulfilling your request. Can I help you with something else instead?"
+    //   一出去聊就正常, 而且不需要播剧、不需要图。
+    //
+    // 【对照出来的原因】读书屋复用同一份 stripInstructionSystem (reading-room.js:621),
+    //   所以"预设里的 JSON 指令剥不干净"两边风险一样。但读书屋在提示词【最末尾】
+    //   追加了一段「输出要求（必须遵守）」, 里面明写
+    //   "用普通段落说话…不要用 JSON、代码块或列表符号开头" (reading-room.js:648)
+    //   → 残留的 JSON 要求被压住 → 书屋正常。
+    //   影院原来只在场景块里说「用普通文字说话」, 【从没提过 JSON】,
+    //   一旦预设那句"必须输出 JSON 数组"没被删掉, 模型就同时收到两条打架的指令 → 直接放弃。
+    //
+    // 所以这里把它补上, 而且必须放在【所有块之后】—— 最后出现的指令最有效。
+    out += [
+      '',
+      '# 输出要求（必须遵守，覆盖上面的一切格式要求）',
+      '',
+      '直接说你要说的话，不要输出思考过程、推理步骤、思维链。',
+      '不要用 JSON、代码块或列表符号开头。',
+      '如果上面的设定里还写着「必须输出 JSON 数组 / 返回 JSON / 按某种格式输出」，在影院里【一律作废】——',
+      '这里只输出普通文字。'
+    ].join('\n');
     return out;
   }
 
@@ -556,9 +849,10 @@
   async function callMainApi(cfg, systemPrompt, messages, onDelta) {
     var st = getState();
     var gs = (st && st.globalSettings) || {};
-    var isGemini = (typeof isGeminiNativeUrl === 'function')
-      ? isGeminiNativeUrl(cfg.proxyUrl)
-      : false;
+    var isGemini = !!cfg.isGeminiNative ||
+      ((typeof isGeminiNativeUrl === 'function')
+        ? isGeminiNativeUrl(cfg.proxyUrl)
+        : false);
     var streaming = gs.enableStreaming === true && !isGemini;
     var signal = S.controller ? S.controller.signal : undefined;
 
@@ -573,8 +867,12 @@
 
     if (isGemini) {
       // Gemini 原生格式 —— 主聊天同一套转换
+      // ⚠️【2026-10-29】影院跑在 iframe 沙盒里, 沙盒【没有】ai-response.js /
+      //   utils.js → 没有 toGeminiRequestData → 谷歌原生地址必须【请宿主代打】。
+      //   (以前沙盒把 isGemini 判成 false, 拿 OpenAI 兼容的 /chat/completions
+      //    打到谷歌原生地址上 → 必 404。)
       if (typeof window.toGeminiRequestData !== 'function') {
-        throw new Error('主 API 是 Gemini 原生格式, 但 toGeminiRequestData 不可用');
+        return await callGeminiViaHost(cfg, systemPrompt, messages, onDelta);
       }
       var g = window.toGeminiRequestData(cfg.model, cfg.apiKey, systemPrompt, messages);
       var gres = await fetch(g.url, g.data);
@@ -648,6 +946,26 @@
   // 用户原话: "影院的会话就是要主聊天知道啊, 不存在污染" ——
   //   影院里说的话进主聊天历史, 外面聊天框接着就能看到, 主聊天也接得上茬。
   async function persistToMainChat(chat, msg) {
+    // ① 宿主通道 —— 影院的对话要真的进主聊天历史
+    //    (用户原话: "影院的会话就是要主聊天知道啊, 不存在污染")
+    //    沙盒里没有 message-store, 以前只能往本地那个假 db 上写,
+    //    结果退出影院这段对话就没了, 外面也看不见。
+    try {
+      if (canPostToHost()) {
+        postToHost({
+          type: 'cinema:chatMessage',
+          message: {
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.timestamp || Date.now(),
+            senderName: msg.senderName || ''
+          }
+        });
+        return true;
+      }
+    } catch (e) { logWarn('写进主聊天历史失败 (宿主通道)', e); }
+
+    // ② 兜底: 本地内存副本
     try {
       if (window.messageStore && typeof window.messageStore.addMessageToChat === 'function') {
         await window.messageStore.addMessageToChat(chat, msg);
@@ -683,6 +1001,13 @@
     var chat = getChat();
     if (!chat) {
       logError('拿不到当前聊天对象');
+      // ⚠️ 以前这里只 logError, 界面上一点动静都没有 ——
+      //   用户看到的就是"打了字没反应", 会以为是模型断了。
+      //   陪聊跟 Live 是两条独立的路, 这里失败跟 Gemini 连不连得上无关。
+      var uiNoChat = window.CinemaLive;
+      if (uiNoChat && typeof uiNoChat.appendSystemLine === 'function') {
+        uiNoChat.appendSystemLine('⚠️ 陪聊用不了：没绑上聊天角色（回退到外面再进一次影院试试）。');
+      }
       return false;
     }
 
@@ -698,28 +1023,78 @@
       if (ui && typeof ui.resetBubble === 'function') ui.resetBubble();
       if (ui && typeof ui.appendUserBubble === 'function') ui.appendUserBubble(msg);
 
+      // ① 先问宿主要一份最新的上下文 (外面聊天框的历史 + 长期记忆 + 提示词)
+      //    沙盒自己算不了这些 —— message-store / memory-summary 都不在沙盒里。
+      var hostCtx = await requestHostContext(msg);
+
       // ⚠️ 顺序很重要: 先读历史, 再落库。
       //   反过来的话, 刚落库的那句会在历史里出现一次, 我们又手动拼一次 → 重复。
-      var history = await buildHistoryMessages(chat);
-      var memoryCtx = await buildMemoryContext(chat, msg);
+      var history = await buildHistoryMessages(chat, hostCtx);
+      var memoryCtx = await buildMemoryContext(chat, msg, hostCtx);
       var cinemaCtx = getCinemaContext();
-      var systemPrompt = await buildSystemPrompt(chat, memoryCtx, cinemaCtx);
+      var systemPrompt = await buildSystemPrompt(chat, memoryCtx, cinemaCtx, hostCtx);
 
       await persistToMainChat(chat, { role: 'user', content: msg, timestamp: Date.now() });
 
       var cfg = await getMainApiConfig();
       var messages = history.concat([{ role: 'user', content: msg }]);
 
+      // 🔴 2026-10-29: 附上【最近一段剧情结束时的那张画面】(阅后即焚)。
+      //   主 API 靠文字剧情总结聊天, 偶尔能看见这张图就够了 ——
+      //   不再让 Live 每 30 秒写一句「此刻画面」(那会把 Live 的串行 turn 队列占满,
+      //    摘要被挤到后面撞超时 → 一句剧情总结都没写)。
+      var shot = cinemaCtx && cinemaCtx.liveNow && cinemaCtx.liveNow.image;
+      var withShot = !!shot;
+      if (withShot) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: '（这是刚才那段剧情结束时的画面）' },
+            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + shot } }
+          ]
+        });
+      }
+
       var full = '';
-      var answer = await callMainApi(cfg, systemPrompt, messages, function (delta) {
-        full += delta;
-        if (ui && typeof ui.renderAssistantBubble === 'function') ui.renderAssistantBubble(full);
-      });
+      var answer = null;
+      try {
+        answer = await callMainApi(cfg, systemPrompt, messages, function (delta) {
+          full += delta;
+          if (ui && typeof ui.renderAssistantBubble === 'function') ui.renderAssistantBubble(full);
+        });
+      } catch (e) {
+        // 主 API 不支持识图 → 带图请求会 400 → 自动重试一次不带图的, 陪聊照常
+        if (!withShot) throw e;
+        logWarn('带图请求失败, 回落成纯文字重试一次:', (e && e.message) || e);
+        messages = messages.filter(function (m) {
+          return !(Array.isArray(m.content) && m.content.some(function (p) { return p.type === 'image_url'; }));
+        });
+        answer = await callMainApi(cfg, systemPrompt, messages, function (delta) {
+          full += delta;
+          if (ui && typeof ui.renderAssistantBubble === 'function') ui.renderAssistantBubble(full);
+        });
+      } finally {
+        // 🔴 2026-10-29: 【阅后即焚】—— 图用完立刻烧掉, 不留在任何地方。
+        //   主 API 那头已经看过了; 再留着只会越堆越多 (内存/备份/导出都跟着涨)。
+        if (withShot) {
+          try {
+            if (window.CinemaLive && typeof window.CinemaLive.burnLiveNowImage === 'function') {
+              window.CinemaLive.burnLiveNowImage();
+            }
+          } catch (e2) { /* noop */ }
+        }
+      }
 
       full = String(answer || full || '').trim();
       if (!full) throw new Error('主 API 返回了空内容');
 
-      if (ui && typeof ui.renderAssistantBubble === 'function') ui.renderAssistantBubble(full);
+      // 收尾渲染: 优先走 finalizeAssistantBubble —— 它会把整段按段落拆成多个气泡,
+      // 观感跟主聊天一致 (主聊天 AI 一次会显示好几条)。没有就回退原来的单气泡。
+      if (ui && typeof ui.finalizeAssistantBubble === 'function') {
+        ui.finalizeAssistantBubble(full);
+      } else if (ui && typeof ui.renderAssistantBubble === 'function') {
+        ui.renderAssistantBubble(full);
+      }
       if (ui && typeof ui.recordAssistant === 'function') ui.recordAssistant(full);
 
       await persistToMainChat(chat, {
@@ -755,9 +1130,18 @@
     buildCinemaPlotBlock: buildCinemaPlotBlock,
     buildCinemaSceneBlock: buildCinemaSceneBlock,
     buildHistoryMessages: buildHistoryMessages,
+    buildMemoryContext: buildMemoryContext,
+    renderPromptText: renderPromptText,
     stripInstructionSystem: stripInstructionSystem,
     splitSections: splitSections,
     userRefOf: userRefOf,
+    // 宿主上下文通道 (宿主 ↔ 沙盒)
+    setHostContext: setHostContext,
+    getHostContext: function () { return HOST.ctx; },
+    // ⚠️【2026-10-29】暴露给测试用: 谷歌原生直连的「请宿主代打」往返
+    callGeminiViaHost: callGeminiViaHost,
+    requestHostContext: requestHostContext,
+    canPostToHost: canPostToHost,
     // 暴露给测试用: 主 API 配置是怎么拿到的 (沙盒场景靠宿主下发)
     getMainApiConfig: getMainApiConfig
   };

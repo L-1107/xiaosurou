@@ -2259,6 +2259,58 @@ ${tasksString}
     }
   }
 
+  // ============================================================================
+  // 🔴 2026-11-05: 宿主静默 —— 影院 iframe 打开时, 宿主这些常驻任务一起停
+  //
+  // 【为什么】用户真机实测 (A/B/C 三组):
+  //   A 宿主单独开着         → 冷冰冰
+  //   C 影院沙盒单独看一集   → 冷冰冰
+  //   B 宿主里套着影院看一集 → 开始发烫 (再聊天更烫)
+  // ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】。
+  //
+  // 宿主除了画面那些动画, 还有这几个【一直跑着的定时器】:
+  //   · 后台活动模拟   (每 60 秒, 可能发 AI 调用)
+  //   · AI 提醒扫描    (每 30 秒)
+  //   · 无声智能保活   (Web Worker 心跳 + 屏幕 WakeLock —— 最费电的一个)
+  // 影院开着的时候它们一个都用不上 → 一起停, 退出影院再原样恢复。
+  //
+  // 【恢复原则】只恢复【进影院之前就在跑】的那些,
+  //   不给用户凭空多开一个后台活动 (总开关关着就还是关着)。
+  // ============================================================================
+  let hostTaskPauseState = null;
+
+  function pauseHostBackgroundTasks() {
+    if (hostTaskPauseState) return;
+    hostTaskPauseState = {
+      simulation: !!simulationIntervalId,
+      reminder: !!aiReminderSchedulerIntervalId,
+      keepAlive: !!smartKeepAliveEnabled
+    };
+    try { stopBackgroundSimulation(); } catch (e) { /* noop */ }
+    try { stopAIReminderScheduler(); } catch (e) { /* noop */ }
+    try { stopSmartKeepAlive(); } catch (e) { /* noop */ }
+  }
+
+  function resumeHostBackgroundTasks() {
+    if (!hostTaskPauseState) return;
+    var was = hostTaskPauseState;
+    hostTaskPauseState = null;
+    if (was.simulation) {
+      try { startBackgroundSimulation(); } catch (e) { /* noop */ }
+    }
+    if (was.reminder) {
+      try { startAIReminderScheduler(); } catch (e) { /* noop */ }
+    }
+    if (was.keepAlive) {
+      try {
+        // startSmartKeepAlive 是 async —— 别让它的 reject 变成没人接的异常
+        Promise.resolve(startSmartKeepAlive()).catch(function (e) {
+          console.warn('[SmartKeepAlive] 恢复失败:', e);
+        });
+      } catch (e) { /* noop */ }
+    }
+  }
+
   // ========== 全局暴露 ==========
   window.generateAiReminderText = generateAiReminderText;
   window.scanDueAiReminders = scanDueAiReminders;
@@ -2276,6 +2328,9 @@ ${tasksString}
   // 无声智能保活 (移植自社区版 background-activity.js, 2026-07-18)
   window.startSmartKeepAlive = startSmartKeepAlive;
   window.stopSmartKeepAlive = stopSmartKeepAlive;
+  // 🔴 2026-11-05: 宿主静默 (影院 iframe 打开时用, 见下面 pauseHostBackgroundTasks)
+  window.pauseHostBackgroundTasks = pauseHostBackgroundTasks;
+  window.resumeHostBackgroundTasks = resumeHostBackgroundTasks;
   // 关联修复：init-and-state.js:689 一直在调 window.loadBackgroundKeepAliveSettings，
   // 原文件没暴露导致 init 走不到。顺手补上，与 bind 一起暴露保持一致。
   window.loadBackgroundKeepAliveSettings = loadBackgroundKeepAliveSettings;

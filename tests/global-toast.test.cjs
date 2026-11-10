@@ -265,7 +265,22 @@ section('接线 + 版本号');
   check('features-3.css 的 ?v= 已 bump（不 bump 手机上吃旧样式，还是顶部白胶囊）',
     vCss === '0.0.37', '实际 ' + vCss);
   const cv = (sw.match(/const CACHE_VERSION = '([^']+)'/) || [])[1];
-  check('sw.js 的 CACHE_VERSION 已 bump', cv === 'v0.2.83.0', String(cv));
+  // ⚠️ 这里原来写死 'v0.2.83.0' —— CACHE_VERSION 每改一次就会误报一次
+  //   (2026-10-28 实测: sw.js 已经是 v0.2.84.0, 这个断言一直在报红,
+  //    跟 toast 本身一点关系都没有, 属于【测试自己过期了】)。
+  //   → 改成"不低于 v0.2.83.0": 既守住"必须 bump 过"这件事, 又不会被后面的 bump 打脸。
+  const cvParts = (cv || '').replace(/^v/, '').split('.').map(Number);
+  const atLeast = (v, min) => {
+    if (!v || v.length === 0) return false;
+    for (let i = 0; i < min.length; i++) {
+      if (!Number.isFinite(v[i])) return false;
+      if (v[i] > min[i]) return true;
+      if (v[i] < min[i]) return false;
+    }
+    return true;
+  };
+  check('sw.js 的 CACHE_VERSION 已 bump（不低于 v0.2.98.0）',
+    atLeast(cvParts, [0, 2, 83, 0]), String(cv));
   check('showToast 默认时长是 5 秒', /function showToast\(message, type = 'info', duration = 5000\)/.test(js));
   check('正文走 textContent（不是 innerHTML）',
     /textEl\.textContent = displayMsg/.test(js));

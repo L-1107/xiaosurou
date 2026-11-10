@@ -459,7 +459,769 @@
 //   index.html 的 ?v=：modules/cinema-room.js 0.29.3 → 0.29.4、modules/cinema-live.js 1.9.7 → 1.9.8、
 //   modules/cinema-chat.js 0.0.1 → 0.0.2；cinema-sandbox/index.html 里那三个也一起对齐。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.84.0';
+// v0.2.85.0 (2026-10-28): 影院「陪聊接不上话 / 导出丢剧情 / 长片卡住」三件一起修。
+//   起因（用户实测）：看一部长剧，5 分钟时总结了剧情，然后 Live 断了重连 —— 视频模型回来了，
+//   影院里主 API 聊天却接不上话；主 API 在影院里【没有外面聊天框的上文记忆】；
+//   导出剧情记忆后【长期记忆里没有内容】，之前的也白看了；退出再进影院剧就卡住放不动；
+//   出错退出来以后【外面也不能聊天】，只有大退才恢复。
+//   ① 陪聊零上文（真因：影院跑在 iframe 沙盒里，沙盒只加载 7 个文件 —— 没有 message-store.js
+//      / memory-summary.js / settings-presets.js / ai-response.js，外面的一切它都算不出来）。
+//      修法：宿主算好【外面聊天框的历史 + 长期记忆 + 主聊天提示词预设】发给沙盒
+//      （cinema:init 补发 + cinema:needContext 每次发消息前问一次），沙盒照单全收。
+//   ② 导出只落最后一块（真因：沙盒里的 db.chats 是【假的】 —— 它只把 longTermMemory 的
+//      最后一条 postMessage 给宿主，前面几条全丢；而导出紧接着把全部行从库里删掉）。
+//      修法：新增显式通道 cinema:exportMemory —— 沙盒把【全部】chunk 发给宿主，
+//      宿主写进真实长期记忆并回 ack，沙盒【收到 ack 才清账】，没写成功一行都不删。
+//   ③ 影院里说的话不落主聊天历史 → 新增 cinema:chatMessage，宿主用 messageStore 写进去。
+//   ④ 长片卡住（真因链：Live 推帧【完全没有背压保护】，连接一卡浏览器就无限缓冲待发帧；
+//      服务端 goAway 之后还在猛推帧，把重连用的存档点撑爆）。
+//      修法：bufferedAmount 超 2MB 就丢帧并告诉用户；goAway 立刻停推帧，重连成功再恢复。
+//      另外大文件提示改成说实话（会「播一截就卡住」+ 建议走短剧库流式播）。
+//   ⑤ 退出影院后「外面也不能聊天，只有大退才恢复」（真因：影院那个 iframe 是
+//      position:fixed + inset:0 + z-index:2147483647 —— 整个屏幕都在它下面，
+//      连外面顶栏和「再点一次退出」那个按钮都在它底下；而外面收掉它的唯一途径
+//      = 影院发一条 cinema:closed，那条消息只要没送到（影院退出流程中途抛异常 /
+//      影院页被重载 / 影院页崩了），整个 app 就被一个黑框盖死，外面点哪儿都没反应）。
+//      修法：① 房间在 documentElement 上挂 data-cinema-room-open="1"；
+//      ② 外面每 700ms 直接读 iframe 的 DOM（同一个站，读得到），标记没了就自己收掉；
+//      ③ 影院页 pagehide 时也补发一条 cinema:closed（覆盖「影院页被换掉/重载」）。
+//   index.html 的 ?v=：modules/cinema-room.js 0.29.4 → 0.31.0、modules/cinema-live.js 1.9.8 → 1.9.9、
+//   modules/cinema-chat.js 0.0.2 → 0.0.3、modules/live-client.js 0.4.0 → 0.4.1、
+//   modules/cinema-room.css 0.38.1 → 0.38.2；cinema-sandbox/index.html 里那几个也一起对齐
+//   （沙盒的 live-client.js 以前还挂着一个 ?v=0.1.0 的老缓存键，这次一并对齐）。
+// v0.2.86.0 (2026-10-28): 宠物屋三修（用户 2026-10-28 实测三连报）
+//   ① 每日换装没换衣服也没道具：蜕变提示词里「按今天这身重画」那句被
+//      "Additional detail to add: ..." 分支整条替换掉了 → 模型拿旧参考图照抄。
+//      修法：那句永远保留，再加一句点名六格都要有道具。
+//      另修「道具全网都是小碗」：关键词表里大半是泛词（吃/饭/饿/喝/睡/冷/热…），
+//      谁的一天都有 → 全都命中「一只小碗」，而同分时又按【中文名】排 → 全体第一个都是小碗。
+//      修法：泛词命中不算数 → 走【天+种子】兜底（每人每天都不一样）。
+//      ⚠️ 判据是「这个词泛不泛」，不是「关键词有两个字以上」——
+//         「听了一首歌」的"歌"、「读了一本书"的"书/读"都是单字，可那恰恰最该命中。
+//   ② 宠物说的话不落进聊天框：window.renderChatMessages 全项目根本没定义
+//      （真正渲染聊天的是 window.renderChatInterface）→ 那个 typeof 判断永远为假
+//      → 话写进库了但界面从不重绘 → 必须退出聊天框再进才看得见。
+//      修法：改调 renderChatInterface(chatId)（保留 renderChatMessages 兜底）。
+//      另修：启动时 state.activeChatId 还没设 → 一句都没写进任何会话
+//      → 新增 mostRecentChat()，按 lastMessageTimestamp 落到最近聊过的会话。
+//   ③ 桌宠太小：桌面 78px → 98px、手机 66px → 83px（用户要 20~30%，取中值 25%），
+//      尺寸统一走 CSS 变量 --pn-desktop-pet-size，要调只改那一个值。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.23 → 0.0.24、modules/pet-image.js 0.0.4 → 0.0.5、
+//   modules/pet-speech.js 0.0.2 → 0.0.3、modules/proactive-wake.js 0.2.15 → 0.2.16、
+//   modules/in-app-proactive-patrol.js 0.2.17 → 0.2.18、css/pet-nest.css 0.0.13 → 0.0.14。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.87.0 (2026-10-28 下午): 宠物屋服装库重做（用户「像奇迹暖暖那样的娃衣一堆堆」）
+//   ① 衣服 BEAST_OUTFITS 20 → **72 件**，6 个系列（甜品/童话/星际/国风/海洋/魔法萌）各 12 件，
+//      全部重写成"娃衣"风格；原来 200 只宠物平均每 10 只就撞同一件（最热 16/200），
+//      现在最热 8/200，且连续三天基本不重样。
+//   ② 道具新增 **40 件"每日造型款"**（带 series 标签）；旧的 43 件日常道具保留 ——
+//      它们只从「当天记忆里挑出来」那条路出现（用户明确要"道具服饰在记忆里匹配"）。
+//   ③ 兜底挑道具时按【衣服的系列】挑 → 没聊东西的日子 = 衣服+配套道具一整套（暖暖式套装感）。
+//   ④ 新增 sameItem() → 衣服和道具不会撞成同一件东西。
+//      → 「一块小磨刀石」「一块小砖头」这类日常杂物不再出现在服饰描述里（用户反馈）。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.24 → 0.0.25。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.88.0 (2026-10-28 下午): 生图配色跟参考图走（用户「玫红色想保持住」）
+//   参考图一直是【上一次生成的那张】(row.assetRef 链式往前滚)，不是第一次破壳那张。
+//   真正把颜色拉回去的是提示词: 幻兽配色领养时就定死(BEAST_PALETTES 16 选 1)，
+//   每次请求都硬写 "with deep berry purple fur"，跟参考图里的玫红打架
+//   (而 buildEvolvePrompt 第一句又要求 "same colors") → 颜色在紫黑↔玫红之间反复漂。
+//   修法: 有参考图(蜕变) → 不写死配色，改成 "in exactly the same colours as the reference image"；
+//         没有参考图(首次生成) → 照旧写盲盒配色；羽化(终形态)例外，本就该换配色。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.25 → 0.0.26。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.89.0 (2026-10-29): 家庭影院「进备份」的漏洞 —— 立绘/背景是 Blob, 一律被压成 {}。
+//   起因（用户原话）：「发现一个问题，家庭影院记录是不是没进备份？」
+//   查出来的事实：宿主主库 6 张影院表里两张带二进制 ——
+//     cinemaChars { id, image: Blob }  ← 人物立绘 + 房间背景
+//     cinemaBlobs { id, file: File }   ← 影片本体
+//   备份是 JSON.stringify 出来的 → Blob/File 一律被压成 {} ⇒ 立绘整个丢掉。
+//   修法：① 立绘/背景导出时转 base64 dataURL，导入时还原成 Blob（位置/大小照旧）；
+//        ② 影片本体不进备份（太大，base64 会撑爆手机内存）—— 元数据/进度保留，
+//           换设备后重新加一次文件；导入时老备份里的空壳 {} 会被清掉，
+//           免得 createObjectURL({}) 抛异常。
+//   6 条导出链路（分片ZIP/流式/传统Blob/选择性/GitHub分片/GitHub大数据）都接上了，
+//   4 条导入链路（整库/选择性/高级合并/GitHub恢复）都接上了。
+//   ⚠️ 还原 Blob 要 await blob.arrayBuffer()，那不是 IDB 请求 ——
+//      在 Dexie 事务里 await 会让事务提前提交，所以还原放在事务【外面】做。
+//   index.html 的 ?v=：modules/backup-import-export.js 0.0.39 → 0.0.40。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.91.0 (2026-10-29): 影院「越看越烫 / 一句剧情总结都没写 / 十五分钟闪退」真修法。
+//   起因（用户原话）：「本地视频看的时候越看手机越烫，看了十分钟动漫一句剧情总结都没写，
+//   最后十五分钟左右浏览器崩溃闪退」「以前放这种动漫不会闪退的」。
+//
+//   ⚠️ 上一版（本地没发出去的 v0.2.90.0）方向【错了】：当时以为是"传太多画面"，
+//   于是把帧率降到 0.2 FPS、长边砍到 512。用户当场反驳：
+//   「从一开始就是一秒一帧没变过，刚写好时放一集根本不会发热闪退」
+//   —— 对，1 FPS 从来没被改过，而"刚写好"的那版是稳的 → 差异变量不在帧率。
+//
+//   【对照实验证实】探针 _reports/pet-test/probe-cinema-before-after.cjs
+//   把真的 cinema-live.js + live-client.js 装进 Node vm（假时钟 + 假 WebSocket +
+//   真串行 turn 队列），15 分钟秒级跑完，同一份代码只切实况通道开关：
+//                        帧数   上行    turn   摘要写进   单turn最多帧  输入token累计
+//     BEFORE 线上版        902  79.3MB   28       0 段        899 帧      3351K
+//     AFTER  现在版        902  79.3MB    7       7 段        119 帧       165K
+//   → 帧数/上行【完全一样】→ 降帧碰不到任何差异变量。
+//   → 真凶 = 2026-10-23 d0f41e1 引入的「此刻画面」实况通道：
+//       Live 的 turn 是【串行队列】，实况每 30 秒占一个 turn；
+//       而每个 turn 都要重读会话里累积的全部帧（官方：视频输入 258 token/帧），
+//       会话窗口只有 128,000 token → 实况把摘要挤到后面排队 141~173 秒
+//       → 撞 90 秒超时 → 【一句剧情总结都没写】；
+//       累积帧涨到 899 帧 = 单 turn 输入 232K token → 早就超了窗口
+//       → 重连还带 resume handle 继承爆掉的上下文 → 重连风暴 → 狂热 + 闪退。
+//
+//   【改了什么】
+//     · 【取消「此刻画面」实况通道】—— Live 的 turn 队列只留给剧情摘要；
+//     · 帧率画质【一律不动】：1 FPS / 长边 768 / JPEG q0.6（用户明确要保画质）；
+//     · 长剧摘要 5 分钟 → 2 分钟一段；内容下限 80 字 → 50 字；
+//     · 每次摘要截【一张】画面给主 API，【阅后即焚】（只在内存，请求发完就烧，
+//       不落库、不进备份、不进导出、不进草稿，恒定最多一张）；
+//     · 【每次摘要尝试之后】换干净会话（成功失败都换）—— 单个 turn 的输入
+//       永远只有这一段的量（2 分钟 @ 1 FPS = 120 帧 = 30,960 token = 预算 24%），
+//       永远不撞 128,000 上限；失败也换是防止"累积帧涨→更慢→更失败"的恶性循环；
+//     · 保留 v0.2.90.0 做对的部分：摘要超时 90s、失败在聊天框里明说 + 60 秒重试、
+//       抽帧前先问背压、诊断日志写 localStorage。
+//
+//   index.html 的 ?v=：modules/cinema-live.js 2.0.0 → 2.1.0、
+//   modules/cinema-chat.js 0.0.4 → 0.1.0；cinema-sandbox/index.html 里那两个也一起对齐。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.92.0 (2026-10-29): 宠物屋 —— 鹦鹉换装「只有徽章，没有新衣服」。
+//   用户原话：「怎么我刚才更新了，鹦鹉只有徽章，没有新衣服」。
+//
+//   【真因】探针 _reports/pet-test/print-real-prompt.cjs 把【真正发出去的提示词】打出来:
+//   ① 六格姿态 + 布局全是【四足哺乳动物】的词:
+//        "sitting with one front paw raised" / "curled up asleep" / "lying down"
+//        布局那句还写着 "its ears, tail, paws and outfit"
+//      → 让模型画一只【鸟】+ 抬前爪 → 它把鹦鹉画成毛球兽
+//      → 人穿的衣服(草莓裙/小熊睡衣/绣花鞋)根本穿不上去
+//      → 只会把「胸口别个小东西」画成一枚徽章 ⇒ 用户看到的正是「只有徽章」
+//   ② 那 72 件衣服里, 鸟穿不了一批(裙/连体衣/鞋/袜/围裙),
+//      还有两件是「胸口别个小东西」(薄荷糖/珍珠胸针) → 画出来也是徽章
+//   ③ 道具表里一批写的是 "in its paws" → 鸟没有爪子 → 模型给它配上两只小爪
+//
+//   【改了什么】只动鹦鹉, 猫狗/幻兽一行不碰:
+//   · pet-image.js: 六格姿态 + 布局按种类给 —— 鹦鹉用鸟的姿态
+//     (站枝头 / 闭眼 / 埋头理羽 / 低头啄食 / 仰望 / 展翅),
+//     布局改成 "its beak, head, wings, tail feathers and outfit";
+//   · pet-nest.js: 新增 PARROT_OUTFITS(24 件, 6 系列各 4 件) ——
+//     鸟穿得上的衣服: 领结/帽/围巾/斗篷/皇冠/花环/背带/披肩/斗笠…;
+//   · pet-nest.js: 鹦鹉的道具 "in its paws" → "in its beak";
+//   · pet-nest.js: 把宠物的 kind 传进 dailyLookFor / 生图入口
+//     (鹦鹉按 kind 挑自己那套衣服 + 用鸟的姿态画六格);
+//   · pet-nest.js: currentLook / 破壳那条路也传 kind ——
+//     否则【名册写的衣服】和【图上画的衣服】不是同一套(2026-10-28 刚修过的老毛病)。
+//
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.26 → 0.0.27、
+//   modules/pet-image.js 0.0.5 → 0.0.6。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.93.0 ─────────────────────────────────────────────────
+//   【本轮两件事】
+//   ① 生图次数不再限制 3 次 —— 用户 2026-10-29 说「反正画多少自己掌握」
+//      · pet-image.js: CFG.dailyLimit 3 → 0 (0 = 不限);
+//        两处上限判断加 limit > 0 守卫 (limit=0 时不能当成「用满了」)。
+//      · pet-nest.js: autoLookLimit() 0 = 不限;
+//        maybeDailyRedraw 的 if (limit > 0 && used >= limit) ——
+//        否则 limit=0 会把【自动换装】也一起卡死。
+//      · 显式设上限 / 显式 budget 仍然拦得住 (机制没坏, 只是默认不限)。
+//
+//   ② 影院主 API 聊天走【谷歌原生直连】
+//      · cinema-room.js (宿主): resolveMainApiConfig() 标 isGeminiNative;
+//        新增 handleCinemaGeminiRequest() —— 用宿主已有的
+//        toGeminiRequestData / getGeminiResponseText, 不另写一份;
+//        消息监听加 cinema:geminiRequest 分支, 回 cinema:geminiResponse。
+//      · cinema-chat.js (沙盒): 新增 callGeminiViaHost() ——
+//        沙盒里没有 ai-response.js, 所以由宿主代打;
+//        沙盒没有 toGeminiRequestData 时不再直接报错, 改走宿主代打。
+//
+//   index.html 的 ?v=：modules/cinema-room.js 0.32.0 → 0.33.0、
+//   modules/cinema-chat.js 0.1.0 → 0.2.0、
+//   modules/pet-nest.js 0.0.27 → 0.0.28、
+//   modules/pet-image.js 0.0.6 → 0.0.7。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.94.0 ─────────────────────────────────────────────────
+//   【本轮两件事】用户 2026-10-29 实测
+//
+//   ① 影院「live 断了怎么都重连不上 / 再进去看再久都不总结剧情」
+//      · live-client.js: reconnect() 以前【不关旧 socket】——
+//        connect() 里 self.ws = ws 直接覆盖了引用, 旧 socket 变孤儿,
+//        但它的 onclose 还绑在同一个 self 上:
+//          旧 socket 一关 → setupDone=false → 【新连接被判死】
+//          → isReady() 永远为假 → 上层 waitUntilReady 超时 →
+//            判定重连失败 → 再排一次重连 → 死循环
+//          → 而且 isReady() 永远为假 → 摘要那条路每次早退 → 一句都不写
+//      · 现在: 先把旧 socket 的回调摘掉, 再关掉它, 最后 this.ws = null。
+//        (探针 _reports/pet-test/probe-live-reconnect.cjs 实锤)
+//      · cinema-live.js: resetSession() 的 promise 以前没人接 →
+//        失败时是 unhandled rejection 且【不会触发任何重连安排】;
+//        现在接住它, 失败就按「重连」处理。
+//      · cinema-live.js: live 长时间没 ready 时, 聊天区会明说
+//        「Gemini Live 还没连上 —— 剧情要靠它整理, 所以现在还没写」
+//        (以前是静默早退, 用户只看到「一句总结都没写」, 完全查不到原因)
+//
+//   ② 宠物屋「桌宠下方很长一个空间, 点到都会挪动宠物或弹菜单」
+//      · 精灵是六格图集, 宠物只占格子中间一部分, 下面那截是透明的;
+//        事件又绑在整个容器 #pn-desktop-pet 上 → 空白照样能点。
+//      · 实测: 宠物可见高只占格高 50%~91%, 下方平均空出 9%~20% 格高,
+//        再加名字标签 → 宠物下面近 30px 看不见但能点。
+//      · 现在: 运行时用 canvas 量一次图集, 算出每帧的可见包围盒;
+//        点的时候按坐标判, 点了空白就当没点。量不到就保守放行。
+//
+//   index.html 的 ?v=：modules/live-client.js 0.5.0 → 0.6.0、
+//   modules/cinema-live.js 2.1.0 → 2.2.0、
+//   modules/pet-nest.js 0.0.28 → 0.0.29。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.95.0 ─────────────────────────────────────────────────
+//   【本轮】影院「只总结了第一段, 之后就再也没总结」(用户 2026-10-29 实测)
+//
+//   【为什么之前一直没抓住】tests/cinema-heat.test.cjs 第 6 节只断言
+//     `segCount >= 1` —— 而用户的症状正好是「只有第一段」, >= 1 照样通过!
+//   探针 _reports/pet-test/probe-cinema-stall-ab.cjs 在同一场景下:
+//     线上版(origin/main) = 1 段  ← 用户的症状原样重现
+//     修好后             = 2 段  ← live 能自己爬起来
+//
+//   【真因】重连 5 次失败后【彻底放弃】→ live 永远回不来
+//     → isReady() 永远为假 → 剧情摘要一句都不写 (只留下第一段)。
+//     诊断原文: 「连续重连 5 次仍失败，已停止自动重连。」
+//
+//   cinema-live.js 改了这些:
+//     · scheduleReconnect: MAX_RETRY 用完不再 return 死掉, 改成每 60 秒继续重试
+//       (提示只说一次, 不刷屏); 重连执行体抽成 attemptReconnect()
+//     · 新增【摘要看门狗】: 每 30 秒检查 —— 摘要定时器丢了就补排,
+//       live 停在 closed/error/idle 就安排重连
+//     · resumeFrames: live 还没 ready 也要把摘要定时器排上
+//       (iOS PWA 切后台必断 WebSocket, 原来这里直接 return → 定时器永远没了)
+//     · enable() 失败不再 S.enabled = false (关掉 = 摘要每次早退 + 再也没人重连)
+//     · onClientState: 补 error 状态分支 (连失败一次就永不重连的老毛病)
+//     · tickStageSummary: 清掉已触发的定时器句柄 (看门狗据此判断定时器不见了)
+//
+//   index.html 的 ?v=：modules/cinema-live.js 2.2.0 → 2.3.0。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// ── v0.2.98.0 ─────────────────────────────────────────────────
+//   【本轮】宠物屋「初始物种形象」（垫图）—— 2026-10-30 用户定的
+//
+//   【用户原话】
+//     「我之前宠物系统的设计是每天换装的时候，拿头一天的图去垫图画新衣服新形象，
+//       结果因为每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了，
+//       时间久了肯定更严重，我想改成以后用用户指定的形象去垫」
+//
+//   【真因】generateNewLook() 的参考图一直是【上一张生成的图】→
+//     /images/edits 让模型在昨天那张上改 → 脸/花纹/衣服一层层叠上去 →
+//     越画越不像，时间越久越严重。
+//
+//   【改法】新增「用户指定的初始形象」当【固定锚点】：
+//     · pet-nest.js: DB 升到 v4, 新增 speciesImages 表(主键 petId)；
+//       generateNewLook 优先拿它当参考图(拿不到才回退到上一张)；
+//       设置页新增「宠物初始形象」那栏, 一只宠物一张, 可上传/更换/清除。
+//     · pet-image.js: 新增 prepareSpeciesImage()（上传图居中裁方 + 缩到 640 + 转 PNG）；
+//       参考图是【单人像】时提示词必须换（不能再说「参考图里有六个姿势」），
+//       并加一句「只取物种/长相/配色, 忽略参考图里的衣服和背景」。
+//     · ⚠️ 蛋还没孵出来时不用这张图（那时画的是蛋）。
+//
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.33 → 0.0.34、
+//   modules/pet-image.js 0.0.7 → 0.0.8、css/pet-nest.css 0.0.17 → 0.0.18。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// ── v0.2.99.0 ─────────────────────────────────────────────────
+//   【本轮】读书屋 —— 旧版「一起读书」小浮窗整个重做（2026-11-01）
+//
+//   【用户原话】
+//     「这个功能非常简陋，一个是界面又小又丑，二是我加载了一个二十四史以后
+//       发现手机变得非常卡，发烫，说明不是懒加载的」
+//     「搞成一个独立沙盒页面，像影院，宠物屋那样的，进去一个全屏读书屋，
+//       有书架，点书架的书，打开全屏页面，背景上美化阅读图片，一次只加载一页，
+//       然后留一个聊天窗口供我和AI随时讨论」
+//
+//   【卡 + 发的真因（实测，不是猜）】
+//     旧版把【整本书】塞进 readingLibrary 的一条记录的 content 字段。
+//     真 IndexedDB + 真 Dexie 实测（2000 万字 / UTF-16 38.2MB）：
+//       db.books.update(id,{currentPage}) = 96~126 ms  ← 每翻一页搬一遍整本书
+//       db.books.orderBy().toArray()       =  39 ms    ← 开一次书库搬一遍全库
+//       同样一张表, 记录里【没有 content】时: update = 2 ms, toArray = 0 ms
+//       split 切行 31.4 万行 → 常驻 ≈44.8MB, 整页 JS heap 307 MB
+//     再加上「书库搜索框每敲一个字就重跑一次全库 toArray」（没有防抖）。
+//
+//   【改法】
+//     · DB 升 v72：readingBooks(只有元数据) + readingPages(一页一条, [bookId+pageNo] 复合索引)
+//     · modules/reading-storage.js：分页存储 + file.stream() 流式切页导入
+//       （峰值内存 = 一页，不是 38MB）+ 旧书迁移
+//     · reading-sandbox/：独立 iframe 沙盒（照抄影院那套），
+//       书架大厅 + 全屏阅读室 + 背景 + 一次只渲染一页 + 下半屏固定聊天窗
+//     · modules/reading-room.js 重写：宿主侧桥接 + AI 请求代打
+//       （沙盒里没有 ai-response.js / utils.js，谷歌原生地址自己拼必然 404）
+//     · 旧浮窗 DOM 全删（index.html 里 #reading-overlay / #reading-window /
+//       #reading-content / #import-book-modal / #reading-library-modal）
+//     · makeDraggable 从 reading-room.js 搬到 utils.js
+//       （视频/语音通话的悬浮球还在用它，搬走免得以后再被改一次弄挂）
+//
+//   index.html 的 ?v=：modules/reading-storage.js 新增 0.1.0、
+//   modules/reading-room.js 0.0.39 → 0.1.0、modules/init-db-schema.js 0.0.43 → 0.0.44。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.100.0 ───────────────────────────────────────────────
+//   【本轮】读书屋第一批真机反馈修正 (2026-11-02)
+//
+//   【用户原话】
+//     「首先是书架大厅，没看见返回聊天框的返回键，需要加一个」
+//     「点开书页以后，那个返回书架的返回键位置不要放得太高，
+//       这软件要在手机PWA上用的，要腾出时间显示栏的位置出来」
+//     「兼容的小说文本格式不对，有的导入全是乱码」
+//     「书架上的书不想看了没有删除选择」
+//     「聊天默认提示框里写个史书看不懂的尽管问，又不是所有人都要看史书，
+//       这个提示不要写」
+//     「和AI讨论内容的时候，用的Minimax模型，连think思维链都全露出来了」
+//     「书房共读聊天用的API支持哪些线路接口，要和主聊天一样支持
+//       Openai兼容和谷歌直连哦」
+//
+//   【七处修正】
+//     ① 书架大厅顶栏加「‹ 返回聊天」（原来只有右上角一个 22px 的 ×，没人知道那是回聊天）
+//     ② 顶栏避让手机状态栏 —— env(safe-area-inset-top) 在【iframe 里】基本返回 0
+//        （安全区是顶层文档的概念），改由宿主量出真值 → --rr-safe-top 下发沙盒
+//     ③ 导入乱码 —— 原来用 new TextDecoder('gbk') 试，标签在部分浏览器直接抛异常
+//        → catch 之后回落 utf-8 → GBK 小说整本乱码。
+//        现在: BOM → 严格 utf-8 → 严格 gb18030 → 严格 gbk → 兜底 utf-8，
+//        而且【头尾各取 64KB】（只看头的话，小说开头的版权页/目录全是 ASCII，
+//        必然误判成 utf-8）
+//     ④ 删除按钮 —— CSS 是 display:none（只在 .show-del 时显示，而代码从没加过那个 class）
+//        → 按钮压根没渲染出来。现在常驻显示，34px + 🗑
+//     ⑤ 聊天框提示语去掉"史书里看不懂的" → 通用文案
+//     ⑥ MiniMax 思维链 —— 流式加状态机（<think> 标签会跨 chunk 断开），
+//        收尾再走主聊天那套 cleanMinimaxResponseText；
+//        prompt 里也写死"不要输出 <think> 和思考过程"
+//     ⑦ API 线路对齐主聊天 —— 补上【角色独立 API】(chat.apiOverride)，
+//        并且改成【每次实时解析】预设（原来缓存了一份，用户中途切预设不生效）
+//
+//   index.html 的 ?v=：modules/reading-storage.js 0.1.0 → 0.1.1、
+//   modules/reading-room.js 0.1.0 → 0.1.1；沙盒页 + css/js 也 0.1.0 → 0.1.1。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.101.0 ────────────────────────────────────────────────
+//   【本轮】桌宠「下面一条看不见的长条, 把聊天框按钮都挡住了」（2026-11-02）
+//
+//   【用户原话】
+//     「聊天框的那个宠物桌宠虽然图片下方看不见东西，但是好像有很长一片区域在隐形
+//       遮挡聊天框的其他功能，如果桌宠放右上，我甚至点不到右下弹出来的匹配表情包，
+//       就是桌宠下方很长的遮挡区域在遮挡，挪开就能点了」
+//     「不是层级的问题……就不能把这个区域改得和桌宠范围一样？哪怕挡也只挡那一点啊」
+//
+//   【真因（真实页面实测, 不是猜）】
+//     #pn-desktop-pet 是 position:fixed, CSS 写死 right:14px + bottom:92px;
+//     拖拽之后 JS 又写 style.left / style.top —— 两套定位【同时生效】。
+//     绝对定位元素在 top+bottom 都指定、height 是 auto 时, 高度会被撑满整段
+//     (CSS2.1 §10.6.4) → 容器变成一条从顶到底的透明长条:
+//       实测 430x900 视口: 默认 98x106px  →  拖一次之后 98x673px
+//     连带两个副作用:
+//       · offsetHeight 变成几百 px → 拖动时 maxY = innerHeight - offsetHeight ≈ 0
+//         → 桌宠一旦被拉长就再也拖不到下面 (用户说"放右上"就下不来了)
+//       · 菜单/气泡是 bottom:100% 定位 → 长条一撑开, 菜单跑到屏幕外, 根本点不到
+//
+//   【改法】
+//     ① pet-nest.js 新增 useLeftTopPosition(): 切到 left/top 定位时
+//        把 right/bottom 明确清成 auto (拖拽前先切, 恢复上次位置也走这条)
+//     ② css/pet-nest.css 给容器写死 height:fit-content —— 兜底,
+//        即使 right/bottom 还在, 高度也只跟内容走, 永远不会被拉长
+//     ③ 容器 pointer-events:none —— 容器盒子有多大, 就有多大一片看不见的地方
+//        在替下层按钮挡鼠标; 现在只有【宠物图片 / 名字 / 菜单】能点
+//
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.34 → 0.0.35、css/pet-nest.css 0.0.18 → 0.0.19。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ── v0.2.102.0 ────────────────────────────────────────────────
+//   【本轮】宠物抠图：浅色宠物（淡蓝色那种）自己那块被抠成透明（2026-11-02）
+//
+//   【用户原话】
+//     「如果宠物画出来是比较浅的颜色，比如淡蓝色，就很容易在抠图处理以后
+//       出来的是透明的，就是宠物自身的浅色区域也被扣掉了」
+//     「现在只要稍微画深色一点点就能正常抠」
+//
+//   【真因（合成图 + 真实代码实测, 不是猜）】
+//     ① 泛洪的"局部参考生长"能跨过【平滑渐变】走进宠物内部。
+//        宠物椭圆顶部那条软边按归一化半径算，在像素上宽达 40px，每步只差 0.5~1
+//        → 任何容差都拦不住（实测容差 46→8、局部上限 26→6，浅蓝宠物每次都被吃光 99.5%）。
+//     ② 本体保护网(far/near)是按【离背景色的距离】算的 → 浅色宠物整个不在网里
+//        → 网子只护得住那几百个深色像素（眼睛）。
+//     ③ 兜底「画面还剩多少不透明」以前【只在没有深色本体时才生效】
+//        → 浅色宠物有眼睛 → 走另一条分支 → 这条兜底被跳过 → 宠物被吃光没人拦。
+//
+//   【改法（两处，都是最小改动, 没有重写算法）】
+//     ① runCutPasses 的安全网：把「不许把画面抠空」这条提成【始终生效】
+//        → 浅色宠物被吃光 → 整遍回滚 → cutout() 自动走保守重试 → 宠物保住。
+//     ② 保守重试的倍数 0.7 → 0.5：0.7(=容差32.2) 还会啃掉色距 25~30 的浅色宠物
+//        （实测浅紫只剩 72%、浅灰蓝只剩 66%）；0.5 → 12 种浅色/深色宠物全部 100% 存活。
+//     容差本身【不动】（实测调小会直接换来背景残留：容差 12 → 残留 19.6%，8 → 60.7%）。
+//
+//   index.html 的 ?v=：modules/pet-image.js 0.0.8 → 0.0.9。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ============================================================
+// v0.2.103.0 —— 读书屋真机两个 bug (2026-11-02)
+//   ① 「找不到配置的 API，没法跟 AI 讨论」
+//      根因: modules/reading-room.js 的 resolveMainApiConfig() 里
+//            return global.resolveApiSlotConfig('main').then(function (cfg) { main = cfg; });
+//      那个回调【没有 return】→ 整条 Promise 链 resolve 成 undefined →
+//      下一级 .then(function (main) {...}) 收到 undefined → 一律 return null
+//      → 报「主 API 没配好（地址 / API Key / 模型缺一个）」。
+//      跟用户怎么配 API 完全无关 → 读书屋永远问不了 AI。
+//      修法: 直接把 Promise 往下传, 别在回调里赋值。
+//   ② 「只要点击输入框，屏幕就会异常放大」
+//      根因: iOS Safari 聚焦【字号 < 16px 的输入框】会自动把页面放大
+//            (iOS 10+ 不认 user-scalable=no / maximum-scale=1, 拦不住)。
+//      读书屋沙盒里 #rr-chat-input / #rr-search 都是 14px → 必触发。
+//      修法: 两个输入框字号 14px → 16px (跟主聊天 css/chat-ui.css 一致)。
+//
+//   index.html 的 ?v=：modules/reading-room.js 0.1.1 → 0.1.2；
+//   reading-sandbox/index.html 里的 reading-sandbox.css 0.1.1 → 0.1.2。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ============================================================
+// v0.2.104.0 —— 书架 UI 局部改造 (2026-11-02)
+//   ① 卡片右上角常驻的 🗑 → ⋯ 三点菜单 (CSS 画的点, 不用素材)
+//      点开是一张羊皮纸小卷轴, 里面只有两项: 更换封面 / 删除书籍
+//      (删除沿用原有的 confirmDelete, 没重写删除逻辑)
+//   ② 新增「更换封面」: 选图 → 压到最长边 420px 的 JPEG → 预览 → 确认 → 存进
+//      新表 readingCovers (db v73) → 卡片封面当场更新, 刷新后还在
+//      ⚠️ 封面单独一张表, 不塞进 readingBooks —— 那张表只放元数据, 塞 base64 会
+//         让"开书架"把所有封面搬一遍 (跟当年"整本书塞一条记录"同一个坑)
+//
+//   index.html 的 ?v=：modules/reading-storage.js 0.1.2 → 0.1.3、
+//   modules/init-db-schema.js 0.0.45 → 0.0.46、modules/init-data-protection.js 0.0.36 → 0.0.38；
+//   modules/reading-room.js 0.1.3、reading-sandbox 那两个版本号不变。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//
+// ============================================================
+// v0.2.105.0 —— 修「整个 app 白屏起不来」(2026-11-03)
+//
+//   🔴 病根: v0.2.104.0 把封面表加成了主库的 db.version(73)。
+//      给主库加版本号 = 触发一次 IndexedDB 升级。而 IndexedDB 的规矩是
+//      「只要还有别的连接开着旧版本，本次升级就无限期排队」。
+//      升级一被挡住，db.open() 就【既不成功也不失败】(pending)，
+//      启动链里 await loadAllDataFromDB() 永远等不到库 →
+//      showScreen('home-screen') 永远不执行 → 白屏。
+//      pending 不算 error，所以控制台一条红字都没有，极难查。
+//      实证: _reports/reading-room-test/diag-boot4.cjs
+//            (无头 Edge + CDP，B 标签页 indexedDB 一直停在 720，dbReady 90 秒到不了 true)
+//
+//   ✅ 修法: 封面改到【独立数据库 ReadingCoversDB】(跟 PetNestDB / XSocialDB 一个路子)。
+//           主库版本退回 72，这次的改动对它【零影响】—— 不升级，就不可能被挡住。
+//           那个库还是懒建的: 没换过封面的人，IndexedDB 里根本不会有它。
+//
+//   🛟 顺手加了三道保险 (以后再遇到同类问题不会是纯白屏):
+//       · init-db-schema.js: 监听 blocked → 控制台明确报「被别的页面挡住了」
+//       · init-data-protection.js: 开库超过 20 秒没好 → 屏幕上弹提示 + 「重新加载」按钮
+//       · init-data-protection.js: 磁盘上的库版本比代码新时自动跟进(否则 Dexie 抛 VersionError)
+//
+//   🧨 同一批里还修了个我自己刚引入的致命错误:
+//      init-data-protection.js 里写了 global.markDbBlocked —— 这个文件里根本没有 global
+//      这个标识符(它是别的文件 IIFE 的形参)，会直接 ReferenceError，一样白屏。
+//      已改成 window.markDbBlocked。
+//
+//   🩹 顺手修掉一条会误导排查的老红字:
+//      init-data-protection.js 的 wrapDatabaseOperations() 用了 Dexie.Table.prototype，
+//      但 Dexie 4 的 CDN 构建里【没有 Dexie.Table】(实测那份文件里连这个字符串都搜不到)
+//      → 每次启动都抛 TypeError，控制台留一条红字。功能不受影响，但下次排查"起不来"
+//      会被它带偏。已改成没有 Table 就安静跳过。
+//      (顺带: 用户旧控制台里【没有】这条红字，反证了 dbReady 从没变 true —— 即库没打开过)
+//
+// ============================================================
+// v0.2.106.0 —— 书架卡片只留封面 (2026-11-03)
+//
+//   用户看真机截图后说: "封面图占全部不好看, 下面那行说明文字是否可以不要"。
+//   ① 卡片去掉说明区(书名/字数·页数/进度条) → 整张卡片只剩封面图
+//   ② 封面从 background-size:cover 改成 contain → 【整张封面完整显示, 不裁切】
+//      (以前竖版封面被裁掉两边; 代价是图和卡片比例不同时四周会留白)
+//      容器高度用 aspect-ratio: 3/4 定住 (常见书籍开本比例)
+//   ③ 顶栏补上字数统计 —— 卡片说明区去掉后, 字数信息挪到阅读页顶栏
+//      (新元素 #rr-book-stat, 挨着页码)
+//
+//   index.html 的 ?v=：reading-sandbox/index.html 里的
+//   reading-sandbox.css 0.1.3 → 0.1.4、reading-sandbox.js 0.1.2 → 0.1.3。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// ============================================================
+// v0.2.109.0 —— 修「竖屏在线短剧: 一集播完没总结 / 播一半 Live 重连 / 总结只有半截」(2026-11-04)
+//
+//   用户 2026-11-03 晚上实测 (家庭影院 → 在线短剧):
+//   "这次的短剧是竖屏的, 一集播完第一次没总结剧情, 第二次播一半观影API重连,
+//    最后总结的剧情就只有半截; 测试了一下, 好像横屏的在线短剧又可以正常总结剧情"
+//
+//   真因不是竖屏/横屏, 是【一集长度 vs 2 分钟的摘要间隔】:
+//   短剧模式下长剧式的「每 2 分钟一段」阶段摘要一直在跑, 它同时干三件事:
+//     ① 抢那条唯一的摘要通道 → 一集播完那一刻正好撞上在途请求 → 这一集白看
+//     ② 和「每集单集剧情」写同一张表、同一个主键 (id="<剧名>#<ep>") →
+//        段号跟集号都是 1,2,3… → 短集时段落摘要在集后发, 把这一集顶成半截
+//     ③ 每次阶段摘要后 S._needFreshSession=true → 帧循环里 resetSession()
+//        → Live 断线重连 → 会话里累积的画面全没了 → 这一集只剩尾巴
+//   长集时阶段摘要在集中间发, 单集剧情后写能盖回来 → 看着就正常 (所以"横屏没事")。
+//
+//   修法 (modules/cinema-live.js):
+//     · 短剧一律不跑长剧式阶段摘要 (scheduleStageSummary / tickStageSummary /
+//       看门狗 三处都挡) —— 短剧的载体本来就只有「每集一条」
+//     · 短剧改成【每集播完换干净会话】—— 换在集与集之间, 不在一集中间,
+//       这一集的全部画面都在它自己那个会话里 → 总结完整
+//     · 段落记忆在短剧模式下不落库 (最后一道保险)
+//     · 单集总结失败 (Live 没连上) 不再静默丢弃 → 记忆页上显示红字
+//   长剧一行没动 (阶段摘要照旧)。
+//
+//   新增回归: tests/cinema-series-summary.test.cjs (19 条)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.1 → 2.4.2 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// ============================================================
+// v0.2.110.0 —— 长剧「阶段摘要失败 → 那一段整段丢」 (2026-11-04)
+//
+//   用户追问: "长剧如果每 2 分钟换一次会话, 是不是也会丢失部分剧情"
+//   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让模型只吐 2 个字):
+//
+//   旧写法 (失败也换会话): turn 120(失败) → 252(重试) → 372 → 492, 只落【2 段】
+//     第 1 次失败 → 换会话 → 画面全丢 → 重试是在新会话里发的, 模型看到的是
+//     重试后那 60 秒的画面, 不是原来那 2 分钟的 → 【0~120 秒那段真的没了】。
+//     而且重连那一轮还得等 Live 重新 ready, 重试被拖成一整轮 (252s)。
+//   新写法 (失败不换会话): turn 120(失败) → 192(重试) → 312 → 432, 落【3 段】
+//     第 1 次失败 → 【不换】→ 画面留着 → 60 秒后的重试还能看到同一批画面
+//     → 那一段保住了 (重试写出来的是 0~192 秒, 含失败那段), 重试也不用等重连。
+//
+//   修法 (modules/cinema-live.js):
+//     · runStageSummary 收尾: 【成功才换会话】; 失败不换 (画面留给重试)
+//     · tickStageSummary 重试分支: 连着失败【两次】才强制换
+//       (那才是 2026-10-29 要防的"帧一直累积 → turn 变慢 → 更容易失败"的恶性循环)
+//     · 累积上限: 正常每段换 120 帧; 失败后多攒 60 秒 = 180 帧
+//       (258 token/帧 ≈ 46k token, 窗口 128K) —— 仍在预算内
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑤ 组 (4 条)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.2 → 2.4.3 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.111.0 —— 短剧「一集播完总结时 API 抽风 → 这一集白看」 (2026-11-04)
+//
+//   用户追问: "短剧如果一集结束剧情总结的时候API抽风, 没能总结起, 是不是就瓜起了"
+//   实测 (探针 _reports/cinema-test/probe-series-summary.cjs, 让服务端不回话):
+//
+//   旧写法: 一集播完 → 要一条单集剧情 → 模型 90 秒不回话 → 超时
+//     → 这一集在库里【直接没了】, 而聊天区一句提示都没有 → 用户以为看过了,
+//       直到几集之后点「精炼」才发现素材不对。
+//     而且就算之后重试, 画面也已经不在了 (失败就换会话) → 救不回来。
+//
+//   修法 (modules/cinema-live.js):
+//     · 一集总结失败 → 【不换会话】(这一集的画面还留在 Live 会话里)
+//       → 60 秒后自动重试一次 → 重试时模型看到的还是这一集 → 补得上, 不用重播
+//     · 重试成功 → 才换干净会话 (下一集从零开始看) + 聊天区「✅ 第 N 集补记上了」
+//     · 重试失败 → 聊天区「⚠️ 第 N 集还是没总结出来 —— 重播这一集就能补上」
+//     · 换集了就放弃重试 (画面混了会串味), 并且要跟用户说清楚
+//       · 重试【已经排好】时换集 → onSeriesEpisodeChanged 取消 + 清混在一起的画面
+//       · 换集【早于失败被察觉】→ scheduleEpisodeSummaryRetry 一开始就放弃
+//         (模型 90 秒不回话时用户先点了下一集 → 画面已经混了 → 重试没意义)
+//     · 放弃重试时【不】换会话: 新一集已经播了一会儿, 换掉就把新一集的画面也扔了
+//     · 重试成功 → 换会话时必须把【前情提要】喂回新会话
+//       (走 resetSessionAfterEpisode, 不能只 resetLiveSession)
+//       → 少这一步, 下一集开播时模型手里是空白的 → 下一集的单集剧情少了上一集的上下文
+//     · 换集时清掉上一集的画面 → 下一集不会跟上一集串味
+//       (实测: 清了 = 下一集那一回合只看到 90 帧; 没清 = 180 帧, 两集混一起)
+//     · 四个失败点全部补上聊天区提示 (原来只有面板红字, 用户基本不会去翻那一页)
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑥⑦⑧ 组 (17 条)
+//             tests/cinema-episode-summary.test.cjs 第 ⑦ 组 (5 条)
+//   反向验证: _reports/cinema-test/reverse-verify-episode-retry.cjs (6 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.3 → 2.4.4 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.112.0 —— 本地上传的短剧「一集一个文件」: 每集各成一段 (2026-11-04)
+//
+//   用户问: "如果本地上传路径传的是不到两分钟一集的短剧, 那播放结束的时候会总结剧情吗"
+//   用户定的规则: "多于两分钟的两分钟一总结, 低于两分钟的结束的时候一总结"
+//
+//   实测 (探针 _reports/cinema-test/probe-local-file-summary.cjs, 真模块 + 假时钟):
+//   旧写法 (走长剧路线, 播完一刀切 60 秒门槛, 且补记后不重置 2 分钟窗口):
+//     · 40 秒 × 1 个文件 → 落【0 段】(低于 60 秒门槛 → 整集丢掉, 一集白看)
+//     · 90 秒 × 3 个文件 → 落【4 段】, 边界全跨集:
+//         段1 = 文件1 全部(91 帧)   段2 = 文件2 的前 30 秒(27 帧)
+//         段3 = 文件2 的后 51 秒     段4 = 文件3 的前 55 秒
+//         且文件3 最后那 35 秒【直接丢了】
+//   根因: 2 分钟窗口的起点 lastSummaryStartedAt 只有 tickStageSummary 的收尾会更新,
+//     而"影片播完补记最后一段"走的是 runStageSummary 直调, 绕过了那个收尾
+//     → 上一个文件的时长一直算进下一个文件的窗口里。
+//
+//   修法 (modules/cinema-live.js, onVideoEnded 的长剧分支):
+//     · 判据改成看【这个文件本身有多长】, 不再一刀切 60 秒:
+//         文件 < 2 分钟  → 这一轮就是一集 → 播完【必须】总结一次 (哪怕只有 40 秒)
+//         文件 ≥ 2 分钟 → 长剧那套照旧: 每 2 分钟一段 + 播完剩下一截够 60 秒才补记
+//     · 补记成功后重置 2 分钟窗口的起点 → 每个文件从零起算
+//       → 一个文件正好一段, 互不跨集, 尾巴也不丢
+//
+//   新写法实测: 40 秒 × 1 → 1 段(41 帧)  |  90 秒 × 3 → 3 段(各 90/91 帧)  |  200 秒 × 1 → 2 段
+//   长剧那套一行没动: 120 秒 × 4 → stage@120/240/360/480, 4 段落库。
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑨ 组 (8 条, 共 53 条)
+//   反向验证: _reports/cinema-test/reverse-verify-local-file.cjs (2 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-live.js 2.4.4 → 2.4.5 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.113.0 —— 本地影片「作品名」分组 + 前情提要真的喂给模型 (2026-11-04)
+//
+//   用户问: "我想通过上传本地文件看动漫, 30 多分钟一集, 很多集 ——
+//            怎么能做到放第二集的时候还有第一集的说明? 同一个作品可以保留前情提要吗?"
+//   用户定的方案: 「添加影片时让我填一个作品名, 同名的共用底稿」
+//
+//   【原来】本地影片的底稿 key = 'film:'+chatId —— 同一个聊天里【所有】本地影片共用一份
+//     → 换到完全不相干的另一部作品, 也会把上一部的剧情灌给模型 (串台)。
+//     而且 CinemaLive 连「现在放的是哪个文件」都不知道, 存储层的影片记录也没有作品字段。
+//
+//   【改法】
+//     · 存储层: 影片记录加 workName (非索引字段 → 不用升 db 版本)
+//     · UI: 「添加影片」面板加作品名输入框 (可留空=不分组) + 下拉以前用过的
+//     · CinemaLive: watchSession.workName + setWorkName(); 底稿 key 变成
+//       'film:'+chatId+':'+作品名 → 同一作品共用一份, 不同作品各存各的
+//     · 换作品时清掉上一部的内存素材 → 上一部的段落不会被灌进新作品
+//
+//   【顺带修的一个真 bug】(用户选的第二项)
+//     「上次看到哪」(滚动锚) 和「手动精炼的前情提要」【从来没被喂给过模型】——
+//     注入跑在【异步读库之前】(那时 seriesRecap 还是 null), 而且 injectSeriesRecap()
+//     一进来就把 seriesRecapInjectPending 落闸 → 库读完后的那次注入已是空转。
+//     实测: 库里明明有提要, 10 次注入一次都没有它。
+//     改法: 加 _crossReading 标记, 库没读完不注入 (pending 也就不落闸)。
+//
+//   【顺带修的一个既有问题】换本地文件时聊天区刷「连接断开 / 已重新连接」
+//     → disable() 里 close() 会同步触发 onclose → 上层排了一次自动重连
+//     → 那个重连 2 秒后回来把刚连好的新连接顶掉。
+//     改法: _userDisabled 在 close 之前置真 (live-client 自己的注释就写着
+//     「主动关闭 → 不做自动重连」)。
+//
+//   实测 (探针 _reports/cinema-test/probe-local-file-summary.cjs):
+//     同一作品 (某动漫,某动漫) → 换集那一刻模型拿到 上一个文件的第 2~5 段 + 锚
+//     不同作品 (某动漫,别的片) → 换集后只带新作自己的第 1 段, 段号从 1 重数, 不串台
+//
+//   新增回归: tests/cinema-series-summary.test.cjs 第 ⑩ 组 (10 条, 共 61 条)
+//   反向验证: _reports/cinema-test/reverse-verify-work-name.cjs (3 个用例全报红)
+//   index.html 的 ?v=：cinema-live.js 2.4.5 → 2.4.6 / cinema-room.js 0.34.0 → 0.34.1
+//                  / cinema-room.css 0.38.2 → 0.38.3 / cinema-storage.js 0.5.3 → 0.5.4
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.114.0 —— 宠物屋: 养了两只可以自己选哪只当桌宠 (2026-11-04)
+//
+//   用户问: "项目里有个宠物屋, 如果我养两只宠物, 可不可以自己选择一只宠物
+//            显示在聊天框上做桌宠, 现在好像是默认第一只显示"
+//   → 是的, 原来写死了。currentDesktopPet() 里就是 `st.pets[0]`,
+//     而 pets 是 orderBy('createdAt') 排的 → 永远是【最早领养的那只】。
+//
+//   【改法】
+//     · 存一个「选中的 pet id」(localStorage `petNestDesktopPetId`) ——
+//       这是显示偏好不是宠物数据, 丢了也只是回落第一只, 不该为它升 db 版本
+//     · 抽出纯函数 pickDesktopPet(pets, wantId): 选过且还在 → 那只;
+//       否则回落第一只 (= 老行为)。选的那只被删了(饿满 3 天)会顺手清掉失效记录
+//     · 照顾弹窗(点宠物打开)加一个按钮「让它当桌宠」——
+//       已经是桌宠时变成「✔ 聊天框里就是它」并禁用; 还是颗蛋的不给选
+//       (没有模样, 选了桌宠就是个空壳)
+//
+//   【顺带修一个「张冠李戴」】pet-speech.js 说话时不管是谁, 泡泡都画在
+//   唯一那只桌宠身上。以前桌宠固定第一只, 看着还凑合; 现在能换了不判就是
+//   「小白的台词冒在小花头上」。现在只有桌宠本人才冒泡泡, 别的改走 toast。
+//
+//   新增回归: tests/pet-nest.test.cjs 新增一节 (20 条, 共 564 条)
+//   反向验证: _reports/cinema-test/reverse-verify-deskpet-choice.cjs (4 个用例全报红)
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.35 → 0.0.36、modules/pet-speech.js 0.0.3 → 0.0.4。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.115.0 —— 影院聊天「慢/收不到回复」: 加分段计时, 先定位再改 (2026-11-05)
+//
+//   用户实测: "在影院里聊天非常慢, 好多次都没有等到回复; 但同样的 API 出来影院回复就很快;
+//             同样的网络条件和 API 渠道; 以前都聊得好好的, 今天改完才变"
+//   还有一次: "回复了没显示在影院聊天里, 但出去落在了外面聊天框里"
+//
+//   【已经查清 / 排除的】(都是逐字对比真代码, 不是推测)
+//     · 影院和外面的【请求体完全一致】: model / messages / temperature / top_p /
+//       presence_penalty / frequency_penalty / stream:false —— 逐字段对过
+//     · 外面也不是流式 (enableStreaming 默认 false, 用户也没开)
+//     · 外面也不是走谷歌原生 (用户用的是官方 DeepSeek + OpenAI 兼容路径)
+//     · 影院也没有走服务端代理 (沙盒里没有 ai-response.js, useProxy 恒 false; 外面也没开)
+//     · 发请求之前的等待都有上限: 取宿主上下文最多 2.5s, 取配置有快照就立刻返回
+//   → 也就是说【从代码静态对比里，找不到"影院比外面慢"的依据】。
+//
+//   【所以这一步只加计时，不改行为】—— 再猜下去就是瞎改。
+//   每条回复如果【超过 8 秒】，聊天区会多一行:
+//     ⏱ 这次等了 12.3s ｜ 取上下文 0.3s ／ 建提示词 0.1s ／ 准备配置 0.0s ／ API 11.9s
+//     （提示词 3210 字, 历史 20 条）
+//   正常快的时候不打印, 不刷屏。这一行能直接分开三种可能:
+//     ① 取上下文慢 ② 建提示词慢 ③ API 本身慢
+//
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.2 → 0.2.3 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.116.0 —— 影院聊天「模型回 I'm having a hard time fulfilling your request」 (2026-11-05)
+//
+//   用户实测: 影院里要么等不来回复, 要么回一句
+//     "I'm having a hard time fulfilling your request. Can I help you with something else instead?"
+//     一出去（主聊天）聊就正常; 不需要播剧、不需要图。
+//
+//   【对照出来的原因】(跟读书屋横向比出来的)
+//     读书屋复用影院同一份 stripInstructionSystem (reading-room.js:621),
+//     所以"预设里的 JSON 指令剥不干净"两边风险一样。
+//     但读书屋在提示词【最末尾】追加了「输出要求（必须遵守）」, 里面明写
+//     "用普通段落说话…不要用 JSON、代码块或列表符号开头" (reading-room.js:648)
+//     → 残留的 JSON 要求被压住 → 书屋正常。
+//     影院原来只在场景块里说「用普通文字说话」, 【从没提过 JSON】→ 压不住。
+//
+//   【链条】预设里那句「必须输出 JSON 数组」没被剥干净（DROP_LINE_PATTERNS 只认
+//     「严格遵守 JSON / thought_chain / "type": / ```json」这几种写法, 换个说法就漏）
+//     → 模型同时收到「必须输出 JSON 数组」和「用普通文字说话」两条打架的指令
+//     → 它直接放弃, 回那句英文。这也解释了为什么不是"卡", 而是很快回一句废话。
+//
+//   【修法 A】(用户 2026-11-05 选定)
+//     ① DROP_LINE_PATTERNS 补上常见说法（必须…JSON / JSON 数组 / 输出…JSON /
+//        按…格式输出 等）—— 反向验证: 退回旧名单时 5 种常见写法漏 4 种
+//     ② buildSystemPrompt 在【所有块之后】追加「输出要求（必须遵守）」,
+//        声明「覆盖上面的一切格式要求」「那些 JSON 要求一律作废」
+//        —— 跟读书屋同一个做法, 最后一句说了算
+//
+//   新增回归: tests/cinema-chat.test.cjs ②-b / ②-c (7 条, 共 97 条)
+//   反向验证: _reports/cinema-test/reverse-verify-json-override.cjs (2 个用例全报红)
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.3 → 0.2.4 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.117.0 —— 删掉影院聊天那笔临时分段计时 (2026-11-05)
+//
+//   上一版 (v0.2.115.0 / a58f188) 为了定位"影院聊天慢"临时加了一段计时:
+//   回复超过 8 秒就在聊天区打一行「⏱ 取上下文 x s ／ 建提示词 x s ／ API x s」。
+//   后来定位到真因是【提示词里两条打架的指令】(v0.2.116.0 / 7d7cde2),
+//   计时没用了 —— 用户要求删掉, 不留多余代码。
+//   本次只删代码, 不改任何行为。
+//
+//   index.html 的 ?v=：modules/cinema-chat.js 0.2.4 → 0.2.5 (沙盒同步)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.118.0 (2026-11-05): 修「家庭影院看两集短剧 → 手机发烫」
+//
+//   【实测依据】用户 A/B/C 三组真机实测:
+//     A 宿主单独开着          → 冷冰冰
+//     C 影院沙盒单独看一集    → 冷冰冰
+//     B 宿主里套着影院看一集  → 开始发烫 (再聊天更烫)
+//   ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】, 不是任何单边。
+//
+//   【这一版改的四处】
+//   ① 宿主静默 (cinema-room.css + cinema-room.js + background-activity.js + pet-nest.js)
+//      iframe 一开, 宿主 UI 整个 display:none (54 个全屏面板 + 约 20 条 infinite
+//      动画 + 顶栏毛玻璃全停), 后台活动模拟 / AI 提醒扫描 / 无声智能保活
+//      (含屏幕 WakeLock) / 桌宠换帧定时器 也一起停; 退出影院只恢复【进来之前
+//      就在跑】的那些。
+//   ② 沙盒里的 60fps 时间线探针整个删掉 (cinema-room.js)
+//      —— 2026-10-08 查「点击→冻结」加的实验代码, 结论早拿到了, 探针却一直
+//      在影院里自己跑一条 60fps 常驻循环 (12 个全局事件监听 + MutationObserver
+//      + visualViewport)。诊断收集器 diagLogPush 保留 (Live 的硬数据还要它)。
+//   ③ 环境光不再每次强制布局 (cinema-room.js)
+//      采样 1.8s → 4s; 两次 getBoundingClientRect 改成几何缓存 (只在屏幕
+//      真的变了才重算); 颜色几乎没变就不重写那整块 radial-gradient。
+//   ④ 短剧每集那个【独立的前情提要 Live 回合】删掉 (cinema-live.js)
+//      提要改成并进【这一集自己的总结指令】里 —— 内容一份没少 (压缩提要 +
+//      最近几集原文), 只是以前分两趟送、现在一趟送完。
+//      长剧(film)保持原样。
+//
+//   index.html 的 ?v=：modules/cinema-room.js 0.34.1 → 0.35.0、
+//   modules/cinema-room.css 0.38.3 → 0.39.0、modules/cinema-live.js 2.4.6 → 2.5.0、
+//   modules/background-activity.js 0.0.49 → 0.0.50、modules/pet-nest.js 0.0.36 → 0.0.37；
+//   cinema-sandbox/index.html 里那三个也一起对齐。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+//   新增回归: tests/cinema-series-summary.test.cjs ⑪ 组 (4 条, 共 65 条)。
+// v0.2.119.0 (2026-11-07): Live2D 表情清单上限 16 → 64 + 调试台按钮名去重。
+//   ① video-voice-call.js: AI 的表情清单原来只写前 16 个进 prompt —— 那是给
+//      "一堆长英文 id"的模型省 token 的长度保险。现在模型的表情 id 是中文名
+//      (闭眼 / 发火 / 哦嘴 …), 几十个也就几十个字, 不该被截断 —— 用户要全部能用。
+//      64 只是兜底, 防止个别模型塞几百个表情把 prompt 撑爆。
+//   ② live2d-manager.js: 调试台按钮 label 原来 `cn + ' ' + name`, 而 cn 找不到
+//      映射时回退成 name → 中文 id 会拼成 "闭眼 闭眼"。现在同名只显示一次
+//      ('cry' 这类有中文映射的仍显示 "流泪 cry")。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.82 → 0.0.83、
+//   modules/live2d-manager.js 0.0.7 → 0.0.8。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.119.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -531,9 +1293,27 @@ const URLS_TO_CACHE = [
   './modules/pet-speech.js',
   './css/pet-nest.css',
   './assets/pet-nest/room-light.webp',
+  './assets/pet-nest/room-star.webp',
   './assets/pet-nest/cat-sprites-light.webp',
   './assets/pet-nest/dog-sprites-light.webp',
-  './assets/pet-nest/egg-sprites-light.webp'
+  './assets/pet-nest/egg-sprites-light.webp',
+  // v0.2.99.0 新增: 读书屋 (2026-11-01)。
+  // 沙盒页 + 两个模块必须预缓存 —— 沙盒页被 SW 的 '/index.html' 白名单命中,
+  // 不预缓存的话断网时点「一起读书」直接白屏。
+  './reading-sandbox/index.html',
+  './modules/reading-storage.js',
+  './modules/reading-room.js',
+  './modules/reading-sandbox.js',
+  './modules/reading-sandbox.css',
+  // 两张背景图 + 两张书架卡片缩略图, 共 254KB。
+  // 背景图是整页铺的, 不预缓存的话每次进读书屋都先闪一下白底。
+  './assets/reading-room/reading-hall-bg.webp',
+  './assets/reading-room/reading-page-bg.webp',
+  './assets/reading-room/reading-hall-bg-thumb.webp',
+  './assets/reading-room/reading-page-bg-thumb.webp',
+  // v0.2.104.0 新增: 卡片菜单的羊皮纸卷轴 (45KB)。
+  // 不预缓存的话, 第一次点 ⋯ 会有一下白闪 (菜单底图是异步拉的)。
+  './assets/reading-room/menu-scroll.webp'
 ];
 
 self.addEventListener('install', event => {
@@ -628,7 +1408,16 @@ self.addEventListener('fetch', event => {
      url.includes('/modules/pet-image.js') ||
      url.includes('/modules/pet-speech.js') ||
      url.includes('/css/pet-nest.css') ||
-     url.includes('/assets/pet-nest/'));
+     url.includes('/assets/pet-nest/') ||
+     // v0.2.99.0: 读书屋 (2026-11-01)。
+     // ⚠️ reading-sandbox/index.html 会被上面那条 '/index.html' 命中 → 走 cache-first。
+     //   它自己带 ?v= (见 modules/reading-room.js 的 iframe src) → 实际是 network-first,
+     //   改了立刻生效, 断网回落到预缓存那份。
+     url.includes('/modules/reading-storage.js') ||
+     url.includes('/modules/reading-room.js') ||
+     url.includes('/modules/reading-sandbox.js') ||
+     url.includes('/modules/reading-sandbox.css') ||
+     url.includes('/assets/reading-room/'));
 
   const isKnownCDN =
     url.includes('unpkg.com/dexie') ||

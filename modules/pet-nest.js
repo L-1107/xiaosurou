@@ -92,7 +92,7 @@
    * @param {string} seed       这只宠物的种子
    * @param {Array}  texts      当天聊过的内容（代表词）→ 从里面现挑一个小装饰
    */
-  function dailyLookFor(behaviors, dayKeyStr, seed, texts) {
+  function dailyLookFor(behaviors, dayKeyStr, seed, texts, kind) {
     const list = Array.isArray(behaviors) ? behaviors : [];
     const features = [];
     for (const b of list) {
@@ -104,18 +104,38 @@
       if (f && !features.some(x => x.en === f.en)) features.push(f);
       if (features.length >= 3) break;
     }
-    // 当天聊的内容 → 现挑一个能物化的小装饰（用户要的「惊喜感」在这）
-    let icons = pickIconsFromText((texts || []).join(' \n'), 1);
-    // ⚠️【2026-10-27 用户提】「换装最好是连道具和衣服一起换哈」
-    //   → 聊不到东西的那天只剩一件衣服，看着单薄 → 按「天 + 种子」兜底挑一个道具，
-    //     保证【每次换装 = 衣服 + 道具 一起换】。
-    if (!icons.length && ICON_LIBRARY.length) {
-      const hi = hash32(String(dayKeyStr || 'day') + ':icon:' + String(seed || ''));
-      icons = [ICON_LIBRARY[hi % ICON_LIBRARY.length]];
-    }
     // 当天穿搭：按「天 + 种子」定，同一天同一只永远同一套
-    const h = hash32(String(dayKeyStr || 'day') + ':outfit:' + String(seed || ''));
-    const outfit = BEAST_OUTFITS[h % BEAST_OUTFITS.length];
+    // ⚠️【2026-10-28】先定衣服 —— 因为兜底挑道具时要按【衣服的系列】来挑（配套）。
+    // ⚠️【2026-10-29】鹦鹉用【自己的衣橱】PARROT_OUTFITS ——
+    //   那 72 件里有一批鸟根本穿不了(裙/连体衣/鞋/袜)，
+    //   还有两件是「胸口别个小东西」→ 画出来就是一枚徽章 → 用户实测「只有徽章，没有新衣服」。
+    const isParrot = kind === 'parrot';
+    const outfitPool = isParrot ? PARROT_OUTFITS : BEAST_OUTFITS;
+    const h = hash32(String(dayKeyStr || 'day') + (isParrot ? ':outfit-parrot:' : ':outfit:') + String(seed || ''));
+    const outfit = outfitPool[h % outfitPool.length];
+    // 当天聊的内容 → 现挑一个能物化的小装饰（用户要的「惊喜感」在这）
+    // ⚠️【2026-10-28】记忆匹配【优先】—— 用户明确要"道具服饰在记忆里匹配"，
+    //   所以先按当天的内容挑；挑不到才走下面的兜底。
+    let icons = pickIconsFromText((texts || []).join(' \n'), 1, seed);
+    // ⚠️ 记忆匹配挑的那件，恰好跟今天这套衣服是【同一件东西】→ 丢掉，
+    //   走下面的兜底重挑（不然会拼出"一双水晶鞋、提着水晶鞋的"）。
+    if (icons.length && sameItem(outfit, icons[0])) icons = [];
+    // ⚠️【2026-10-27 用户提】「换装最好是连道具和衣服一起换哈」
+    // ⚠️【2026-10-28 用户提】「像奇迹暖暖那样的娃衣一堆堆，一天一个造型」
+    //   → 聊不到东西的那天：兜底挑一个【跟今天这套衣服同系列】的道具，
+    //     这样衣服和道具是【一整套】（暖暖的套装感），不是两件不相干的东西。
+    //   → 而且兜底只从【华丽款】里挑 → 磨刀石/小砖头这种不会再出现在描述里。
+    if (!icons.length) {
+      const pool = DAILY_ICONS.filter(x => x.series === (outfit && outfit.series)
+        && !sameItem(outfit, x));
+      const hi = hash32(String(dayKeyStr || 'day') + ':iconseries:' + String(seed || ''));
+      const picked = pool.length
+        ? pool[hi % pool.length]
+        : (DAILY_ICONS.length
+          ? DAILY_ICONS[hi % DAILY_ICONS.length]
+          : (ICON_LIBRARY.length ? ICON_LIBRARY[hi % ICON_LIBRARY.length] : null));
+      if (picked) icons = [picked];
+    }
     return { features, icons, outfit, behaviors: list.slice() };
   }
 
@@ -123,12 +143,44 @@
    * 今天这身（同步版）
    * ⚠️ 生图提示词是【同步】拼的（主聊天组装也是同步路径，不能 await）→ 这里只能用缓存
    */
+  // ---- 「今天这身」的按宠物缓存 (2026-10-28) ----
+  //   ⚠️ 为什么要有: 界面（名册/说明）走 todayLookForSync → cachedDayTexts()
+  //     （那个缓存不一定热），生图走 buildTodayLook → todayRepresentativeTexts()（现取）
+  //     → 两边可能算出【不同的道具】→ 名册写着"小碗"、图上画的是"渔夫帽"。
+  //   → 生图时把算出来的那份记下来，界面优先用它 → 名册写什么，图上就是什么。
+  let lookCache = { day: '', byPet: {} };
+
+  function lookCacheDay() { return dayKey(Date.now()); }
+
+  function rememberLookFor(pet, look) {
+    try {
+      const key = String((pet && pet.id) || '');
+      if (!key || !look) return;
+      const day = lookCacheDay();
+      if (lookCache.day !== day) lookCache = { day, byPet: {} };
+      lookCache.byPet[key] = look;
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function cachedLookFor(pet) {
+    try {
+      const key = String((pet && pet.id) || '');
+      if (!key) return null;
+      if (lookCache.day !== lookCacheDay()) return null;
+      return lookCache.byPet[key] || null;
+    } catch (e) { return null; }
+  }
+
   function todayLookForSync(pet) {
+    // 生图时算过的那份最准（界面和图必须是同一身）
+    const cached = cachedLookFor(pet);
+    if (cached) return cached;
     return dailyLookFor(
       cachedBehaviors(),
       dayKey(Date.now()),
       (pet && (pet.seed || pet.id)) || '',
-      cachedDayTexts()
+      cachedDayTexts(),
+      pet && pet.kind
     );
   }
 
@@ -162,24 +214,59 @@
    * 打分：命中【不同的同义词】越多越准（10 分/个），
    *      同一个词重复出现只补最多 5 分 —— 免得「歌」刷屏把别的都压掉。
    */
-  function pickIconsFromText(text, limit) {
+  function pickIconsFromText(text, limit, seed) {
     const s = String(text || '');
     if (!s.trim()) return [];
     const scored = [];
     for (const icon of ICON_LIBRARY) {
-      let hits = 0;
-      let freq = 0;
+      let hits = 0;              // 命中了几个【具体】关键词（泛词不计）
+      let freq = 0;              // 具体词一共出现了多少次
       for (const k of icon.keys) {
+        // ⚠️ 泛词命中不算数（吃/饭/饿/喝/玩/睡/冷/热…）——
+        //   谁的一天都有这些词，都算命中 → 全网都是同一个道具。
+        if (GENERIC_ICON_KEYS.has(k)) continue;
         let idx = s.indexOf(k);
         if (idx < 0) continue;
         hits++;
         while (idx >= 0) { freq++; idx = s.indexOf(k, idx + k.length); }
       }
+      // 一个具体词都没命中 → 这个意象不算数 → 交给【天+种子】兜底（每人每天不同）
       if (!hits) continue;
       scored.push({ icon, score: hits * 10 + Math.min(freq, 5) });
     }
-    scored.sort((a, b) => (b.score - a.score) || (a.icon.cn < b.icon.cn ? -1 : 1));
+    // ⚠️ 同分时【按种子分】—— 原来按中文名排序 → 情况一模一样时所有人拿到同一个道具。
+    //   改成按 hash(种子 + 道具名) 排 → 同样命中的人拿到的道具也不同。
+    const sk = String(seed || '');
+    scored.sort((a, b) => {
+      const d = (b.score - a.score);
+      if (d) return d;
+      const ha = hash32(sk + ':iconpick:' + a.icon.cn);
+      const hb = hash32(sk + ':iconpick:' + b.icon.cn);
+      return ha - hb;
+    });
     return scored.slice(0, limit || 1).map(x => x.icon);
+  }
+
+  /**
+   * 这件衣服跟这个道具是不是【同一件东西】？
+   *   （同一件就重复了 —— "一双水晶鞋、提着水晶鞋的" 太蠢）
+   *   判据两条:
+   *     ① 中文: 衣服名去掉动词和「的」= 物件名，道具名去掉量词 = 物件名，
+   *             两个物件名相同或互相包含 → 同一件；
+   *     ② 英文: 道具的英文描述是衣服英文描述的子串（或反过来）→ 同一件
+   *             （接住"太空盔 / 宇航头盔"这种中文不同名、其实是同一件的情况）。
+   */
+  function sameItem(outfit, icon) {
+    if (!outfit || !icon) return false;
+    const core = String(outfit.cn || '')
+      .replace(/的$/, '')
+      .replace(/^(提着|抱着|捧着|举着|挂着|戴着|穿着|套着|系着|围着|披着|背着|顶着|裹着|簪着|夹着|头顶|拖着|插着|别着|穿着)/, '');
+    const icn = String(icon.cn || '').replace(/^(一双|一把|一根|一枚|一颗|一块|一串|一台|一张|一朵|一面|一只|一支|一本|一顶|一条|一片|一盏|一盒)/, '');
+    if (core && icn && (icn === core || icn.indexOf(core) >= 0 || core.indexOf(icn) >= 0)) return true;
+    const ien = String(icon.en || '').toLowerCase();
+    const oen = String(outfit.en || '').toLowerCase();
+    if (ien && oen && (oen.indexOf(ien) >= 0 || ien.indexOf(oen) >= 0)) return true;
+    return false;
   }
 
   /** 某一天 0 点的毫秒时间戳（东八区，跟设备时区无关） */
@@ -239,7 +326,10 @@
     const day = dayKey(Date.now());
     const behaviors = await todayBehaviors(day);
     const texts = await todayRepresentativeTexts();
-    return dailyLookFor(behaviors, day, (pet && (pet.seed || pet.id)) || '', texts);
+    const look = dailyLookFor(behaviors, day, (pet && (pet.seed || pet.id)) || '', texts, pet && pet.kind);
+    // 记下来 → 界面（名册/说明/AI 上下文）用同一份，别再出现"界面写的和画出来的不是一个"
+    rememberLookFor(pet, look);
+    return look;
   }
 
   /** 中文组合名：「脑袋上飘着几个小音符的粉红奶龙」/「穿旗袍的奶龙」 */
@@ -252,15 +342,24 @@
     return (palette ? palette : '') + tail + species;
   }
 
-  /** 英文生图提示词：物种 + 配色 + 今天挑出来的小装饰 + 今天的特征 + 穿搭 + 花纹 + 审美锁 */
-  function beastPrompt(app, look, markEn) {
+  /**
+   * 英文生图提示词：物种 + 配色 + 今天挑出来的小装饰 + 今天的特征 + 穿搭 + 花纹 + 审美锁
+   * @param keepColors true = 【有参考图】→ 别再写死配色，跟参考图保持一致
+   *   ⚠️【2026-10-28 用户反馈】「九尾狐刚破壳是黑紫色，画到第三次变好看的玫红色了，后面想保持」
+   *     → 以前每次都硬写盲盒配色（"with deep berry purple fur"），
+   *       跟参考图里的玫红打架（而 buildEvolvePrompt 第一句又要求 "same colors"）→ 颜色反复漂。
+   *     → 有参考图时改成"跟参考图同一个颜色"，颜色才稳得住。
+   */
+  function beastPrompt(app, look, markEn, keepColors) {
     const speciesEn = (app && app.beastSpeciesEn) || 'a round cute fantasy beast';
     const paletteEn = (app && app.beastPaletteEn) || 'pastel pink';
     const lk = look || { features: [], icons: [], outfit: null };
     // 物种英文自带 "a/an/the"（不然拼出来是 "a a chubby dragon"），别再补一次冠词
     const sp = String(speciesEn).trim();
     const spWithArticle = /^(a|an|the)\s/i.test(sp) ? sp : 'a ' + sp;
-    const bits = [spWithArticle, 'with ' + paletteEn + ' fur'];
+    const bits = [spWithArticle, keepColors
+      ? 'in exactly the same colours as the reference image'
+      : 'with ' + paletteEn + ' fur'];
     for (const i of lk.icons || []) bits.push(i.en);
     for (const f of lk.features || []) bits.push(f.en);
     if (lk.outfit) bits.push(lk.outfit.en);
@@ -475,8 +574,94 @@
     { cn: '一片小羽毛扇', en: 'a tiny feather fan in its paws', keys: ['扇子', '优雅', '表演'] },
     { cn: '一个小铃铛球', en: 'a tiny bell on a toy ball', keys: ['玩具', '球', '玩'] },
     { cn: '一本小菜谱', en: 'a tiny cookbook in its paws', keys: ['菜谱', '做饭', '煮', '厨房', '烘焙'] },
-    { cn: '一顶小渔夫帽', en: 'a tiny bucket hat on its head', keys: ['渔夫帽', '遮阳', '钓鱼'] }
+    { cn: '一顶小渔夫帽', en: 'a tiny bucket hat on its head', keys: ['渔夫帽', '遮阳', '钓鱼'] },
+
+    // ---- 「每日造型道具」: 2026-10-28 新增 22 件 ----
+    //   ⚠️ 为什么单独一批: 兜底挑道具时只从这批里挑 → 「一块小磨刀石」「一块小砖头」
+    //     「一枚小印章」这种日常杂物不会再出现在服饰描述里（用户 2026-10-28 反馈）。
+    //   ⚠️ daily: true = 可以被兜底挑中; 旧的 43 件没有这个标记 → 它们只从
+    //     「当天记忆里挑出来」那条路出现（用户明确要求"道具服饰应该在记忆里匹配"）。
+    //   ⚠️ series = 跟衣服配套用（同一个系列的才搭，见 dailyLookFor）。
+    //   ⚠️ keys 一律用【具体的词】，别用单字泛词（吃/玩/睡…）→ 那会让所有人撞同一个道具。
+    { cn: '一盒马卡龙', en: 'a small pastel box of macarons', keys: ['马卡龙', '甜点', '饼干'], series: 'sweet', daily: true },
+    { cn: '一块小蛋糕', en: 'a tiny slice of pink strawberry cake', keys: ['蛋糕', '奶油蛋糕'], series: 'sweet', daily: true },
+    { cn: '一支棉花糖', en: 'a big fluffy pink marshmallow on a stick', keys: ['棉花糖', '糖霜'], series: 'sweet', daily: true },
+    { cn: '一杯奶昔', en: 'a tall strawberry milkshake with a cherry on top', keys: ['奶昔', '奶昔杯'], series: 'sweet', daily: true },
+
+    { cn: '一把蕾丝伞', en: 'a frilly white lace parasol', keys: ['蕾丝', '阳伞', '洋伞'], series: 'fairy', daily: true },
+    { cn: '一顶珍珠冠', en: 'a tiny crown strung with pearls', keys: ['珍珠冠', '珍珠'], series: 'fairy', daily: true },
+    { cn: '一双水晶鞋', en: 'a pair of tiny sparkling crystal slippers', keys: ['水晶鞋', '水晶'], series: 'fairy', daily: true },
+    { cn: '一颗粉钻', en: 'a sparkling pink diamond', keys: ['粉钻', '钻石'], series: 'fairy', daily: true },
+
+    { cn: '一颗小行星', en: 'a tiny ringed planet floating above its paw', keys: ['小行星', '行星', '星球'], series: 'galaxy', daily: true },
+    { cn: '一枚彗星尾', en: 'a tiny comet with a sparkling icy tail', keys: ['彗星', '彗尾'], series: 'galaxy', daily: true },
+    { cn: '一枚流星徽章', en: 'a glowing shooting-star badge', keys: ['流星', '流星徽章'], series: 'galaxy', daily: true },
+    { cn: '一顶太空盔', en: 'a round glass astronaut helmet', keys: ['太空', '宇航', '太空盔'], series: 'galaxy', daily: true },
+
+    { cn: '一把团扇', en: 'a round silk fan painted with plum blossoms', keys: ['团扇', '绢扇'], series: 'oriental', daily: true },
+    { cn: '一枚玉如意', en: 'a pale jade ruyi scepter', keys: ['如意', '玉如意', '玉佩'], series: 'oriental', daily: true },
+    { cn: '一盏宫灯', en: 'a tiny ornate palace lantern', keys: ['宫灯', '花灯'], series: 'oriental', daily: true },
+    { cn: '一支小毛笔', en: 'a tiny calligraphy brush with a red tassel', keys: ['毛笔', '书法', '笔墨'], series: 'oriental', daily: true },
+
+    { cn: '一只小海星', en: 'a plump pink starfish', keys: ['海星'], series: 'ocean', daily: true },
+    { cn: '一串珠贝', en: 'a string of pearl-like seashells', keys: ['珠贝', '贝壳'], series: 'ocean', daily: true },
+    { cn: '一只水母灯', en: 'a tiny glowing jellyfish lantern', keys: ['水母', '水母灯'], series: 'ocean', daily: true },
+
+    { cn: '一根小魔杖', en: 'a tiny star-tipped magic wand', keys: ['魔杖', '魔法棒'], series: 'magic', daily: true },
+    { cn: '一颗许愿星', en: 'a glowing wish star', keys: ['许愿', '许愿星'], series: 'magic', daily: true },
+    { cn: '一只精灵灯', en: 'a tiny glowing fairy lantern', keys: ['精灵', '精灵灯'], series: 'magic', daily: true },
+
+    // ---- 第二批（2026-10-28 补）: 每日造型道具 22 → 40 件 ----
+    { cn: '一只甜甜圈', en: 'a pink frosted doughnut with rainbow sprinkles', keys: ['甜甜圈', '糖霜圈'], series: 'sweet', daily: true },
+    { cn: '一块提拉米苏', en: 'a slice of tiramisu dusted with cocoa', keys: ['提拉米苏', '提拉米苏块'], series: 'sweet', daily: true },
+    { cn: '一支甜筒', en: 'a melting pastel ice cream cone', keys: ['雪糕', '冰淇淋', '甜筒'], series: 'sweet', daily: true },
+
+    { cn: '一只独角兽角', en: 'a tiny spiraled unicorn horn', keys: ['独角兽', '独角兽角'], series: 'fairy', daily: true },
+    { cn: '一顶花冠', en: 'a wreath of tiny pink roses', keys: ['花冠', '玫瑰冠'], series: 'fairy', daily: true },
+    { cn: '一把仙女棒', en: 'a tiny star-tipped fairy wand', keys: ['仙女棒', '仙杖'], series: 'fairy', daily: true },
+
+    { cn: '一台小火箭', en: 'a tiny toy rocket ship', keys: ['飞行器', '小火箭', '火箭'], series: 'galaxy', daily: true },
+    { cn: '一张星图', en: 'a tiny glowing star map scroll', keys: ['星图', '星海图'], series: 'galaxy', daily: true },
+    { cn: '一枚陨石', en: 'a smooth glowing meteorite', keys: ['陨石', '陨石块'], series: 'galaxy', daily: true },
+
+    { cn: '一枚香囊', en: 'a tiny embroidered silk sachet', keys: ['香囊', '荷包', '香包'], series: 'oriental', daily: true },
+    { cn: '一枚玉坠', en: 'a pale jade pendant on a red cord', keys: ['吊坠', '平安扣', '玉坠'], series: 'oriental', daily: true },
+    { cn: '一面小铜镜', en: 'a tiny round bronze mirror', keys: ['铜镜', '小镜子', '镜子'], series: 'oriental', daily: true },
+
+    { cn: '一只海螺号', en: 'a tiny spiral conch shell', keys: ['海螺', '螺号'], series: 'ocean', daily: true },
+    { cn: '一朵小水花', en: 'a tiny crown of ocean foam', keys: ['水花', '浪花', '泡沫'], series: 'ocean', daily: true },
+    { cn: '一只小螃蟹', en: 'a tiny cute pink crab', keys: ['螃蟹', '小螃蟹', '蟹钳'], series: 'ocean', daily: true },
+
+    { cn: '一顶睡帽', en: 'a floppy striped nightcap', keys: ['睡帽', '夜帽', '尖顶睡帽'], series: 'magic', daily: true },
+    { cn: '一只许愿瓶', en: 'a tiny glass wishing bottle with a cork', keys: ['许愿瓶', '玻璃瓶'], series: 'magic', daily: true },
+    { cn: '一颗幸运珠', en: 'a tiny four-leaf clover charm', keys: ['幸运珠', '四叶草', '幸运草'], series: 'magic', daily: true }
   ];
+
+  // ⚠️【2026-10-28 用户实测】「所有用户的宠物服饰描述都是拿个小碗一双白手套」
+  //   真因: 关键词表里有一批【泛词】—— 吃/饭/饿/喝/玩/睡/冷/热/甜/新/家/门/水…
+  //   谁的一天里都会冒出"吃了饭""今天很热""有点累" → 全都命中「一只小碗」，
+  //   而原来的同分排序还按【中文名】排 → 全网第一个都是小碗。
+  //   → 泛词命中【不算数】；一个意象都没命中具体词就不采用 → 改走【天+种子】兜底，
+  //     每人每天都不一样。
+  //   ⚠️ 别改成"关键词要两个字以上"!「听了一首歌」的"歌"、「读了一本书」的"书/读"
+  //     都是单字，可那恰恰是最该命中的 → 判据是【这个词泛不泛】，不是【词长】。
+  const GENERIC_ICON_KEYS = new Set([
+    // 吃喝（人人每天都有 → 全体小碗/全体热饮）
+    '吃', '饭', '饿', '喂', '喝',
+    // 日常动作
+    '玩', '穿', '衣服', '穿搭', '搭配', '睡', '困', '梦', '夜',
+    // 身体 / 天气 / 口味 泛词
+    '冷', '热', '甜', '亮', '新', '轻', '飘', '飞', '水',
+    // 家 / 杂物 / 花钱
+    '门', '家', '锁', '装', '记录', '拍', '签', '买', '省', '好吃'
+  ]);
+
+  /**
+   * 「每日造型道具」池（2026-10-28）
+   *   = ICON_LIBRARY 里标了 daily 的那一批（22 件华丽款）
+   *   兜底挑道具时【只】从这里挑 → 日常杂物（磨刀石/砖头/印章…）不会出现在服饰描述里。
+   */
+  const DAILY_ICONS = ICON_LIBRARY.filter(x => x.daily);
 
   // 聊天里提到什么 → 也算今天经历的一部分（关键词表，想加随时加）
   const CHAT_KEYWORD_FEATURES = [
@@ -500,28 +685,143 @@
   const DIVINE_STYLE_LOCK = 'ornate and luminous, jewel-toned accents, glowing filigree, '
     + 'radiant sparkling aura, still chibi and adorable';
 
-  // 「穿搭」—— 用户原话「穿搭倒是可以随便」，天马行空的安全出口放这儿
+  // 「穿搭」—— 用户 2026-10-28 原话：
+  //   「这个服装系统到底都有些什么衣服，能不能搞点炫丽可爱的服装库，
+  //     像奇迹暖暖那样的娃衣一堆堆，一天一个造型？」
+  //
+  //   ⚠️【为什么重做】原来只有 **20 件**，而且大半是日常款（草帽/西装/围裙/袜子/眼镜/雨衣/
+  //     水壶/溜冰鞋/小旗子/白手套）→ 不炫丽不可爱；而且 200 只宠物平均每 10 只就撞同一件，
+  //     最热的一件 16/200 → "白手套"这种天天见。
+  //
+  //   现在 **72 件**，按 6 个系列（每系 12 件）：
+  //     sweet 甜品 / fairy 童话 / galaxy 星际 / oriental 国风 / ocean 海洋 / magic 魔法萌
+  //
+  //   ⚠️ 约定：
+  //     · cn 一律以「的」结尾 —— todayLookCn 会拼成"一把小扇子、穿着xx的"，
+  //       结尾没「的」它才会补一个，别拼出「的的」。
+  //     · en 是给【生图模型】看的画面描述 → 要具体到颜色/材质/细节，
+  //       写太笼统模型画不出来（这跟 ICON_LIBRARY 的 en 是同一个道理）。
+  //     · series 用来做【衣服和道具配套】：兜底挑道具时优先挑同一个系列的（见 dailyLookFor）。
+  // ⚠️【2026-10-29 用户实测】「鹦鹉只有徽章，没有新衣服」。
+  //   上面那 72 件里, 鸟穿不了一批(草莓裙/小熊睡衣/绣花鞋/芭蕾舞鞋/长袜/围裙…)，
+  //   还有两件是「胸口别个小东西」(薄荷糖/珍珠胸针) → 画出来就是一枚徽章。
+  //   → 鹦鹉单独一套【鸟穿得上的衣服】: 领结/帽/围巾/斗篷/皇冠/花环/背带/头饰…
+  //   series 沿用那 6 个系列 → 兜底挑道具时还是「衣服和道具配套」。
+  const PARROT_OUTFITS = [
+    { cn: '围着奶油领结的', en: 'wearing a big fluffy cream whipped-cream bow tie around its neck', series: 'sweet' },
+    { cn: '戴着小饼干帽的', en: 'wearing a puffy pink marshmallow hat with a tiny cookie on top', series: 'sweet' },
+    { cn: '套着草莓围兜的', en: 'wearing a red strawberry-patterned bib around its neck', series: 'sweet' },
+    { cn: '系着棒棒糖丝带的', en: 'wearing a ribbon around its neck with a swirled pink lollipop hanging from it', series: 'sweet' },
+
+    { cn: '戴着珍珠小皇冠的', en: 'wearing a pearl-studded tiny crown on its head', series: 'fairy' },
+    { cn: '围着蕾丝领巾的', en: 'wearing a white lace ruffled collar around its neck', series: 'fairy' },
+    { cn: '戴着小花环的', en: 'wearing a wreath of tiny pastel flowers on its head', series: 'fairy' },
+    { cn: '肩披小斗篷的', en: 'wearing a tiny plush deep-pink velvet cape over its shoulders', series: 'fairy' },
+
+    { cn: '围着流星围巾的', en: 'wearing a scarf patterned with shooting stars around its neck', series: 'galaxy' },
+    { cn: '戴着小宇航头盔的', en: 'wearing a round glass astronaut helmet with a golden ring', series: 'galaxy' },
+    { cn: '背着喷气小背包的', en: 'wearing a tiny silver jetpack backpack with blue thrusters', series: 'galaxy' },
+    { cn: '披着极光小纱的', en: 'draped in a tiny shimmering aurora shawl in green and violet', series: 'galaxy' },
+
+    { cn: '戴着竹斗笠的', en: 'wearing a woven bamboo conical hat', series: 'oriental' },
+    { cn: '系着祥云腰封的', en: 'wearing a golden auspicious-cloud sash wrapped around its body', series: 'oriental' },
+    { cn: '簪着点翠发簪的', en: 'wearing a blue kingfisher-feather hairpin', series: 'oriental' },
+    { cn: '围着红绸小披帛的', en: 'wearing a flowing red silk shawl draped around its shoulders', series: 'oriental' },
+
+    { cn: '戴着贝壳发夹的', en: 'wearing a pearlescent seashell hair clip', series: 'ocean' },
+    { cn: '围着浪花围巾的', en: 'wearing a scarf of foamy turquoise waves around its neck', series: 'ocean' },
+    { cn: '戴着小圆潜水镜的', en: 'wearing a round teal diving mask over its eyes', series: 'ocean' },
+    { cn: '套着救生圈的', en: 'wearing a pink-and-white striped swim ring around its body', series: 'ocean' },
+
+    { cn: '戴着巫师尖帽的', en: 'wearing a pointed purple wizard hat with gold stars', series: 'magic' },
+    { cn: '戴着兔耳兜帽的', en: 'wearing a hood with long floppy bunny ears', series: 'magic' },
+    { cn: '背着魔法书包的', en: 'carrying a starry spellbook backpack on its back', series: 'magic' },
+    { cn: '围着星星小披肩的', en: 'wearing a tiny starry knitted shawl around its shoulders', series: 'magic' },
+  ];
   const BEAST_OUTFITS = [
-    { cn: '穿旗袍的', en: 'wearing a red silk qipao dress' },
-    { cn: '戴着草帽的', en: 'wearing a straw hat' },
-    { cn: '系着蝴蝶结的', en: 'with a big ribbon bow on its head' },
-    { cn: '披着小斗篷的', en: 'wearing a tiny cape' },
-    { cn: '穿小西装的', en: 'wearing a tiny formal suit' },
-    { cn: '顶着小皇冠的', en: 'wearing a small golden crown' },
-    { cn: '背着书包的', en: 'carrying a little school backpack' },
-    { cn: '穿着小袜子的', en: 'wearing tiny knitted socks' },
-    { cn: '戴着圆框眼镜的', en: 'wearing round glasses' },
-    { cn: '系着围裙的', en: 'wearing a little apron' },
-    { cn: '披着毛线围巾的', en: 'wearing a chunky knitted scarf' },
-    { cn: '穿着花衬衫的', en: 'wearing a floral shirt' },
-    { cn: '戴着大耳机的', en: 'wearing oversized headphones' },
-    { cn: '套着小雨衣的', en: 'wearing a little yellow raincoat' },
-    { cn: '提着小灯笼的', en: 'holding a tiny paper lantern' },
-    { cn: '扎着小辫子的', en: 'with two tiny braided pigtails' },
-    { cn: '戴着白手套的', en: 'wearing little white gloves' },
-    { cn: '抱着小水壶的', en: 'holding a tiny watering can' },
-    { cn: '穿着溜冰鞋的', en: 'wearing tiny ice skates' },
-    { cn: '举着小旗子的', en: 'holding a tiny flag' }
+    // ---- 甜品系 sweet ----
+    { cn: '系着奶油蝴蝶结的', en: 'wearing a big fluffy cream whipped-cream bow', series: 'sweet' },
+    { cn: '穿着草莓裙的', en: 'wearing a red strawberry dress with tiny yellow seeds', series: 'sweet' },
+    { cn: '戴着棉花糖帽的', en: 'wearing a puffy pink marshmallow hat', series: 'sweet' },
+    { cn: '捧着马卡龙盘的', en: 'holding a tiny plate of pastel macarons', series: 'sweet' },
+    { cn: '围着格纹围裙的', en: 'wearing a frilly gingham checkered apron', series: 'sweet' },
+    { cn: '顶着小蛋糕的', en: 'with a tiny slice of layered cake balanced on its head', series: 'sweet' },
+    { cn: '穿着焦糖背心的', en: 'wearing a caramel-brown knitted vest', series: 'sweet' },
+    { cn: '挂着小棒棒糖的', en: 'with a swirled pink lollipop on a ribbon', series: 'sweet' },
+    { cn: '戴着巧克力贝雷帽的', en: 'wearing a chocolate-brown beret with a tiny cherry', series: 'sweet' },
+    { cn: '套着奶泡长袜的', en: 'wearing long cream socks with whipped-cream frills', series: 'sweet' },
+    { cn: '捧着热可可的', en: 'holding a steaming mug of hot cocoa', series: 'sweet' },
+    { cn: '别着薄荷糖的', en: 'with a mint candy pinned to its chest', series: 'sweet' },
+
+    // ---- 童话系 fairy ----
+    { cn: '拖着蕾丝长裙的', en: 'wearing a long white lace princess dress with a ruffled hem', series: 'fairy' },
+    { cn: '戴着珍珠小皇冠的', en: 'wearing a pearl-studded tiny crown', series: 'fairy' },
+    { cn: '披着天鹅绒斗篷的', en: 'wearing a plush deep-pink velvet cape', series: 'fairy' },
+    { cn: '系着缎面蝴蝶结的', en: 'wearing a big glossy satin ribbon collar', series: 'fairy' },
+    { cn: '撑着一把蕾丝伞的', en: 'holding a frilly white lace parasol', series: 'fairy' },
+    { cn: '穿着蓬蓬纱裙的', en: 'wearing a puffy layered tulle ballet dress', series: 'fairy' },
+    { cn: '戴着花环的', en: 'wearing a wreath of tiny pastel flowers', series: 'fairy' },
+    { cn: '提着水晶鞋的', en: 'holding a tiny sparkling crystal slipper', series: 'fairy' },
+    { cn: '穿着芭蕾舞鞋的', en: 'wearing tiny pink satin ballet shoes', series: 'fairy' },
+    { cn: '戴着星星发箍的', en: 'wearing a delicate star-shaped headband', series: 'fairy' },
+    { cn: '穿着荷叶边睡裙的', en: 'wearing a frilly satin nightgown', series: 'fairy' },
+    { cn: '别着珍珠胸针的', en: 'with a big pearl brooch pinned on its chest', series: 'fairy' },
+
+    // ---- 星际系 galaxy ----
+    { cn: '披着星光斗篷的', en: 'wearing a midnight-blue cape scattered with glowing stars', series: 'galaxy' },
+    { cn: '戴着宇航头盔的', en: 'wearing a round glass astronaut helmet with a golden ring', series: 'galaxy' },
+    { cn: '围着流星围巾的', en: 'wearing a scarf patterned with shooting stars', series: 'galaxy' },
+    { cn: '背着喷气小背包的', en: 'wearing a tiny silver jetpack backpack with blue thrusters', series: 'galaxy' },
+    { cn: '头顶小行星的', en: 'with a tiny ringed planet resting on its head', series: 'galaxy' },
+    { cn: '穿着银河长裙的', en: 'wearing a long dress of swirling purple and blue galaxy colors', series: 'galaxy' },
+    { cn: '举着月牙灯的', en: 'holding a glowing crescent-moon lantern', series: 'galaxy' },
+    { cn: '戴着彗星光环的', en: 'wearing a halo of a tiny comet with a sparkling tail', series: 'galaxy' },
+    { cn: '提着小卫星的', en: 'holding a tiny golden satellite with solar panels', series: 'galaxy' },
+    { cn: '套着宇宙连体衣的', en: 'wearing a starry navy space onesie', series: 'galaxy' },
+    { cn: '戴着行星光环的', en: 'wearing tiny glowing planet rings around its neck', series: 'galaxy' },
+    { cn: '披着极光纱的', en: 'draped in shimmering aurora fabric in green and violet', series: 'galaxy' },
+
+    // ---- 国风系 oriental ----
+    { cn: '穿着绣花汉服的', en: 'wearing a traditional Chinese hanfu robe with embroidered flowers', series: 'oriental' },
+    { cn: '戴着竹斗笠的', en: 'wearing a woven bamboo conical hat', series: 'oriental' },
+    { cn: '提着红灯笼的', en: 'holding a tiny red paper lantern', series: 'oriental' },
+    { cn: '系着祥云腰带的', en: 'wearing a belt with golden auspicious-cloud patterns', series: 'oriental' },
+    { cn: '簪着点翠发簪的', en: 'wearing a blue kingfisher-feather hairpin', series: 'oriental' },
+    { cn: '抱着小折扇的', en: 'holding a tiny silk folding fan', series: 'oriental' },
+    { cn: '穿着绣花鞋的', en: 'wearing tiny embroidered cloth shoes', series: 'oriental' },
+    { cn: '披着锦绣披帛的', en: 'wearing a flowing brocade silk shawl', series: 'oriental' },
+    { cn: '顶着虎头帽的', en: 'wearing a cute little tiger-head hood', series: 'oriental' },
+    { cn: '穿着团花旗袍的', en: 'wearing a red qipao with round floral patterns', series: 'oriental' },
+    { cn: '提着小铜铃的', en: 'holding a tiny brass bell with a red ribbon', series: 'oriental' },
+    { cn: '戴着玉镯的', en: 'wearing a pale green jade bangle', series: 'oriental' },
+
+    // ---- 海洋系 ocean ----
+    { cn: '簪着贝壳发夹的', en: 'wearing a pearlescent seashell hair clip', series: 'ocean' },
+    { cn: '围着浪花围巾的', en: 'wearing a scarf of foamy turquoise waves', series: 'ocean' },
+    { cn: '穿着水母纱裙的', en: 'wearing a translucent glowing jellyfish dress', series: 'ocean' },
+    { cn: '抱着小海星灯的', en: 'holding a softly glowing starfish lantern', series: 'ocean' },
+    { cn: '戴着圆潜水镜的', en: 'wearing a round teal diving mask', series: 'ocean' },
+    { cn: '套着救生泡泡的', en: 'wearing a pink-and-white striped swim ring', series: 'ocean' },
+    { cn: '提着珊瑚手提袋的', en: 'carrying a coral-branch shaped handbag', series: 'ocean' },
+    { cn: '戴着鲸鱼帽的', en: 'wearing a soft blue whale-shaped hood', series: 'ocean' },
+    { cn: '穿着浪花短袜的', en: 'wearing socks with white wave patterns', series: 'ocean' },
+    { cn: '戴着小丑鱼帽的', en: 'wearing a tiny orange clownfish cap', series: 'ocean' },
+    { cn: '捧着一块海玻璃的', en: 'holding a smooth piece of pale green sea glass', series: 'ocean' },
+    { cn: '披着海藻斗篷的', en: 'wearing a seaweed-green cape with frilly edges', series: 'ocean' },
+
+    // ---- 魔法萌系 magic ----
+    { cn: '戴着巫师尖帽的', en: 'wearing a pointed purple wizard hat with gold stars', series: 'magic' },
+    { cn: '背着魔法书包的', en: 'carrying a starry spellbook backpack', series: 'magic' },
+    { cn: '穿着泡泡袖裙的', en: 'wearing a dress with enormous puffed sleeves', series: 'magic' },
+    { cn: '戴着兔耳兜帽的', en: 'wearing a hood with long floppy bunny ears', series: 'magic' },
+    { cn: '穿着小熊睡衣的', en: 'wearing a fuzzy teddy-bear onesie', series: 'magic' },
+    { cn: '戴着猫耳帽的', en: 'wearing a soft cat-ear hat', series: 'magic' },
+    { cn: '背着蝴蝶翅膀的', en: 'wearing tiny shimmering butterfly wings', series: 'magic' },
+    { cn: '顶着小熊鼻的', en: 'with a tiny round teddy-bear nose on its muzzle', series: 'magic' },
+    { cn: '抱着小泰迪的', en: 'holding a tiny plush teddy bear', series: 'magic' },
+    { cn: '穿着恐龙连体衣的', en: 'wearing a mint-green dinosaur onesie with soft spikes', series: 'magic' },
+    { cn: '裹着星星小毯的', en: 'wrapped in a starry knitted blanket', series: 'magic' },
+    { cn: '捧着小水晶球的', en: 'holding a glowing crystal ball', series: 'magic' }
   ];
   const BEAST_PALETTES = [
     { cn: '粉红', en: 'bubblegum pink' },
@@ -673,7 +973,16 @@
   const STORAGE_KEYS = {
     desktopPetVisible: 'petNestDesktopPetVisible',
     desktopPetPos: 'petNestDesktopPetPos',
-    petNestEnabled: 'petNestEnabled'
+    petNestEnabled: 'petNestEnabled',
+    // 🔴 2026-10-29: 选了哪套房间背景 (存 id, 图片是内置的不用存)
+    roomBackground: 'petNestRoomBackground',
+    // 🔴 2026-11-04: 聊天框上那只桌宠是【哪一只】(存 pet id)。
+    //   用户 2026-11-04 问: "我养两只宠物, 可不可以自己选一只显示在聊天框上做桌宠,
+    //   现在好像是默认第一只显示" —— 以前 currentDesktopPet() 写死 pets[0]
+    //   (按 createdAt 排, 就是最早领养的那只), 养了两只也换不了。
+    //   存 localStorage 而不是 pets 表: 这是【显示偏好】不是宠物数据,
+    //   换设备/重装 App 丢了也只是回落到第一只, 不该为它升 db 版本。
+    desktopPetId: 'petNestDesktopPetId'
   };
 
   // ============================================================
@@ -782,6 +1091,23 @@
         dailySignals: '++id, day, type, at',
         dailyNotes: '++id, day, at'
       });
+      // v4: 用户指定的「初始物种形象」（垫图）
+      //   ⚠️【2026-10-30 用户定】以前每天换装是拿【上一张图】当垫 → 每天在昨天那张上改，
+      //     宠物长相会一天比一天偏（用户原话「越画越不像了」）。
+      //   → 改成拿这张【固定的】用户图当垫 → 每次都从同一个锚点出发，不会越跑越偏。
+      //   一只宠物一张（主键就是 petId）→ 换宠物不会串图。
+      d.version(4).stores({
+        pets: '&id, createdAt',
+        events: '++id, createdAt, petId',
+        stages: '&key, petId, stage',
+        days: '&day',
+        turns: '&key',
+        meta: '&key',
+        assets: '&id, petId, stage',
+        dailySignals: '++id, day, type, at',
+        dailyNotes: '++id, day, at',
+        speciesImages: '&petId'
+      });
       await d.open();
       return d;
     })();
@@ -797,6 +1123,59 @@
   async function setMeta(key, value) {
     const d = await openDb();
     await d.meta.put({ key, value });
+  }
+
+  // ============================================================
+  // 2·五、用户指定的「初始物种形象」（垫图）
+  //   ⚠️【2026-10-30 用户定】
+  //   「我之前宠物系统的设计是每天换装的时候，拿头一天的图去垫图画新衣服新形象，
+  //    结果因为每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了，
+  //    时间久了肯定更严重，我想改成以后用用户指定的形象去垫」
+  //   → 每天换装的参考图 = 用户上传的那张【固定图】，不是上一张。
+  //   → 每天都在同一个锚点上重新画 → 衣服/道具天天换，长相不漂。
+  // ============================================================
+
+  /**
+   * 取这只宠物的「初始物种形象」（没有就返回 null）
+   * ⚠️ 拿不到一定要返回 null，不能抛 —— 旧数据/老设备可能还没升到 v4 表。
+   */
+  async function getSpeciesImage(petId) {
+    if (!petId) return null;
+    try {
+      const d = await openDb();
+      if (!d.speciesImages) return null;
+      const row = await d.speciesImages.get(petId);
+      return (row && row.blob) ? row : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 存这张「初始物种形象」（Blob 本体，不存 base64） */
+  async function setSpeciesImage(petId, blob, name) {
+    if (!petId) throw new Error('不知道是哪只宠物');
+    if (!blob) throw new Error('没有图片');
+    const d = await openDb();
+    await d.speciesImages.put({
+      petId: petId,
+      blob: blob,
+      name: name || '',
+      updatedAt: Date.now()
+    });
+    return true;
+  }
+
+  /** 清除 → 回到「拿上一张图当垫」的旧行为 */
+  async function clearSpeciesImage(petId) {
+    if (!petId) return false;
+    try {
+      const d = await openDb();
+      if (!d.speciesImages) return false;
+      await d.speciesImages.delete(petId);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   async function getGrains() {
@@ -1331,7 +1710,8 @@
           const db = await openDb();
           const prow = await db.pets.get(row.id);
           const behaviors = await todayBehaviors();
-          const look = dailyLookFor(behaviors, dayKey(Date.now()), (prow && prow.seed) || (prow && prow.id));
+          const look = dailyLookFor(behaviors, dayKey(Date.now()), (prow && prow.seed) || (prow && prow.id), [],
+            prow && prow.kind);
           who = beastDisplayName(app, look);
         } catch (e) { /* 用 identity 兜底 */ }
       }
@@ -1723,7 +2103,10 @@
     const behaviors = await todayBehaviors(d);
     const row = await openDb().then(db => db.pets.get(pet.id));
     const app = (row && row.appearance) || pet.appearance || null;
-    const look = dailyLookFor(behaviors, d, (row && row.seed) || pet.seed || pet.id);
+    // ⚠️【2026-10-29】要带 kind —— 鹦鹉用的是自己那套衣服,
+    //   不带 kind → 名册写的衣服和图上画的衣服不是同一套（老毛病）。
+    const look = dailyLookFor(behaviors, d, (row && row.seed) || pet.seed || pet.id, [],
+      (row && row.kind) || pet.kind);
     return { behaviors, look, appearance: app };
   }
 
@@ -1734,8 +2117,13 @@
   function formatPetAppearance(pet) {
     const a = pet.appearance;
     const base = KINDS[pet.kind] ? KINDS[pet.kind].label : pet.kind;
+    // ⚠️【2026-10-28 修】刚领养的宠物 appearance 还是 null → 以前直接 return 品种名，
+    //   名册上就只剩"小猫"，【看不见今天这身】
+    //   （更新日志 v4.41 写的是"名册和照顾弹窗里能看见它今天这身"）。
+    //   → 没有 appearance 也把今天这身（衣服 + 道具）带上。
+    const lookCn0 = todayLookCn(todayLookForSync(pet));
     if (!a) {
-      return base;
+      return lookCn0 ? base + ' · ' + lookCn0 : base;
     }
     // 今天它该长什么样（衣服 + 道具）
     // ⚠️【2026-10-27 用户提】「鹦鹉没看见换装文字说明」→
@@ -1970,6 +2358,272 @@
     }
   }
 
+  // ============================================================
+  // 房间背景 (2026-10-29: 加了第二套「星夜树屋」, 两套都能选)
+  // ============================================================
+  // ⚠️ 每套背景自带【站位】和【精灵大小】——
+  //   以前那 4 列 × 3 排是照着「阳光小屋」的构图调的
+  //   (地毯在 42%~68%, 下面是木地板)。换一张图, 宠物就会浮空或埋进家具。
+  //
+  // 🔴 2026-10-29 用户第二次改口：「精灵不要弄小了, 我们基本上只养一只,
+  //   不需要12个槽位, 给我把屋里的宠物弄大点, 现在大一倍都可以, 不然看都看不清」
+  //   → 精灵 21% → 42%（大一倍）；12 个槽位 → 一排最多 3 只；
+  //     只有 1 只时它站在【正中间】当主角（以前第 1 只固定在左上角）。
+  const ROOM_BACKGROUNDS = [
+    {
+      id: 'light',
+      name: '阳光小屋',
+      img: 'assets/pet-nest/room-light.webp',
+      alt: '阳光下的绘本小屋，窗边有藤篮和柔软地毯',
+      petW: 42,          // 精灵占场景宽度的百分比（21 → 42，大一倍）
+      eggW: 14,          // 没孵化的蛋单独小一号：跟着精灵翻倍会糊住藤篮
+      maxPets: 3,        // 屋里最多同时站 3 只，其余在下面「小窝名册」里
+      // ⚠️ rowY = 精灵【中心】的高度（%），脚比它低 11.8%（精灵 42% + 名字标签）
+      //   → 脚在 55.8%，落在【地毯 38%~62%】里（2026-10-29 用户指出
+      //   「老背景的宠物全部站在地毯外面去了」—— 原来是 60，脚在 71.8%，全在毯子外面）
+      rowY: 44,
+      // 3 只并排时左右各摆 28% → 精灵左右边缘落在 1% / 99%，【不裁边】
+      //   （28 → 精灵 42% 宽；33 会让边缘变成 -4% / 104%，猫的爪子尾巴被切掉）
+      rowSpread: 28,
+      // 没孵化的蛋: 藤篮里
+      // ⚠️ 篮子的绒面实测 x 71.8%~90.9%, y 32%~35%；第 2 颗放篮子前沿，小一号
+      eggSpots: [
+        { x: 79, y: 34, w: 14 },
+        { x: 76, y: 39, w: 11 }
+      ]
+    },
+    {
+      id: 'star',
+      name: '星夜树屋',
+      img: 'assets/pet-nest/room-star.webp',
+      alt: '开满白花的树洞小屋，挂着星星灯和水晶，窗外是远处的城堡',
+      petW: 42,          // 两套背景一样大（用户：精灵不要弄小）
+      eggW: 20,          // ★ 巢够大 → 蛋放大到 20%（11% 时用户说「差点没看见」）
+      maxPets: 3,
+      rowY: 80,          // 脚在 91.8%，落在底部蓝白圆毯上
+      rowSpread: 28,     // 跟老背景一致：3 只并排不裁边
+      // 蛋放树洞那张床上（蓝枕头 + 白绒面的巢）
+      // ⚠️ 巢里能躺东西的【白绒面实测 x 51.5%~85%】——
+      //   蛋原来在 57%（占 47%~67%）→ 左边缘凸出巢外（用户 2026-10-29 截图指出
+      //   「星夜的蛋还是太靠外了」）→ 挪到 63%（占 53%~73%，整个躺在巢里）
+      //   第 2 颗蛋只能小一号挤在右边 —— 巢就这么宽，两个 20% 的蛋放不下
+      eggSpots: [
+        { x: 63, y: 51, w: 20 },
+        { x: 77, y: 51, w: 16 }
+      ]
+    }
+  ];
+
+  /**
+   * 第 i 只精灵在屋里的站位（中心点坐标，CSS 用 translate(-50%,-50%)）。
+   * 用户「基本上只养一只」→ 只有 1 只时它站正中间当主角，
+   * 2 只 / 3 只才往两边散开。
+   * @param {object} room  房间配置
+   * @param {number} i     第几只（从 0 开始）
+   * @param {number} n     一共几只
+   */
+  function roomSpotFor(room, i, n) {
+    const count = Math.max(1, Math.min(n || 1, room.maxPets || 3));
+    if (count <= 1) return { x: 50, y: room.rowY };
+    const step = Math.min(room.rowSpread || 33, 66 / (count - 1));
+    const idx = Math.min(i, count - 1);
+    return { x: 50 + (idx - (count - 1) / 2) * step, y: room.rowY };
+  }
+
+  /**
+   * 把宠物分成「站在地上的」和「还是蛋的」。
+   * ⚠️ 蛋【不占】地面的站位 —— 否则「屋里有 1 颗蛋 + 1 只猫」时，
+   *    猫会被挤到一边去，而用户就养一只 —— 那只猫必须是正中间的主角。
+   * @param {Array} pets
+   * @returns {{floorPets: Array, eggPets: Array}}
+   */
+  function splitPetsForRoom(pets) {
+    const eggPets = [];
+    const floorPets = [];
+    (pets || []).forEach(function (pet) {
+      if (isHatchKind(pet.kind) && Number(pet.stage || 0) === 0) eggPets.push(pet);
+      else floorPets.push(pet);
+    });
+    return { floorPets: floorPets, eggPets: eggPets };
+  }
+
+  /** 当前选中的房间背景 (认不出来就回默认那套) */
+  function currentRoomBackground() {
+    let id = '';
+    try { id = localStorage.getItem(STORAGE_KEYS.roomBackground) || ''; } catch (e) { id = ''; }
+    for (var i = 0; i < ROOM_BACKGROUNDS.length; i++) {
+      if (ROOM_BACKGROUNDS[i].id === id) return ROOM_BACKGROUNDS[i];
+    }
+    return ROOM_BACKGROUNDS[0];
+  }
+
+  /** 打开「换房间背景」选择器 (2026-10-29) */
+  function openRoomPicker() {
+    const dlg = el('pn-room-dialog');
+    const list = el('pn-room-list');
+    if (!dlg || !list) return;
+    const cur = currentRoomBackground();
+    list.innerHTML = '';
+    ROOM_BACKGROUNDS.forEach(function (bg) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pn-room-card' + (bg.id === cur.id ? ' is-current' : '');
+      btn.setAttribute('aria-label', '换成' + bg.name);
+      const img = document.createElement('img');
+      img.src = bg.img;
+      img.alt = bg.name;
+      img.loading = 'lazy';
+      const nm = document.createElement('span');
+      nm.className = 'pn-room-card-name';
+      nm.textContent = bg.name;
+      btn.append(img, nm);
+      btn.onclick = function () {
+        try { localStorage.setItem(STORAGE_KEYS.roomBackground, bg.id); } catch (e) { /* noop */ }
+        try { if (dlg.close) dlg.close(); } catch (e2) { /* noop */ }
+        renderAll();
+        showToastSafe('房间换成「' + bg.name + '」', 'success');
+      };
+      list.appendChild(btn);
+    });
+    if (!dlg.open && typeof dlg.showModal === 'function') dlg.showModal();
+  }
+
+  // ============================================================
+  // 8·一、设置页「宠物初始形象」（垫图）· 2026-10-30
+  //
+  //   用户原话：
+  //   「我之前宠物系统的设计是每天换装的时候，拿头一天的图去垫图画新衣服新形象，
+  //     结果因为每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了，
+  //     时间久了肯定更严重，我想改成以后用用户指定的形象去垫」
+  //
+  //   → 这里让用户给每只宠物上传一张【固定的】形象图；
+  //     以后每天换装都拿它当垫图（见 generateNewLook）→ 衣服道具天天换，长相不漂。
+  // ============================================================
+
+  /** 点了「上传」之后，记下是给哪只宠物选文件 */
+  let speciesUploadPetId = '';
+  /** createObjectURL 过的缩略图 → 重画之前先 revoke，不然内存一直涨 */
+  let speciesThumbUrls = [];
+
+  function revokeSpeciesThumbs() {
+    speciesThumbUrls.forEach(function (u) {
+      try { URL.revokeObjectURL(u); } catch (e) { /* noop */ }
+    });
+    speciesThumbUrls = [];
+  }
+
+  /** 小屋管理面板里的「初始形象」那一栏 */
+  async function renderSpeciesList() {
+    const list = el('pn-species-list');
+    if (!list) return;
+    let pets = [];
+    try { pets = await listPets(); } catch (e) { pets = []; }
+    revokeSpeciesThumbs();
+    list.innerHTML = '';
+    if (!pets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'pn-species-empty';
+      empty.textContent = '还没有宠物 —— 去小窝领养一只，再回来设它的初始形象。';
+      list.appendChild(empty);
+      return;
+    }
+    for (const pet of pets) {
+      const base = await getSpeciesImage(pet.id);
+      const hasBase = !!(base && base.blob);
+
+      const row = document.createElement('div');
+      row.className = 'pn-species-row';
+
+      const thumb = document.createElement('div');
+      thumb.className = 'pn-species-thumb';
+      if (hasBase) {
+        try {
+          const url = URL.createObjectURL(base.blob);
+          speciesThumbUrls.push(url);
+          const im = document.createElement('img');
+          im.src = url;
+          im.alt = pet.name + ' 的初始形象';
+          thumb.appendChild(im);
+        } catch (e) { /* noop */ }
+      } else {
+        thumb.classList.add('is-empty');
+        thumb.textContent = '未设';
+      }
+
+      const info = document.createElement('div');
+      info.className = 'pn-species-info';
+      const nm = document.createElement('div');
+      nm.className = 'pn-species-name';
+      nm.textContent = pet.name + ' · ' + ((KINDS[pet.kind] && KINDS[pet.kind].label) || pet.kind);
+      const st = document.createElement('div');
+      st.className = 'pn-species-state';
+      st.textContent = hasBase
+        ? '已设定 → 以后换装都从这张图出发，长相不会越跑越偏'
+        : '没设 → 现在还是拿上一张图当垫（会越画越不像）';
+      info.append(nm, st);
+
+      const actions = document.createElement('div');
+      actions.className = 'pn-species-actions';
+      const up = document.createElement('button');
+      up.type = 'button';
+      up.className = 'pn-species-btn';
+      up.textContent = hasBase ? '更换' : '上传';
+      up.onclick = function () {
+        speciesUploadPetId = pet.id;
+        const input = el('pn-species-input');
+        if (input) {
+          input.value = '';       // 选同一个文件也能触发 change
+          input.click();
+        }
+      };
+      actions.appendChild(up);
+      if (hasBase) {
+        const cl = document.createElement('button');
+        cl.type = 'button';
+        cl.className = 'pn-species-btn pn-species-btn-ghost';
+        cl.textContent = '清除';
+        cl.onclick = async function () {
+          await clearSpeciesImage(pet.id);
+          showToastSafe('已清除「' + pet.name + '」的初始形象（回到拿上一张当垫）', 'success');
+          await renderSpeciesList();
+        };
+        actions.appendChild(cl);
+      }
+
+      row.append(thumb, info, actions);
+      list.appendChild(row);
+    }
+  }
+
+  /** 选完文件 → 裁方缩图 → 存起来 */
+  async function handleSpeciesFilePicked(file) {
+    const petId = speciesUploadPetId;
+    speciesUploadPetId = '';
+    if (!petId || !file) return;
+    try {
+      if (!window.PetImage || typeof window.PetImage.prepareSpeciesImage !== 'function') {
+        throw new Error('生图模块还没加载好，等一下再试');
+      }
+      const blob = await window.PetImage.prepareSpeciesImage(file);
+      await setSpeciesImage(petId, blob, file.name || '');
+      showToastSafe('初始形象已设定 —— 以后换装都从这张图出发。想马上看效果，回小窝点「换个模样」。', 'success');
+      await renderSpeciesList();
+    } catch (e) {
+      showToastSafe('设定失败：' + (e && e.message ? e.message : e), 'error');
+    }
+  }
+
+  /** 绑一次就够（设置页里那个 input 是静态 HTML，不会被替换掉） */
+  function bindSpeciesUi() {
+    const input = el('pn-species-input');
+    if (!input || input.__pnSpeciesBound) return;
+    input.__pnSpeciesBound = true;
+    input.addEventListener('change', function () {
+      const f = input.files && input.files[0];
+      if (f) handleSpeciesFilePicked(f);
+    });
+  }
+
   function renderScene(state) {
     const host = el('pn-pets');
     if (!host) return;
@@ -1977,18 +2631,48 @@
     const empty = el('pn-empty');
     if (empty) empty.hidden = state.total > 0;
 
-    state.pets.slice(0, 12).forEach((pet, i) => {
+    // 🔴 2026-10-29: 背景图 / 精灵大小 / 站位 —— 全部跟着当前房间走
+    const room = currentRoomBackground();
+    const roomImg = el('pn-room-image');
+    if (roomImg) {
+      if (roomImg.getAttribute('src') !== room.img) roomImg.setAttribute('src', room.img);
+      roomImg.setAttribute('alt', room.alt || '');
+    }
+    try { host.style.setProperty('--pn-pet-w', room.petW + '%'); } catch (e) { /* noop */ }
+    try { host.style.setProperty('--pn-egg-w', (room.eggW || 11) + '%'); } catch (e) { /* noop */ }
+
+    // 🔴 蛋（还没孵出来）单独算：蛋不占地面的站位。
+    //    否则「屋里有 1 颗蛋 + 1 只猫」时，猫会被挤到一边去，
+    //    而用户就养一只 —— 那只猫必须是正中间的主角。
+    const split = splitPetsForRoom(state.pets);
+    const eggPets = split.eggPets;
+    const floorPets = split.floorPets;
+    const maxPets = room.maxPets || 3;
+    // 站位按【真的显示出来的只数】算 → 只有 1 只时它站正中间
+    const placed = [];
+    floorPets.slice(0, maxPets).forEach(function (pet, i, arr) {
+      const spot = roomSpotFor(room, i, arr.length);
+      placed.push({ pet: pet, x: spot.x, y: spot.y, egg: false });
+    });
+    eggPets.slice(0, room.eggSpots.length).forEach(function (pet, i) {
+      const egg = room.eggSpots[i];
+      placed.push({ pet: pet, x: egg.x, y: egg.y, egg: true, eggW: egg.w || room.eggW });
+    });
+
+    placed.forEach(function (item) {
+      const pet = item.pet;
       const divine = !!(pet.appearance && pet.appearance.kind === 'divine');
       const hatched = !divine && isHatchKind(pet.kind) && pet.stage > 0;
       const btn = document.createElement('button');
       btn.className = 'pn-pet';
       btn.type = 'button';
       btn.setAttribute('aria-label', '照顾' + pet.name);
-      btn.style.left = (22 + (i % 4) * 19) + '%';
-      btn.style.top = (51 + Math.floor(i / 4) * 12) + '%';
-      if (isHatchKind(pet.kind) && pet.stage === 0) {
-        btn.style.left = (82 - (i % 3) * 5) + '%';
-        btn.style.top = (32 + Math.floor(i / 3) * 2) + '%';
+      btn.style.left = item.x + '%';
+      btn.style.top = item.y + '%';
+      if (item.egg) {
+        btn.classList.add('pn-pet-egg');
+        // 每个蛋位可以带自己的宽度（第 2 颗蛋要小一号才挤得进巢里）
+        try { btn.style.setProperty('--pn-egg-w', (item.eggW || 11) + '%'); } catch (e) { /* noop */ }
       }
       if (divine) btn.classList.add('pn-pet-divine');
       else if (hatched) btn.classList.add('pn-pet-hatched');
@@ -2037,6 +2721,120 @@
       btn.onclick = () => openCareDialog(pet.id);
       host.append(btn);
     });
+  }
+
+  // ============================================================
+  // 桌宠命中区: 按【宠物实际可见像素】判 (2026-10-29 用户实测)
+  // ============================================================
+  //
+  // 精灵是六格图集, 宠物只占格子中间一部分 —— 下面那截是透明的。
+  // 事件绑在整个容器 #pn-desktop-pet 上 → 看不见的空白照样能点,
+  // 点了就拖动宠物 / 弹出菜单 (用户原话「宠物下方很长一个空间」)。
+  //
+  // 这里在运行时用 canvas 量一次图集, 算出每帧的可见包围盒,
+  // 点的时候按坐标判 —— 视觉一个字都不改 (不像 clip-path 会裁掉阴影)。
+  //
+  // 【量不到就放行】: 图片加载失败 / 跨域取不到像素 → 退回原来的行为,
+  // 绝不会变成「点不到了」。
+  let spriteHitCache = null;      // { url, boxes: [6 个 {top,right,bottom,left} (0~1)] }
+  let spriteHitMeasuring = false;
+
+  /**
+   * 量一次图集, 算出 6 帧各自的可见包围盒。
+   * @param {string} url 图片地址 (assets 路径或 blob:)
+   */
+  function measureSpriteHitBoxes(url) {
+    if (!url) return;
+    if (spriteHitCache && spriteHitCache.url === url) return;
+    if (spriteHitMeasuring) return;
+    spriteHitMeasuring = true;
+    try {
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = function () {
+        try {
+          const W = img.naturalWidth, H = img.naturalHeight;
+          if (!W || !H) return;
+          const cv = document.createElement('canvas');
+          cv.width = W; cv.height = H;
+          const ctx = cv.getContext('2d', { willReadFrequently: true });
+          if (!ctx) return;
+          ctx.drawImage(img, 0, 0);
+          const data = ctx.getImageData(0, 0, W, H).data;
+          const gw = Math.floor(W / 3), gh = Math.floor(H / 2);
+          const boxes = [];
+          for (let r = 0; r < 2; r++) {
+            for (let c = 0; c < 3; c++) {
+              let minX = gw, minY = gh, maxX = -1, maxY = -1;
+              for (let y = 0; y < gh; y++) {
+                for (let x = 0; x < gw; x++) {
+                  const a = data[((r * gh + y) * W + (c * gw + x)) * 4 + 3];
+                  if (a > 12) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                  }
+                }
+              }
+              if (maxX < 0) { boxes.push({ top: 0, right: 1, bottom: 1, left: 0 }); continue; }
+              boxes.push({
+                top: minY / gh, bottom: (maxY + 1) / gh,
+                left: minX / gw, right: (maxX + 1) / gw
+              });
+            }
+          }
+          spriteHitCache = { url: url, boxes: boxes };
+        } catch (e) {
+          /* 量不到就保持旧行为 */
+        } finally {
+          spriteHitMeasuring = false;
+        }
+      };
+      img.onerror = function () { spriteHitMeasuring = false; };
+      img.src = url;
+    } catch (e) {
+      spriteHitMeasuring = false;
+    }
+  }
+
+  /**
+   * 纯函数: 这个点算不算点在宠物身上?
+   *
+   * @param {number} clientX @param {number} clientY
+   * @param {{left,top,width,height}} rect 精灵盒子的矩形
+   * @param {number} frame 当前帧号 (0~5)
+   * @param {Array} boxes 6 帧的包围盒 (0~1 的归一化坐标)
+   * @returns {boolean} true = 算点在宠物身上
+   */
+  function petHitTest(clientX, clientY, rect, frame, boxes) {
+    if (!rect || !rect.width || !rect.height) return true;
+    if (!boxes || !boxes.length) return true;          // 没量到 → 放行
+    const nx = (clientX - rect.left) / rect.width;
+    const ny = (clientY - rect.top) / rect.height;
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return false;   // 点在精灵盒外
+    const b = boxes[frame] || boxes[0];
+    if (!b) return true;
+    return nx >= b.left && nx <= b.right && ny >= b.top && ny <= b.bottom;
+  }
+
+  /** 这次点击到底落在宠物身上吗? (名字标签也算 —— 它就在宠物旁边) */
+  function petPointOnPet(clientX, clientY) {
+    const nameEl = el('pn-desktop-pet-name');
+    if (nameEl) {
+      try {
+        const nr = nameEl.getBoundingClientRect();
+        if (nr && nr.width && nr.height &&
+          clientX >= nr.left && clientX <= nr.right &&
+          clientY >= nr.top && clientY <= nr.bottom) return true;
+      } catch (e) { /* noop */ }
+    }
+    const sprite = el('pn-desktop-pet-sprite');
+    if (!sprite) return true;
+    let rect = null;
+    try { rect = sprite.getBoundingClientRect(); } catch (e) { rect = null; }
+    const boxes = spriteHitCache ? spriteHitCache.boxes : null;
+    return petHitTest(clientX, clientY, rect, desktopPetFrame, boxes);
   }
 
   function setSpriteFrame(node, frame) {
@@ -2315,11 +3113,38 @@
       evolveBtn.classList.toggle('pn-btn-glow', want);
       evolveBtn.textContent = want ? (pet.needsRedraw ? '✨ 换个新模样' : '✨ 换个模样') : '换个模样';
     }
+    // 🔴 2026-11-04: 「让它当桌宠」—— 是不是已经在当, 一眼看得出来
+    const deskBtn = el('pn-deskpet-btn');
+    if (deskBtn) {
+      const isEggPet = isHatchKind(pet.kind) && Number(pet.stage || 0) <= 0;
+      const already = isDesktopPet(pet.id);
+      deskBtn.textContent = already ? '✔ 聊天框里就是它' : '让它当桌宠';
+      deskBtn.disabled = already || isEggPet;
+      deskBtn.title = isEggPet
+        ? '它还是颗蛋，没有模样可以显示在聊天框上'
+        : (already ? '现在聊天框上显示的就是它' : '把它放到聊天框上当桌宠');
+      deskBtn.onclick = function () { chooseDesktopPet(pet.id); };
+    }
     const actions = el('pn-care-actions');
     if (actions) actions.hidden = pet.status !== 'ready';
     const dlg = el('pn-care-dialog');
     if (dlg && !dlg.open) dlg.showModal();
     dlg.dataset.petId = petId;
+  }
+
+  /**
+   * 把某只宠物放到聊天框上当桌宠 (2026-11-04, 用户要求)
+   * 只改显示偏好, 不动宠物数据; 换完立刻重画, 不用退出宠物屋。
+   */
+  async function chooseDesktopPet(petId) {
+    if (!petId) return;
+    const pet = (uiState ? uiState.pets : []).find(p => p.id === petId);
+    if (!pet) return;
+    setDesktopPetId(petId);
+    const dlg = el('pn-care-dialog');
+    if (dlg && dlg.open) dlg.close();
+    showToastSafe(pet.name + ' 现在是聊天框上的桌宠了', 'success');
+    try { await refreshAll(); } catch (e) { /* 刷新失败也已经把选择存下了 */ }
   }
 
   async function doCare(action) {
@@ -2381,6 +3206,8 @@
         + SATIETY_DECAY_PER_HOUR + ' 点 —— 满值大概撑半天，所以一天得喂两次。'
         + '连续 ' + STARVE_DAYS + ' 天没吃上饭的宝宝会离开（不可恢复）。';
     }
+    // ⚠️【2026-10-30】初始形象（垫图）那一栏也在这儿 → 开面板就重画
+    try { renderSpeciesList(); } catch (e) { /* 忽略 */ }
     const host = el('pn-manage-list');
     if (!host) return;
     host.replaceChildren();
@@ -2604,8 +3431,55 @@
     return null;
   }
 
+  /**
+   * 把桌宠切成「left/top 定位」。
+   *
+   * ⚠️ 2026-11-02 (用户实测「桌宠下面有一长条看不见的区域, 把聊天框按钮都挡住了」):
+   *   桌宠默认是 CSS 的 right/bottom 定位 (右下角); 拖过之后 JS 写 left/top。
+   *   两套定位【同时生效】时, 绝对定位元素 top+bottom 都指定、height 是 auto
+   *   → 高度被撑满整段 (CSS2.1 §10.6.4), 容器变成一条从顶到底的透明长条:
+   *     · 右边整个聊天区都被这条透明长条盖住 → 表情面板之类点不到
+   *     · offsetHeight 变成几百 px → 拖动时 maxY 算出来几乎是 0 → 桌宠再也拖不下去
+   *   所以切到 left/top 模式时, 必须把 right/bottom 明确清成 auto。
+   *
+   * @param {HTMLElement} wrap 桌宠容器
+   * @param {number} left 左上角 x
+   * @param {number} top 左上角 y
+   */
+  function useLeftTopPosition(wrap, left, top) {
+    if (!wrap) return;
+    wrap.style.left = Math.round(left) + 'px';
+    wrap.style.top = Math.round(top) + 'px';
+    wrap.style.right = 'auto';
+    wrap.style.bottom = 'auto';
+  }
+
   let desktopPetFrame = 0;
   let desktopPetTimer = null;
+
+  /**
+   * 桌宠换帧定时器 (呼吸动画的 JS 那一半; CSS 那一半是 @keyframes)
+   *
+   * 🔴 2026-11-05: 影院 iframe 打开时宿主要彻底静默 → 这条定时器一起停,
+   *   退出影院再起来 (见 window.PetNest.pauseDesktopPet / resumeDesktopPet)。
+   *   呼吸动画本身靠 CSS, 宿主把桌宠 display:none 之后它就不画了;
+   *   但这个 setInterval 是 JS 的, 藏起来也照样跑, 得手动停。
+   */
+  function startDesktopPetTimer() {
+    if (desktopPetTimer) return;
+    desktopPetTimer = setInterval(() => {
+      if (document.hidden) return;
+      desktopPetFrame = (desktopPetFrame + 1) % 6;
+      const sprite = el('pn-desktop-pet-sprite');
+      if (sprite && sprite.style.backgroundImage) setSpriteFrame(sprite, desktopPetFrame);
+    }, 5200);
+  }
+
+  function stopDesktopPetTimer() {
+    if (!desktopPetTimer) return;
+    clearInterval(desktopPetTimer);
+    desktopPetTimer = null;
+  }
 
   /**
    * 页面上现在有没有「全屏遮罩」弹着。
@@ -2743,9 +3617,56 @@
   // 最近一次拿到的 state —— 让「桌宠刚显示出来」的时候能补画 sprite
   let desktopPetState = null;
 
+  /**
+   * 从宠物列表里挑出「该当桌宠」的那一只 (纯函数, 方便测)
+   * @param pets   按 createdAt 排好的宠物数组
+   * @param wantId 用户选的那只 (空 = 没选过)
+   * 规则: 选过且那只还在 → 就是它; 否则回落第一只 (= 最早领养的那只, 老行为)。
+   */
+  function pickDesktopPet(pets, wantId) {
+    const list = Array.isArray(pets) ? pets : [];
+    if (!list.length) return null;
+    if (wantId) {
+      const hit = list.find(p => p && p.id === wantId);
+      if (hit) return hit;
+    }
+    return list[0];
+  }
+
   function currentDesktopPet() {
     const st = desktopPetState;
-    return st && st.pets && st.pets.length ? st.pets[0] : null;
+    if (!st || !st.pets || !st.pets.length) return null;
+    // 🔴 2026-11-04: 用户在宠物屋里选过哪一只, 就显示哪一只 (以前写死 pets[0])。
+    const want = desktopPetId();
+    const pet = pickDesktopPet(st.pets, want);
+    // 选的那只不在了 (饿满 3 天被删 / 清过数据) → 把失效的记录清掉, 免得每次白查。
+    if (want && (!pet || pet.id !== want)) setDesktopPetId('');
+    return pet;
+  }
+
+  /** 用户选中当桌宠的那只 (空 = 没选过, 走默认的第一只) */
+  function desktopPetId() {
+    try { return localStorage.getItem(STORAGE_KEYS.desktopPetId) || ''; }
+    catch (e) { return ''; }
+  }
+
+  function setDesktopPetId(id) {
+    try {
+      if (id) localStorage.setItem(STORAGE_KEYS.desktopPetId, String(id));
+      else localStorage.removeItem(STORAGE_KEYS.desktopPetId);
+    } catch (e) { /* 忽略 */ }
+  }
+
+  /**
+   * 这只宠物现在是不是聊天框上那只桌宠?
+   * pet-speech.js 用它决定「这句话的泡泡该不该挂在桌宠身上」——
+   * 不挂在这只身上还硬往桌宠身上画, 就是【张冠李戴】:
+   * 用户明明把小花设成桌宠, 结果小白的台词冒在小花头上。
+   */
+  function isDesktopPet(petId) {
+    if (!petId) return false;
+    const cur = currentDesktopPet();
+    return !!(cur && cur.id === petId);
   }
 
   /** 只画内容（sprite / 名字 / 气泡），不管可见性 */
@@ -2759,6 +3680,8 @@
         if (url) {
           sprite.style.backgroundImage = 'url("' + url + '")';
           sprite.hidden = false;
+          // 量一次这张图集的可见区 (命中判定要用)
+          try { measureSpriteHitBoxes(url); } catch (e) { /* noop */ }
           const divine = !!(pet.appearance && pet.appearance.kind === 'divine');
           if (divine) sprite.classList.add('pn-sprite-divine');
           else if (isHatchKind(pet.kind) && pet.stage > 0) sprite.classList.add('pn-sprite-hatched');
@@ -2856,19 +3779,14 @@ function careActionForButton(btnId) {
 
     const saved = loadDesktopPetPos();
     if (saved) {
-      wrap.style.left = saved.x + 'px';
-      wrap.style.top = saved.y + 'px';
+      // 必须走 useLeftTopPosition: 它会把 right/bottom 清成 auto。
+      // 直接写 left/top 的话, CSS 的 right/bottom 还在 → 两套定位同时生效
+      // → 容器被拉成一条从顶到底的透明长条 (2026-11-02 用户实测的遮挡根因)
+      useLeftTopPosition(wrap, saved.x, saved.y);
     }
 
     // 待机动画：呼吸 + 偶尔换姿态
-    if (!desktopPetTimer) {
-      desktopPetTimer = setInterval(() => {
-        if (document.hidden) return;
-        desktopPetFrame = (desktopPetFrame + 1) % 6;
-        const sprite = el('pn-desktop-pet-sprite');
-        if (sprite && sprite.style.backgroundImage) setSpriteFrame(sprite, desktopPetFrame);
-      }, 5200);
-    }
+    startDesktopPetTimer();
 
     // 拖动
     let dragging = false;
@@ -2880,20 +3798,41 @@ function careActionForButton(btnId) {
       // 用 class 的话这里永远判不中 → 按菜单按钮也会进拖动 + setPointerCapture，
       // 指针捕获会把后续 click 全抢到 wrap 上 → 按钮的 onclick 根本不触发（用户实测：两个按钮都点不动）
       if (e.target.closest('#pn-desktop-pet-menu')) return;
+      // 🔴 2026-10-29 (用户实测「宠物下方很长一个空间, 点到都会挪动宠物或弹出弹窗」):
+      //   精灵图是六格图集, 宠物只占格子中间一部分, 下面那截是透明的;
+      //   事件又绑在整个容器上 → 空白照样能点。
+      //   现在按【宠物实际可见像素】判: 点了空白就当没点。
+      try { if (!petPointOnPet(e.clientX, e.clientY)) return; } catch (err) { /* noop */ }
       dragging = true;
       moved = false;
       startX = e.clientX; startY = e.clientY;
       const rect = wrap.getBoundingClientRect();
       originX = rect.left; originY = rect.top;
       wrap.classList.add('is-dragging');
-      try { wrap.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+      try {
+        wrap.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // 容器现在是 pointer-events:none, 万一浏览器不让它捕获, 退到宠物图片上
+        try { const sp = el('pn-desktop-pet-sprite'); if (sp) sp.setPointerCapture(e.pointerId); }
+        catch (e2) { /* 忽略 */ }
+      }
     });
 
     wrap.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        if (!moved) {
+          moved = true;
+          // 🔴 2026-11-02: 真正开始拖的那一刻才切到 left/top 定位
+          //   (见 useLeftTopPosition 的注释)。
+          //   必须切在算 maxY 【之前】: 不切的话 offsetHeight 还是被撑大的高度,
+          //   maxY = innerHeight - offsetHeight ≈ 0 → 桌宠再也拖不到下面。
+          //   用 originX/originY 切 → 桌宠原地不动, 不会跳。
+          useLeftTopPosition(wrap, originX, originY);
+        }
+      }
       const maxX = Math.max(0, window.innerWidth - wrap.offsetWidth);
       const maxY = Math.max(0, window.innerHeight - wrap.offsetHeight);
       const nx = Math.min(maxX, Math.max(0, originX + dx));
@@ -2948,6 +3887,8 @@ function careActionForButton(btnId) {
       }
       // 同上：菜单用 id 判定，点菜单里的空白处不能把菜单又切回去
       if (e.target.closest('#pn-desktop-pet-menu')) return;
+      // 🔴 2026-10-29: 同 pointerdown —— 点了宠物下方的空白, 不弹菜单
+      try { if (!petPointOnPet(e.clientX, e.clientY)) return; } catch (err) { /* noop */ }
       const menu = el('pn-desktop-pet-menu');
       if (menu) menu.hidden = !menu.hidden;
     });
@@ -3036,6 +3977,14 @@ function careActionForButton(btnId) {
         // 桌宠只在聊天界面常驻，其他界面收起；有弹窗/遮罩时也要让位
         syncDesktopPetVisibility();
       } catch (e) { /* 忽略 */ }
+      // ⚠️【2026-10-30】进小屋管理面板（⚙）时重画「初始形象」那一栏
+      //   （领养了新宠物、刚上传完图，列表都得是最新的）
+      try {
+        if (screenId === 'pet-nest-screen') {
+          bindSpeciesUi();
+          renderSpeciesList();
+        }
+      } catch (e) { /* 忽略 */ }
       return out;
     };
     patched.__pnPatched = true;
@@ -3109,6 +4058,11 @@ function careActionForButton(btnId) {
     const manageBtn = el('pn-manage-btn');
     if (manageBtn) {
       manageBtn.onclick = () => openManageDialog();
+    }
+    // 🎨 → 换房间背景 (2026-10-29)
+    const roomBtn = el('pn-room-switch');
+    if (roomBtn) {
+      roomBtn.onclick = () => openRoomPicker();
     }
     document.querySelectorAll('[data-pn-action]').forEach(b => {
       b.onclick = () => doCare(b.getAttribute('data-pn-action'));
@@ -3206,8 +4160,10 @@ function careActionForButton(btnId) {
     return window.confirm('这会调用一次生图接口（可能产生费用），要画吗？');
   }
 
-  function subjectForPet(pet, lookOverride) {
+  function subjectForPet(pet, lookOverride, opts) {
     const app = pet.appearance || null;
+    // 有参考图（蜕变）→ 颜色跟参考图走，不再写死盲盒配色（见 beastPrompt 的说明）
+    const keepColors = !!(opts && opts.keepColors);
     // 今天这身：衣服 + 道具
     // ⚠️【2026-10-27 用户定】「所有宠物都要每天能换装」→ 鹦鹉、猫狗也必须有。
     // ⚠️ 生图提示词必须全英文 → 这里只取 look 里的 en（中文那套是给人看的）
@@ -3247,7 +4203,17 @@ function careActionForButton(btnId) {
       const breed = PARROT_BREEDS.find(b => b.key === (app && app.breedKey)) || PARROT_BREEDS[0];
       const mark = app && app.markEn ? ', ' + app.markEn : '';
       // ⚠️【2026-10-27 修】原来这条分支【完全不接今日造型】→ 鹦鹉永远不会换装
-      return 'a fluffy ' + breed.en + ' with ' + breed.colorEn + mark + lookTail
+      const colorText = keepColors
+        ? 'in exactly the same colours as the reference image'
+        : 'with ' + breed.colorEn;
+      // ⚠️【2026-10-29】道具表里有一批写的是 'in its paws'（爪子）——
+      //   鸟没有爪子, 写爪子模型就会给鹦鹉配上两只小爪 → 画成毛球兽 → 衣服穿不上。
+      //   → 鹦鹉改成「用喙拿着」(鹦鹉本来就是这么拿东西的)。
+      const parrotTail = lookTail
+        .replace(/in its paws/g, 'in its beak')
+        .replace(/in its paw\b/g, 'in its beak')
+        .replace(/above its paw\b/g, 'above its beak');
+      return 'a fluffy ' + breed.en + ' ' + colorText + mark + parrotTail
         + ', ' + ART_STYLE_LOCK;
     }
 
@@ -3257,7 +4223,7 @@ function careActionForButton(btnId) {
       const mark = app && app.markEn ? app.markEn : '';
       if (app && app.beastSpeciesEn) {
         // 新幻兽：物种 + 配色 + 今天挑出来的小装饰 + 审美锁
-        return beastPrompt(app, lk, mark);
+        return beastPrompt(app, lk, mark, keepColors);
       }
       // 老数据（2026-10-24 之前孵出来的）：物种英文从老表找，行为特征照样生效
       const speciesEn = app && app.identity
@@ -3270,7 +4236,7 @@ function careActionForButton(btnId) {
           || (BEAST_PALETTES.find(p => p.cn === app.palette) || {}).en
           || 'pastel pink')
         : 'pastel pink';
-      return beastPrompt({ beastSpeciesEn: speciesEn, beastPaletteEn: paletteEn }, lk, mark);
+      return beastPrompt({ beastSpeciesEn: speciesEn, beastPaletteEn: paletteEn }, lk, mark, keepColors);
     }
 
     // 猫狗：天生就是猫狗 → 物种 + 固定配色 + 今天这身
@@ -3280,7 +4246,8 @@ function careActionForButton(btnId) {
     }[pet.kind] || 'cute fantasy pet';
     const pal = petPaletteFor(pet);
     const bits = [kindText];
-    if (pal) bits.push('with ' + pal.en + ' fur');
+    if (keepColors) bits.push('in exactly the same colours as the reference image');
+    else if (pal) bits.push('with ' + pal.en + ' fur');
     for (const b of lookBits) bits.push(b);
     return bits.join(', ') + ', ' + ART_STYLE_LOCK;
   }
@@ -3314,18 +4281,24 @@ function careActionForButton(btnId) {
 
     const stageKey = pet.id + '::' + row.stage;
     const stageRow = await d.stages.get(stageKey);
-    const subject = subjectForPet(row, await buildTodayLook(row));
     const change = (stageRow && stageRow.marking) ? stageRow.marking : '';
-    const imgOpts = {
-      quality: 'medium',
-      // 自动换装和手动生图【分开算次数】→ 自动换装不会把手动「换个模样」的名额吃掉
-      counter: o.auto ? 'auto' : 'manual',
-      budget: o.auto ? o.budget : undefined
-    };
 
     let processed;
     let refBlob = null;
-    if (row.assetRef) {
+    // 参考图是「六格图集」还是「一张单人像」→ 提示词必须跟着换
+    // （对着单人像还说「参考图里有同一个角色的六个姿势」就是在骗模型）
+    let refKind = 'atlas';
+    // ⚠️【2026-10-30 用户定】优先用用户指定的「初始物种形象」当垫图
+    //   以前是拿【上一张图】当垫 → 每天都在昨天那张上改 → 脸一天比一天偏
+    //   （用户原话「每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了」）
+    //   → 现在每天从【同一个锚点】重新画 → 衣服道具天天换，长相不漂。
+    //   ⚠️ 蛋还没孵出来时不用（那时画的是蛋，拿一张动物肖像当参考会把蛋画歪）
+    const canUseBaseImage = !(isHatchKind(row.kind) && Number(row.stage || 0) === 0);
+    const baseImageRow = canUseBaseImage ? await getSpeciesImage(row.id) : null;
+    if (baseImageRow && baseImageRow.blob) {
+      refBlob = baseImageRow.blob;
+      refKind = 'portrait';
+    } else if (row.assetRef) {
       // 已经有样貌了 → 带参考图蜕变, 保持是同一只
       const refRow = await d.assets.get(row.assetRef);
       refBlob = refRow ? refRow.blob : null;
@@ -3334,6 +4307,22 @@ function careActionForButton(btnId) {
       // 猫狗：没有生图资产，但有 starter 图集 → 拿它当参考图（保证还是那只猫）
       refBlob = await starterSpriteBlob(row);
     }
+
+    const imgOpts = {
+      quality: 'medium',
+      // ⚠️【2026-10-29】鹦鹉要用【鸟的姿态】画六格 → 得知道这是哪种宠物
+      kind: row.kind,
+      // 自动换装和手动生图【分开算次数】→ 自动换装不会把手动「换个模样」的名额吃掉
+      counter: o.auto ? 'auto' : 'manual',
+      budget: o.auto ? o.budget : undefined,
+      // ⚠️【2026-10-30】参考图类型 → 提示词写法不一样
+      referenceKind: refKind
+    };
+
+    // ⚠️【2026-10-28】提示词要在【知道有没有参考图】之后再拼 ——
+    //   有参考图 → 颜色跟参考图走（用户要保留"画到第三次那个玫红色"）；
+    //   没有参考图（首次生成）→ 照旧写盲盒配色。
+    const subject = subjectForPet(row, await buildTodayLook(row), { keepColors: !!refBlob });
     if (refBlob) {
       // ⚠️【2026-10-27 修】原来 change 写死成 'grow a little more mature and keep the same look'
       //   → 蜕变提示词只让模型改这一点，【当日穿搭压根没进请求】（用户实测：小水壶画不出来）
@@ -3379,7 +4368,10 @@ function careActionForButton(btnId) {
   // ============================================================
   // 10·五、每天自动换一次造型
   //   用户定的规矩：
-  //   - 每天最多自动 1 次（手动再点「换个模样」另外算，但都受每日 3 张上限管）
+  //   - 每天最多自动 1 次（手动再点「换个模样」另外算）
+  //   ⚠️【2026-10-29 用户定】生图次数【不限】了 —— "反正画多少自己掌握"
+  //     → CFG.dailyLimit = 0 → limit = 0 → 不拦
+  //     （每只宠物每天只画一次的守卫还在 → 同一只不会一天画好几张）
   //   - 画不成就跳过：不报错、不弹窗、造型不变（「大不了不换」）
   //   - 不累积：今天这套直接替换昨天那套
   //   - 用上一张当参考图蜕变 → 保证「还是同一只」
@@ -3417,7 +4409,8 @@ function careActionForButton(btnId) {
       // 自动换装走【自动】名额（跟手动生图分开算）→ 不会把手动「换个模样」卡住
       const used = Number(window.PetImage.todayCount ? window.PetImage.todayCount('auto') : 0);
       const limit = Number(opts && opts.budget) || autoLookLimit();
-      if (used >= limit) return null;                   // 今日自动换装的名额用完了
+      // ⚠️【2026-10-29】limit = 0 → 不限名额（用户自己掌握画多少）
+      if (limit > 0 && used >= limit) return null;   // 今日自动换装的名额用完了
       await setMeta(guardKey, day);
       autoLookRunning = true;
       try {
@@ -3436,12 +4429,16 @@ function careActionForButton(btnId) {
     }
   }
 
-  /** 自动换装每天的名额：没单独配就按全局上限 */
+  /** 自动换装每天的名额：没单独配就按全局上限。返回 0 = 不限。 */
   function autoLookLimit() {
     const cfg = (window.PetImage && window.PetImage.CFG) || {};
     const b = Number(cfg.autoLookBudget) || 0;
     if (b > 0) return b;
-    return Number(cfg.dailyLimit) || 3;
+    // ⚠️【2026-10-29】dailyLimit = 0 → 不限（用户自己掌握画多少）
+    //   自动换装这边也一样不限 —— 但「每只宠物每天只画一次」的守卫还在，
+    //   所以同一只不会一天画好几张。
+    const d = Number(cfg.dailyLimit) || 0;
+    return d > 0 ? d : 0;
   }
 
   /**
@@ -3487,6 +4484,10 @@ function careActionForButton(btnId) {
     bindUi();
     initDesktopPet();
     startDesktopPetWatchdog();
+
+    // ⚠️【2026-10-30】小屋管理面板里的「初始形象」那栏
+    bindSpeciesUi();
+    try { await renderSpeciesList(); } catch (e) { /* 忽略 */ }
 
     // 先把库打开、把界面画出来 —— 桌宠的图要马上有，不能等 messageStore
     try {
@@ -3707,12 +4708,20 @@ function careActionForButton(btnId) {
 
   window.PetNest = {
     open: openPetNest,
+    // 🔴 2026-10-29: 房间背景 (多套可选)
+    getRoomBackground: currentRoomBackground,
+    roomBackgrounds: ROOM_BACKGROUNDS,
     // 备份 / 恢复（主库备份带不走独立库 PetNestDB，得走这两个口子）
     exportBackupData,
     importBackupData,
     close: closePetNest,
     getState,
     getDb: openDb,
+    // ⚠️【2026-10-30】用户指定的「初始物种形象」（垫图）
+    getSpeciesImage,
+    setSpeciesImage,
+    clearSpeciesImage,
+    renderSpeciesList,
     adopt,
     care,
     recordConversation,
@@ -3729,6 +4738,14 @@ function careActionForButton(btnId) {
       refreshAll();
     },
     desktopPetEnabled,
+    // 🔴 2026-11-05: 宿主静默 (影院 iframe 打开) 时停/起桌宠的换帧定时器。
+    //   呼吸动画靠 CSS, 宿主把桌宠藏起来它就不画了;
+    //   但这个 setInterval 是 JS 的, 藏起来照样跑 —— 得手动停。
+    pauseDesktopPet: stopDesktopPetTimer,
+    resumeDesktopPet: startDesktopPetTimer,
+    // 🔴 2026-11-04: 聊天框上那只桌宠是谁 —— 用户可以在宠物屋里自己选
+    desktopPetId: desktopPetId,
+    isDesktopPet: isDesktopPet,
     // 所有宠物（pet-speech.js 巡视时要用）
     listPets,
     // 每天自动换一次造型（手动也可以调）
@@ -3738,6 +4755,10 @@ function careActionForButton(btnId) {
     // 给测试用：把纯规则函数暴露出来（tests/pet-nest.test.cjs 直接验算，不用起浏览器）
     rules: {
       grainsFor,
+      // 桌宠命中判定 (纯函数, 测试直接验算)
+      petHitTest,
+      // 🔴 2026-11-04: 「该显示哪一只当桌宠」纯函数 (测试直接验算)
+      pickDesktopPet,
       temperament,
       growthTarget,
       currentSatiety,
@@ -3782,11 +4803,14 @@ function careActionForButton(btnId) {
       todayBehaviors,
       cachedBehaviors,
       pickIconsFromText,
+      sameItem,
+      DAILY_ICONS,
       todayRepresentativeTexts,
       buildTodayLook,
       dayStartTs,
       BEAST_SPECIES,
       BEAST_OUTFITS,
+    PARROT_OUTFITS,
       BEAST_PALETTES,
       DIVINE_FORMS,
       DIVINE_STYLE_LOCK,

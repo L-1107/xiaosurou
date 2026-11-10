@@ -109,6 +109,46 @@ body.cinema-room-active {
 }
 
 /* --------------------------------------------------------------------------
+   🔴 2026-11-05 宿主静默: 影院 iframe 打开时, 宿主整个停下来
+
+   【实测依据】用户 A/B/C 三组真机实测:
+     A 宿主单独开着          → 冷冰冰
+     C 影院沙盒单独看一集    → 冷冰冰
+     B 宿主里套着影院看一集  → 开始发烫 (再聊天更烫)
+   ⇒ 单边都不烫, 合起来才烫 ⇒ 成因是【宿主 + iframe 叠加】, 不是任何单边。
+
+   【宿主这边被白白烧掉的】
+     · 54 个 .screen 全屏面板, 全是 100%×100% + visibility:hidden
+       —— hidden 只是看不见, 里面的 @keyframes 照跑不误;
+     · 22 个 CSS 文件里约 20 条 infinite 动画;
+     · .header 上的 backdrop-filter: blur(10px)
+       —— iOS 每次重绘都要把背后重新采样一遍;
+     · 桌宠的呼吸动画 + 悬浮球。
+   这些东西在 iframe 底下【一个像素都看不见】, 纯白烧电。
+
+   【怎么做】iframe 一开, 宿主 UI 整个 display:none, 动画全停。
+   iframe 是 position:fixed + inset:0 + z-index:2147483647, 盖住整屏, 不受影响。
+
+   ⚠️ 沙盒页里也有 body.cinema-room-active (那边是"房间开着"的意思),
+     但沙盒页里根本没有 #phone-screen / #pn-desktop-pet / #floating-ball
+     —— 这几条规则在那边自动落空, 两边互不干扰。
+   -------------------------------------------------------------------------- */
+body.cinema-room-active #phone-screen,
+body.cinema-room-active #pn-desktop-pet,
+body.cinema-room-active #pn-desktop-pet-bubble,
+body.cinema-room-active #pn-desktop-pet-menu,
+body.cinema-room-active #floating-ball {
+  display: none !important;
+}
+
+/* 兜底: 万一还有没藏起来的动画元素, 一律冻结 (不藏的元素也会继续烧) */
+body.cinema-room-active #phone-screen *,
+body.cinema-room-active #pn-desktop-pet *,
+body.cinema-room-active #floating-ball * {
+  animation-play-state: paused !important;
+}
+
+/* --------------------------------------------------------------------------
    🔴 键盘态: 只在键盘弹起期间关掉影院的毛玻璃 (2026-10-07)
 
    现象: 影院里聊天输入框 + 短剧地址框, 两个都卡; 输入类型已经排除,
@@ -703,6 +743,9 @@ body.cinema-room-active {
   color: #ffcf9c;
   font-size: 12.5px;
   line-height: 1.6;
+  /* ⚠️ 2026-10-28: 警告文案现在有多行 (存储 + 播放两条),
+     textContent 里的 \n 默认会被折成空格 —— 必须显式保留换行。 */
+  white-space: pre-line;
 }
 
 .cinema-drawer-warn[hidden] {
@@ -1701,6 +1744,39 @@ body.cinema-room-active {
 
 .cinema-series-addr input::placeholder {
   color: rgba(240, 220, 196, .30);
+}
+
+/* --------------------------------------------------------------------------
+   作品名输入框 (2026-11-04)
+   同一部作品的几集填一样的名字 → 共用一份剧情底稿/前情提要。
+   ⚠️ 字号必须 ≥16px —— iOS Safari 聚焦 <16px 的 input 会自动把整页放大,
+      字体再大也拦不住 (见 .cinema-series-addr 那个 13px 的历史遗留)。
+   -------------------------------------------------------------------------- */
+.cinema-work-row {
+  margin: 10px 0 6px;
+}
+
+.cinema-work-name {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(216, 168, 116, .26);
+  background: rgba(255, 255, 255, .05);
+  color: #f0e3d4;
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.cinema-work-name::placeholder {
+  color: rgba(240, 220, 196, .30);
+}
+
+.cinema-work-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: .72;
+  margin-bottom: 10px;
 }
 
 .cinema-series-list {

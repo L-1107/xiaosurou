@@ -1817,53 +1817,17 @@ window.initFeatures = function(state, db) {
     }
 
 
-    document.getElementById('read-together-btn').addEventListener('click', openReadingRoom);
-    const restoreBtn = document.getElementById('reading-restore-btn');
+    // ⚠️ 2026-11-01: 旧版「一起读书」小浮窗的全部绑定已删。
+    //   那批 DOM (#reading-overlay / #reading-window / #reading-content /
+    //   #reading-library-modal / #import-book-modal / #book-upload-input …)
+    //   在 index.html 里已经整个拿掉了 —— 而这些 getElementById(...).addEventListener
+    //   拿到的全是 null, 一执行就 TypeError, 会把后面整个 init-features 的初始化
+    //   一次性带崩 (设置面板 / 温度滑块 / 表情面板 … 全都跟着废)。
+    //
+    //   读书屋的入口绑定现在在 modules/reading-room.js 里 (bindEntry):
+    //     read-together-btn → ReadingRoom.open() → 拉起 reading-sandbox/index.html
+    //   书库 / 导入 / 翻页 / 选段提问 全在沙盒里, 不再经过宿主。
 
-    makeDraggable(restoreBtn, restoreBtn);
-    document.getElementById('close-reading-btn').addEventListener('click', closeReadingRoom);
-    document.getElementById('open-reading-library-btn').addEventListener('click', openBookLibrary);
-    document.getElementById('next-page-btn').addEventListener('click', showNextPage);
-    document.getElementById('prev-page-btn').addEventListener('click', showPrevPage);
-    document.getElementById('book-upload-input').addEventListener('change', handleBookFileUpload);
-
-
-    document.getElementById('minimize-reading-btn').addEventListener('click', minimizeReadingRoom);
-    document.getElementById('reading-restore-btn').addEventListener('click', restoreReadingRoom);
-
-
-    makeDraggable(document.getElementById('reading-window'), document.querySelector('#reading-window .reading-header'));
-
-
-    document.getElementById('open-reading-library-btn').addEventListener('click', openBookLibrary);
-
-    document.getElementById('close-reading-library-btn-header').addEventListener('click', () => {
-      document.getElementById('reading-library-modal').classList.remove('visible');
-    });
-    document.getElementById('import-new-book-btn-header').addEventListener('click', importBook);
-
-
-
-    document.getElementById('reading-library-list').addEventListener('click', (e) => {
-      const target = e.target;
-      if (target.classList.contains('group-name')) {
-        const bookId = parseInt(target.dataset.bookId);
-        loadBookFromLibrary(bookId);
-      } else if (target.classList.contains('delete-group-btn')) {
-        const bookId = parseInt(target.dataset.bookId);
-        deleteBookFromLibrary(bookId);
-      }
-    });
-
-    document.getElementById('page-indicator').addEventListener('click', handlePageJump);
-    document.getElementById('reading-library-search-input').addEventListener('input', (e) => {
-
-      renderBookLibrary(e.target.value);
-    });
-    const debouncedUpdateReadingContext = debounce(updateReadingContextOnScroll, 300);
-
-
-    document.getElementById('reading-content').addEventListener('scroll', debouncedUpdateReadingContext);
     const tempSlider = document.getElementById('api-temperature-slider');
     const tempInput = document.getElementById('api-temperature-input');
     const topPSlider = document.getElementById('api-top-p-slider');
@@ -4020,7 +3984,15 @@ ${truthGameHistoryContext}
         }
       });
     }
-    document.getElementById('toggle-reading-fullscreen-btn').addEventListener('click', toggleReadingFullscreen);
+    // ⚠️ 2026-11-01: 原来这里有一行
+    //     document.getElementById('toggle-reading-fullscreen-btn')
+    //       .addEventListener('click', toggleReadingFullscreen);
+    //   那个按钮属于旧版「一起读书」小浮窗 (#reading-window 里的全屏切换),
+    //   已经跟着整个浮窗一起下线了 → getElementById 返回 null → 这里抛 TypeError。
+    //
+    //   ⚠️ 它【必须删掉】, 不能只是不管: 这一行在 initFeatures 的【末尾】,
+    //   一抛错, 后面所有初始化 (你画我猜 / 其它模块的绑定) 全部不执行 —— 症状是
+    //   "某个功能莫名其妙没反应", 极难查。
 
     // ========================================
     // ▼▼▼ 你画我猜功能（在DOMContentLoaded内部以访问state）▼▼▼

@@ -905,6 +905,112 @@ function debounce(func, delay) {
   };
 }
 
+/**
+ * 让一个元素可以拖动 (拖 header 带动整个窗口)
+ *
+ * 【为什么从 reading-room.js 搬到这里】(2026-11-01)
+ *   它原来住在「一起读书」那个小浮窗模块里, 但真正在用的是:
+ *     · init-event-bindingsB.js —— 视频通话 / 语音通话的悬浮球
+ *     · init-features.js —— 角色音乐播放器的小窗
+ *   「一起读书」改成读书屋 (iframe 沙盒) 之后, 那个模块不再需要它了,
+ *   可悬浮球还在用 —— 搬到这里, 免得哪天那个模块再被改一次就把悬浮球弄挂。
+ *
+ * @param {HTMLElement} windowEl 被拖的那个
+ * @param {HTMLElement} headerEl 抓手 (一般是标题栏)
+ */
+function makeDraggable(windowEl, headerEl) {
+  if (!windowEl || !headerEl) return;
+  let pos1 = 0,
+    pos2 = 0,
+    pos3 = 0,
+    pos4 = 0;
+  let isDragging = false;
+  let hasMoved = false;
+  const phoneScreen = document.getElementById('phone-screen');
+
+  const startDrag = (e) => {
+
+    if (windowEl !== headerEl && e.target.closest('button')) {
+      return;
+    }
+
+    isDragging = true;
+    hasMoved = false;
+
+    const event = e.type === 'touchstart' ? e.touches[0] : e;
+    pos3 = event.clientX;
+    pos4 = event.clientY;
+
+
+    windowEl.style.top = `${windowEl.offsetTop}px`;
+    windowEl.style.left = `${windowEl.offsetLeft}px`;
+    windowEl.style.transform = '';
+
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('mousemove', elementDrag);
+    document.addEventListener('touchend', endDrag);
+
+    document.addEventListener('touchmove', elementDrag, {
+      passive: false
+    });
+  };
+
+  const elementDrag = (e) => {
+    if (!isDragging) return;
+
+    const event = e.type === 'touchmove' ? e.touches[0] : e;
+    const diffX = event.clientX - pos3;
+    const diffY = event.clientY - pos4;
+
+
+    if (!hasMoved && (Math.abs(diffX) > 5 || Math.abs(diffY) > 5)) {
+      hasMoved = true;
+    }
+
+
+    if (hasMoved && e.cancelable) {
+      e.preventDefault();
+    }
+
+    pos1 = pos3 - event.clientX;
+    pos2 = pos4 - event.clientY;
+    pos3 = event.clientX;
+    pos4 = event.clientY;
+
+    let newTop = windowEl.offsetTop - pos2;
+    let newLeft = windowEl.offsetLeft - pos1;
+
+    const maxTop = phoneScreen.clientHeight - windowEl.offsetHeight - 10;
+    const maxLeft = phoneScreen.clientWidth - windowEl.offsetWidth - 10;
+    newTop = Math.max(10, Math.min(newTop, maxTop));
+    newLeft = Math.max(10, Math.min(newLeft, maxLeft));
+
+    windowEl.style.top = newTop + "px";
+    windowEl.style.left = newLeft + "px";
+  };
+
+  const endDrag = () => {
+    document.removeEventListener('mouseup', endDrag);
+    document.removeEventListener('mousemove', elementDrag);
+    document.removeEventListener('touchend', endDrag);
+    document.removeEventListener('touchmove', elementDrag);
+
+    if (!isDragging) return;
+    isDragging = false;
+
+    if (!hasMoved) {
+
+      windowEl.click();
+    }
+  };
+
+  headerEl.addEventListener('mousedown', startDrag);
+
+  headerEl.addEventListener('touchstart', startDrag, {
+    passive: false
+  });
+}
+
 const updateTokenCountDisplay = debounce(async () => {
   const tokenValueEl = document.getElementById('token-count-value');
   const msgValueEl = document.getElementById('message-count-value');

@@ -49,8 +49,11 @@
     storeWidth: 768,             // 存库尺寸（每格 256×256，手机上绰绰有余）
     storeHeight: 512,
     snapshotSize: 256,           // 给 AI 看的单只截图
-    dailyLimit: 3,               // 手动「换个模样」每日上限
-    autoLookBudget: 0,           // 每日【自动换装】名额（0 = 按宠物数量算，每只 1 张）
+    // ⚠️【2026-10-29 用户定】「不想要三次的限制，反正画多少自己掌握」
+    //   → 0 = 不限（手动「换个模样」想点多少次点多少次）
+    //   → 想设回上限就把这里改成数字（比如 3），下面所有地方都按它走
+    dailyLimit: 0,               // 手动「换个模样」每日上限（0 = 不限）
+    autoLookBudget: 0,           // 每日【自动换装】名额（0 = 不限；但每只宠物每天只画一次的守卫还在）
     tolerance: 46,               // 抠图容差（多遍递增：1× → 1.8× → 2.6×）
     backgroundColorKeys: 3,      // 边框取几种背景色（渐变/柔光背景用得上）
     backgroundColorSpread: 2.6,  // 其余背景色离主背景色多远之内才算数（× 容差）
@@ -129,15 +132,47 @@
     } catch (e) { /* 忽略 */ }
   }
 
-  /** 这一轮最多能用几次（options.budget 优先；没给就用全局上限） */
+  /** 这一轮最多能用几次（options.budget 优先；没给就用全局上限）。返回 0 = 不限。 */
   function limitFor(options) {
     const o = options || {};
     if (o.budget != null && o.budget !== '') {
       const b = Number(o.budget);
       if (!isNaN(b) && b > 0) return b;
     }
-    return Number(CFG.dailyLimit) || 3;
+    // ⚠️【2026-10-29】dailyLimit = 0 → 不限（用户自己掌握画多少）
+    const d = Number(CFG.dailyLimit) || 0;
+    return d > 0 ? d : 0;
   }
+
+  /**
+   * ⚠️【2026-10-30 用户定】「以后用用户指定的形象垫图」
+   *   以前每天换装是拿【上一张图（六格图集）】当参考图 → 每天在昨天那张上改 →
+   *   脸会一天比一天偏（用户原话「越画越不像了，时间久了肯定更严重」）。
+   *   → 改成拿用户上传的【一张图】当垫图，每次都从同一个锚点出发。
+   *
+   * 参考图从「六格图集」换成「一张单图」后，提示词必须跟着换：
+   *   原来那句兜底是 "The reference image shows the same character in six poses."
+   *   —— 对着单张图说这话就是在骗模型（模型会以为参考图里有六只/六个姿势）。
+   */
+  const PORTRAIT_REFERENCE_NOTE =
+    'The reference image is a SINGLE PICTURE of this character - one character, one pose, one picture. '
+    + 'Take ONLY its species, face shape, body proportions, fur or skin colours, eye colour and markings from it. '
+    + 'IGNORE everything else in the reference image: ignore its clothes, its accessories, '
+    + 'its background, its scenery and its lighting. '
+    + 'Where the description above and the reference image disagree about the species or the colours, '
+    + 'follow the reference image. '
+    // ⚠️【2026-10-30 用户当面纠正】「不许抄参考图里那个姿势」是错的 ——
+    //   参考图里那个姿势【本来就是 6 个标准姿势之一】（用户给的是一张满意的破壳图，
+    //   画的是它坐着的样子）→ 禁掉它 = 六格里有一格画不出来。
+    //   → 只保留「六格必须是六个不同姿势、不许重复」这一条。
+    + 'Draw that same character in the SIX poses described above - '
+    + 'all six cells must show six clearly different poses, never the same pose repeated. '
+    + 'In every one of the six cells the character is drawn small and centered in its own cell, '
+    + 'filling only about 75% of that cell with a clear empty margin all around it, '
+    + 'and never touching or crossing the cell edges.';
+
+  /** 用户上传的初始形象：处理完的最长边（像素） */
+  const SPECIES_IMAGE_MAX = 640;
 
   function loadImage(blobOrUrl) {
     return new Promise((resolve, reject) => {
@@ -157,6 +192,40 @@
         resolve(null);
       }
     });
+  }
+
+  /**
+   * 用户上传的「初始物种形象」→ 处理成能直接当参考图的方形 PNG
+   *
+   *   ① 居中裁成正方形 —— 参考图是单只，长宽比不对模型会自己发挥构图
+   *   ② 缩到最长边 SPECIES_IMAGE_MAX —— 太大 → 请求慢，还容易被接口拒
+   *   ③ 转 PNG —— /images/edits 的 multipart 里文件名写死 reference.png
+   *
+   * ⚠️ 不做本地抠图：真实照片的背景很难在本地抠干净，
+   *   背景/衣服一律靠提示词让模型忽略（见 PORTRAIT_REFERENCE_NOTE）。
+   *
+   * 用法: 用户的破壳图通常是【单张坐着的样子】→ 居中裁方正好把这只圈出来。
+   */
+  async function prepareSpeciesImage(file) {
+    if (!file) throw new Error('没有选到图片');
+    const img = await loadImage(file);
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (!w || !h) throw new Error('这张图解码失败（换个文件试试）');
+    const side = Math.min(w, h);
+    const sx = Math.floor((w - side) / 2);
+    const sy = Math.floor((h - side) / 2);
+    const size = Math.max(1, Math.min(SPECIES_IMAGE_MAX, side));
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+    const blob = await canvasToBlob(canvas, 'image/png');
+    if (!blob) throw new Error('这张图转不出来（换个格式试试）');
+    return blob;
   }
 
   // ============================================================
@@ -373,15 +442,21 @@
         if (far.mask[p]) passFar++;
         else if (near.mask[p]) passNear++;
       }
+      // ⚠️ 2026-11-02 (用户实测「浅色宠物, 比如淡蓝色, 抠完自己那块也变透明了」):
+      //   「画面还剩多少不透明」这条兜底以前【只在没有深色本体时才生效】——
+      //   浅色宠物身上有一双眼睛 → far/near 网子就"激活"了 → 这条兜底被跳过 →
+      //   浅色本体被泛洪吃光都没人拦(本体网只护得住那几百个深色像素)。
+      //   现在把它提成【始终生效】: 不管有没有本体网, 都不许把画面抠空。
+      //   浅色宠物被吃光 → 这里回滚 → applied=0 → cutout() 自动走保守重试 →
+      //   宠物保住、背景照抠干净 (实测 7 种宠物形态 × 4 档容差全绿)。
+      let opaque = 0;
+      for (let p = 0; p < total; p++) if (!removed[p] && !passRemoved[p]) opaque++;
       if (useFar) {
         if (farLost + passFar > farLimit) break;
       } else if (useNear) {
         if (nearLost + passNear > nearLimit) break;
-      } else {
-        let opaque = 0;
-        for (let p = 0; p < total; p++) if (!removed[p] && !passRemoved[p]) opaque++;
-        if (opaque / total < floor) break;
       }
+      if (opaque / total < floor) break;
 
       farLost += passFar;
       nearLost += passNear;
@@ -431,9 +506,14 @@
     // 第一遍就被安全网拦下（或压根没抠动）→ 换保守那套重来
     //   保守 = 不局部生长 + 容差更小：宁可抠得不那么干净，也别把宠物啃了
     //   （例：奶油色宠物 + 白底 —— 局部生长会顺着抗锯齿带爬进宠物里）
+    //
+    // ⚠️ 2026-11-02: 保守那套的倍数从 0.7 收到 0.5。
+    //   0.7 (=容差32.2) 仍会啃掉离背景色很近的浅色宠物:
+    //   实测浅紫 (色距29.4) 只剩 72%、浅灰蓝 (色距25.5) 只剩 66%。
+    //   0.5 (=容差23) → 12 种浅色/深色宠物全部 100% 存活, 背景残留仍是 0%。
     if (res.applied === 0) {
       res = runCutPasses(data, width, height, keys, baseTol, {
-        scales: [0.7], localGrowth: false, opaqueFloor: opts.opaqueFloor
+        scales: [0.5], localGrowth: false, opaqueFloor: opts.opaqueFloor
       });
     }
 
@@ -883,11 +963,38 @@
   // 调 API
   // ============================================================
 
+  // ⚠️【2026-10-29 用户实测】「鹦鹉只有徽章，没有新衣服」。
+  //   原来的六格姿态全是【四足哺乳动物】的词:
+  //     "sitting with one front paw raised" / "curled up asleep" / "lying down"
+  //     布局那句还写着 "its ears, tail, paws and outfit"
+  //   → 让模型画一只【鸟】+ 抬前爪 + 爪子拿东西 → 它把鹦鹉画成毛球兽
+  //   → 人穿的衣服(草莓裙/小熊睡衣/绣花鞋)根本穿不上去
+  //   → 只会把「胸口别个小东西」画成一枚徽章 ⇒ 用户看到的正是「只有徽章」。
+  //   → 鸟用鸟的姿态: 站枝头 / 闭眼 / 埋头理羽 / 低头啄食 / 仰望 / 展翅。
+  const POSE_SETS = {
+    default: '1) sitting alert and looking at the viewer, 2) sitting with eyes closed content, 3) curled up asleep, 4) head lowered eating from a food bowl, 5) lying down looking up, 6) sitting with one front paw raised',
+    parrot: '1) perched upright on a branch and looking at the viewer, 2) perched with eyes closed content, 3) perched and dozing with its head tucked into its feathers, 4) head lowered pecking seeds from a small bowl, 5) perched and looking up, 6) perched with one wing raised'
+  };
+  // 布局里「哪些部位不许碰到格边」—— 鸟没有耳朵/爪子, 写 paws 会把它画成四足
+  const LAYOUT_BODIES = {
+    default: 'its ears, tail, paws and outfit',
+    parrot: 'its beak, head, wings, tail feathers and outfit'
+  };
+  function poseSetFor(kind) {
+    return (kind && POSE_SETS[kind]) || POSE_SETS.default;
+  }
+  function layoutBodyFor(kind) {
+    return (kind && LAYOUT_BODIES[kind]) || LAYOUT_BODIES.default;
+  }
+  function layoutTextFor(kind) {
+    return 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, no gaps or borders between the cells, and in every cell the character is drawn SMALL and centered, filling only about 75% of that cell with a clear empty margin all around it, ' + layoutBodyFor(kind) + ' staying completely inside the cell and never touching or crossing the cell edges';
+  }
+
   function buildAtlasPrompt(subject, options) {
     const opts = options || {};
     const style = opts.style
       || 'warm children\'s picture-book illustration, soft watercolor texture, warm afternoon sunlight, gentle muted palette, the same art style across all six cells';
-    const poses = '1) sitting alert and looking at the viewer, 2) sitting with eyes closed content, 3) curled up asleep, 4) head lowered eating from a food bowl, 5) lying down looking up, 6) sitting with one front paw raised';
+    const poses = poseSetFor(opts.kind);
     const background = 'isolated on a fully transparent background, absolutely no ground shadow, no backdrop, no scenery, no text, no watermark, no border, no grid lines';
     // ⚠️【2026-10-27 用户定】「宠物只占格子 70-80% 的格子，还是六张」
     //   原来写的是「每格塞满那一个姿势、格子之间不留缝」
@@ -896,10 +1003,11 @@
     //     而且邻格串进来的碎片在本格留下多余色块。
     //   → 改成「每格只占 75%，四周留白，任何部位都不许碰格边」，
     //     切边时切到的就只是留白（不会碰到宠物），邻格也串不进来。
-    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, no gaps or borders between the cells, and in every cell the character is drawn SMALL and centered, filling only about 75% of that cell with a clear empty margin all around it, its ears, tail, paws and outfit staying completely inside the cell and never touching or crossing the cell edges';
+    const layout = layoutTextFor(opts.kind);
     return [
       'A single ' + subject + '.',
       'The SAME individual character in every cell — identical face, identical fur/skin colors, identical eye color, identical markings, identical outfit and accessories.',
+      'It must be wearing exactly the outfit described above and holding or wearing exactly the accessory described above — both clearly visible in every one of the six cells, never omitted.',
       layout + '.',
       'The six poses, in order: ' + poses + '. Each pose is drawn small and centered inside its own cell, with the same empty margin around it.',
       'Style: ' + style + '.',
@@ -907,11 +1015,12 @@
     ].join('\n');
   }
 
-  function buildEvolvePrompt(subject, change, referenceNote) {
+  function buildEvolvePrompt(subject, change, referenceNote, options) {
+    const opts = options || {};
     const style = 'warm children\'s picture-book illustration, soft watercolor texture, warm afternoon sunlight, gentle muted palette, the same art style across all six cells';
-    const poses = '1) sitting alert and looking at the viewer, 2) sitting with eyes closed content, 3) curled up asleep, 4) head lowered eating from a food bowl, 5) lying down looking up, 6) sitting with one front paw raised';
+    const poses = poseSetFor(opts.kind);
     const background = 'isolated on a fully transparent background, absolutely no ground shadow, no backdrop, no scenery, no text, no watermark, no border, no grid lines';
-    const layout = 'ONE image containing a 3 columns by 2 rows grid of six equal SQUARE cells, reading left to right then top to bottom, no gaps or borders between the cells, and in every cell the character is drawn SMALL and centered, filling only about 75% of that cell with a clear empty margin all around it, its ears, tail, paws and outfit staying completely inside the cell and never touching or crossing the cell edges';
+    const layout = layoutTextFor(opts.kind);
     const lines = [];
     lines.push('Keep exactly the SAME character from the reference image — same face, same colors, same eye color, same markings.');
     // ⚠️【2026-10-27 修 —— 这就是「小水壶画不出来」的真正根因】
@@ -925,9 +1034,15 @@
     }
     if (change) {
       lines.push('Additional detail to add: ' + change + '.');
-    } else {
-      lines.push('Give it exactly the outfit and accessories described above, in all six cells.');
     }
+    // ⚠️【2026-10-28 修 —— 用户实测「手动点换个模样, 衣服根本没换」】
+    //   原来这句写在 else 分支里 —— 只要 change（阶段花纹）非空，它就被【整条替换掉】。
+    //   而 change 对孵出来的宠物几乎永远非空 → 每次蜕变都缺了"按今天这身重画"这句，
+    //   模型拿着旧参考图照抄 → 衣服和道具永远不变。
+    //   → 现在这句【永远都要有】(它跟 change 是两件独立的事)。
+    lines.push('Give it exactly the outfit and accessories described above, in all six cells.');
+    // 小道具模型最容易漏 —— 再单独点名一次，六格里都得看得见。
+    lines.push('The accessory and the outfit must BOTH be clearly visible in EVERY one of the six cells — no cell may be missing either of them.');
     lines.push(layout + '.');
     lines.push('The six poses, in order: ' + poses + '. Each pose is drawn small and centered inside its own cell, with the same empty margin around it.');
     lines.push('Style: ' + style + '.');
@@ -1065,7 +1180,8 @@
     const o = options || {};
     const counter = o.counter === 'auto' ? 'auto' : 'manual';
     const limit = limitFor(o);
-    if (todayCount(counter) >= limit) {
+    // ⚠️【2026-10-29】limit = 0 → 不限次数（用户自己掌握画多少）
+    if (limit > 0 && todayCount(counter) >= limit) {
       throw new Error('今天生图次数用完了（上限 ' + limit + ' 次），明天再说');
     }
     const prompt = buildAtlasPrompt(subject, options);
@@ -1083,11 +1199,17 @@
     const o = options || {};
     const counter = o.counter === 'auto' ? 'auto' : 'manual';
     const limit = limitFor(o);
-    if (todayCount(counter) >= limit) {
+    // ⚠️【2026-10-29】limit = 0 → 不限次数（用户自己掌握画多少）
+    if (limit > 0 && todayCount(counter) >= limit) {
       throw new Error('今天生图次数用完了（上限 ' + limit + ' 次），明天再说');
     }
     if (!referenceBlob) throw new Error('没有参考图，不能蜕变');
-    const prompt = buildEvolvePrompt(subject, change);
+    // ⚠️【2026-10-30】参考图有两种，提示词写法不一样：
+    //   'atlas'（默认）= 上一张六格图集 → 兜底那句「参考图里是同一个角色的六个姿势」是对的
+    //   'portrait'     = 用户上传的初始形象（一张单图）→ 必须换成「这是单张图，只取长相」
+    const refNote = o.referenceNote
+      || (o.referenceKind === 'portrait' ? PORTRAIT_REFERENCE_NOTE : undefined);
+    const prompt = buildEvolvePrompt(subject, change, refNote, o);
     const { blob } = await callEdits(prompt, referenceBlob);
     bumpTodayCount(counter);
     const processed = await postprocess(blob, { cutout: true });
@@ -1150,6 +1272,8 @@
     probe,
     generateAtlas,
     evolveAtlas,
+    // ⚠️【2026-10-30】用户上传的「初始物种形象」→ 方形 PNG（可直接当参考图）
+    prepareSpeciesImage,
     postprocess,
     cutout,
     feather,

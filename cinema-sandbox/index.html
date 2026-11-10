@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Cinema Room (iframe 沙盒)</title>
 <!-- ⚠️ 影院本体样式, 和生产完全同一份文件。上一版重写时漏了这行, 导致整个房间裸奔。 -->
-<link rel="stylesheet" href="../modules/cinema-room.css">
+<link rel="stylesheet" href="../modules/cinema-room.css?v=0.39.0">
 <!--
   ============================================================================
   Cinema Room · iframe 沙盒 (2026-10-09)
@@ -26,11 +26,18 @@
     宿主 → 本页  { type:'cinema:init', chat:{ id, name, originalName,
                                             settings:{aiPersona,myPersona,myNickname},
                                             watchTogetherSettings:{geminiApiKey},
-                                            longTermMemory:[] } }
+                                            longTermMemory:[], globalSettings:{} } }
     本页 → 宿主  { type:'cinema:ready' }        模块都就绪了
                   { type:'cinema:needChat' }     缺聊天数据, 请再发一次
-                  { type:'cinema:memory', text }  最终观影记忆写好了
+                  { type:'cinema:needContext' }  要最新的陪聊上下文
+                  { type:'cinema:exportMemory' } 剧情记忆导出(全部 chunk 一起发)
+                  { type:'cinema:chatMessage' }  影院里说的话, 请写进主聊天历史
                   { type:'cinema:closed' }      用户退出了影院
+
+  ⚠️ 2026-10-28: 以前这里还有一条 'cinema:memory'(把 longTermMemory 的【最后一条】
+  发给宿主) —— 那条只带得走最后一块, 导出切成 4 块就只过去 1 块, 其余被清账删掉,
+  白看 (用户实测)。现在改成显式的 'cinema:exportMemory' 通道: 全部一起发, 宿主回 ack
+  才清账。宿主那边的 'cinema:memory' 处理保留着 (老缓存的沙盒页可能还在发)。
 
   单独在浏览器里直接打开本页(不在 iframe 里)时, 走本地兜底数据,
   方便开发时单独调试。
@@ -142,8 +149,7 @@
   //   String() 一转, 记忆库就被写成了 7 个 "[object Object]",
   //   记忆首页还显示 7 条, 点进去却一条都渲染不出来。
   var currentChat = null;
-  var lastSentMemory = '';
-  // 🔴 2026-10-27: 宿主下发的主 API 配置 { proxyUrl, apiKey, model }。
+  // 🔴 2026-10-28: 宿主下发的主 API 配置 { proxyUrl, apiKey, model }。
   //   沙盒自己解析不了 (没有 api-endpoint-presets.js, 自己的库里也没有 apiPresets 表),
   //   陪聊 (modules/cinema-chat.js) 必须要有这三样, 所以由宿主解析后送过来。
   var hostApiConfig = null;
@@ -154,24 +160,20 @@
       if (window.state) window.state.apiConfig = hostApiConfig;
     } catch (e) { /* noop */ }
   }
-  function extractMemoryText(c) {
-    if (!c) return '';
-    var mem = c.longTermMemory;
-    if (!Array.isArray(mem) || !mem.length) return '';
-    var last = mem[mem.length - 1];
-    if (last && typeof last === 'object') return String(last.content || '');
-    return String(last || '');   // 兼容万一存成了字符串
-  }
   cdb.chats = {
     put: function (c) {
       currentChat = c;
       try { localStorage.setItem(LS_CHAT, JSON.stringify(c)); } catch (e) {}
-      // 只在真的有【新的】最终记忆时才通知宿主, 免得每存一次进度就多写一条
-      var text = extractMemoryText(c);
-      if (text && text !== lastSentMemory) {
-        lastSentMemory = text;
-        post({ type: 'cinema:memory', text: text });
-      }
+      // ⚠️⚠️ 2026-10-28: 这里【不再】把 longTermMemory 的最后一条发给宿主。
+      //
+      //   以前"导出到长期记忆"是靠这个 postMessage 完成的, 但它只带【最后一条】——
+      //   导出切成 4 块就只过去 1 块, 剩下 3 块紧接着被"清账"从库里删掉,
+      //   结果就是: 界面报"✅ 已导出 4 条", 长期记忆里只有 1 条, 其余白看。
+      //   (用户 2026-10-28 实测: 长剧导出后长期记忆里没有内容, 之前的也白看了)
+      //
+      //   → 现在走显式的 cinema:exportMemory 通道: 沙盒把【全部】chunk 发给宿主,
+      //     宿主写进真实长期记忆并回 ack, 沙盒收到 ack 才清账。
+      //   这里只留个本地副本, 不再通知宿主。
       return Promise.resolve();
     },
     get: function () { return Promise.resolve(currentChat || fallbackChat()); },
@@ -253,7 +255,14 @@
     booted = true;
     currentChat = chat || fallbackChat();
     // apiConfig: 宿主下发的主 API 配置。沙盒自己解析不出来 (见 applyApiConfig 的说明)。
-    window.state = { activeChatId: currentChat.id, chats: {}, apiConfig: hostApiConfig };
+    // globalSettings: 宿主下发的全局设置 (2026-10-28) —— 沙盒自己没有,
+    //   陪聊要用 enableStreaming / 温度这些 (主聊天里开着流式, 影院也得跟着开)。
+    window.state = {
+      activeChatId: currentChat.id,
+      chats: {},
+      apiConfig: hostApiConfig,
+      globalSettings: (currentChat && currentChat.globalSettings) || {}
+    };
     window.state.chats[currentChat.id] = currentChat;
 
     // ★ 让房间【不要】自己读 visualViewport。
@@ -280,6 +289,10 @@
     if (d.type === 'cinema:init' && d.chat) {
       // 宿主可能已经把主 API 配置一起带过来了 (解析快的时候)
       if (d.chat.apiConfig) applyApiConfig(d.chat.apiConfig);
+      // 全局设置也顺手刷一下 (boot() 只在第一次生效, 第二次 init 是补发的)
+      if (d.chat.globalSettings && window.state) {
+        window.state.globalSettings = d.chat.globalSettings;
+      }
       boot(d.chat);
     } else if (d.type === 'cinema:apiConfig') {
       // 🔴 2026-10-27: 宿主解析完主 API 配置后补发 (解析是异步的, 可能晚于 init)
@@ -335,6 +348,12 @@
     } catch (e) {
       setInterval(onClass, 500);   // 兜底
     }
+    // 🔴 2026-10-28: 沙盒整个被换掉/重载时 (pagehide), 也告诉宿主把 iframe 收掉。
+    //   否则宿主那边只剩一个盖住整屏的黑 iframe, 外面点不动
+    //   (用户实测: 退出影院后外面不能聊天, 只有大退才恢复)。
+    window.addEventListener('pagehide', function () {
+      try { post({ type: 'cinema:closed' }); } catch (e) { /* noop */ }
+    });
   })();
 
   // ===================== 9. 启动 =====================
@@ -374,13 +393,13 @@
   URL 跟浏览器 HTTP 缓存里的老副本一模一样, 改了模块也不一定立刻生效。
   现在跟宿主对齐: 改模块时把这里的 ?v= 一起 bump。
 -->
-<script src="../modules/live-client.js?v=0.1.0"></script>
-<script src="../modules/cinema-storage.js?v=0.5.3"></script>
+<script src="../modules/live-client.js?v=0.6.0"></script>
+<script src="../modules/cinema-storage.js?v=0.5.4"></script>
 <script src="../modules/cinema-img.js?v=0.1.0"></script>
-<script src="../modules/cinema-room.js?v=0.29.4"></script>
-<script src="../modules/cinema-live.js?v=1.9.8"></script>
+<script src="../modules/cinema-room.js?v=0.35.0"></script>
+<script src="../modules/cinema-live.js?v=2.5.0"></script>
 <!-- 2026-10-23 影院陪聊层 (陪聊改走主 API) -->
-<script src="../modules/cinema-chat.js?v=0.0.2"></script>
+<script src="../modules/cinema-chat.js?v=0.2.5"></script>
 
 </body>
 </html>

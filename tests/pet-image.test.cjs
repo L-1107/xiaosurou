@@ -28,12 +28,15 @@ const read = (rel) => fs.readFileSync(P(...rel.split('/')), 'utf8');
 
 let passed = 0;
 let failed = 0;
+// 机器可读失败清单（反向验证脚本靠它做集合比对，别删）
+const failedNames = [];
 function ok(name, detail) {
   passed++;
   console.log('  [PASS] ' + name + (detail ? '  ' + detail : ''));
 }
 function fail(name, detail) {
   failed++;
+  failedNames.push(name);
   console.log('  [FAIL] ' + name + (detail ? '  ' + detail : ''));
 }
 function check(name, cond, detail) {
@@ -131,8 +134,9 @@ section('生图契约: CFG');
   check('存库宽高比 == 图集宽高比',
     Math.abs((C.storeWidth / C.storeHeight) - (1536 / 1024)) < 1e-9);
   check('给 AI 看的单只截图 = 256', C.snapshotSize === 256, String(C.snapshotSize));
-  check('每日生图上限 = 3（跟上游一致）', C.dailyLimit === 3, String(C.dailyLimit));
-  check('自动换装有独立名额（0 = 按宠物数量算）', C.autoLookBudget === 0, String(C.autoLookBudget));
+  // ⚠️【2026-10-29 用户定】「不想要三次的限制，反正画多少自己掌握」→ 0 = 不限
+  check('每日生图上限 = 0（不限，用户自己掌握画多少）', C.dailyLimit === 0, String(C.dailyLimit));
+  check('自动换装有独立名额（0 = 不限；每只宠物每天只画一次的守卫还在）', C.autoLookBudget === 0, String(C.autoLookBudget));
   check('羽化遍数 = 2', C.featherPasses === 2, String(C.featherPasses));
   check('抠图容差 > 0', C.tolerance > 0, String(C.tolerance));
 }
@@ -182,6 +186,43 @@ section('生图契约: 蜕变提示词');
 }
 
 // ============================================================
+// ③ 鹦鹉用鸟的姿态（用户 2026-10-29 实测「鹦鹉只有徽章，没有新衣服」）
+// ============================================================
+// 【真因】六格姿态/布局全是【四足哺乳动物】的词:
+//   "sitting with one front paw raised" / "curled up asleep" / "lying down"
+//   布局那句还写着 "its ears, tail, paws and outfit"
+// → 让模型画一只【鸟】+ 抬前爪 → 它把鹦鹉画成毛球兽
+// → 人穿的衣服(草莓裙/小熊睡衣)根本穿不上去 → 只剩胸口一个小东西(看着像徽章)
+// → 鸟必须用鸟的姿态: 站枝头 / 埋头理羽 / 低头啄食 / 展翅
+section('生图契约: 鹦鹉用鸟的姿态（2026-10-29）');
+{
+  const { api } = loadPetImage();
+
+  const pa = api.buildAtlasPrompt('a fluffy sun conure parrot', { kind: 'parrot' });
+  check('鹦鹉的六格姿态是鸟的（站枝头/展翅）',
+    /perched upright on a branch/.test(pa) && /one wing raised/.test(pa), pa);
+  check('鹦鹉的姿态里没有「抬起前爪」', !/front paw raised/.test(pa));
+  check('鹦鹉的姿态里没有「蜷起来睡/趴着」（那是四足）',
+    !/curled up asleep/.test(pa) && !/lying down looking up/.test(pa));
+  check('鹦鹉的布局说的是喙/翅膀/尾羽',
+    /its beak, head, wings, tail feathers and outfit/.test(pa));
+  check('鹦鹉的布局里没有爪子/耳朵', !/paws/.test(pa) && !/ears/.test(pa));
+
+  const ca = api.buildAtlasPrompt('a fluffy cat');
+  check('不给种类时还是四足那套（猫狗/幻兽不受影响）',
+    /one front paw raised/.test(ca) && /its ears, tail, paws and outfit/.test(ca));
+
+  const pe = api.buildEvolvePrompt('a fluffy sun conure parrot', '', undefined, { kind: 'parrot' });
+  check('蜕变提示词（日常换装走的这条）也用鸟的姿态',
+    /perched/.test(pe) && !/front paw raised/.test(pe), pe);
+  check('蜕变提示词里鹦鹉的布局也是喙/翅膀',
+    /its beak, head, wings, tail feathers and outfit/.test(pe));
+  const ce = api.buildEvolvePrompt('a fluffy cat', '');
+  check('蜕变提示词不给种类时还是四足那套',
+    /one front paw raised/.test(ce) && /its ears, tail, paws and outfit/.test(ce));
+}
+
+// ============================================================
 // ③ 通道读取
 // ============================================================
 section('通道读取');
@@ -209,17 +250,33 @@ section('每日生图上限');
   store.petNestImageDailyDay = yesterdayKey();
   check('换天了 → 计数归零', api.todayCount() === 0);
 }
-section('每日上限: 到顶必须拦下来');
+section('每日上限: 默认【不限次数】（用户 2026-10-29：「画多少自己掌握」）');
+{
+  const { api, store } = loadPetImage();
+  store.petNestImageDailyDay = todayKey();
+  store.petNestImageDailyCount = '99';     // 已经画了 99 张
+  let msg = '';
+  try { await api.generateAtlas('a kitten'); } catch (e) { msg = e.message || String(e); }
+  check('画了 99 张也不拦（要走到发请求那一步才对）',
+    !/今天生图次数用完了/.test(msg) && /还没配生图 API 地址/.test(msg), msg);
+
+  msg = '';
+  try { await api.evolveAtlas('a kitten', 'a hat', { size: 1 }); } catch (e) { msg = e.message || String(e); }
+  check('蜕变也不拦', !/今天生图次数用完了/.test(msg), msg);
+}
+section('每日上限: 机制没坏 —— 显式给了上限还是要拦');
 {
   const { api, store } = loadPetImage();
   store.petNestImageDailyDay = todayKey();
   store.petNestImageDailyCount = '3';
+  api.CFG.dailyLimit = 3;                  // 想设回上限就改这一个数
   let msg = '';
   try { await api.generateAtlas('a kitten'); } catch (e) { msg = e.message || String(e); }
-  check('generateAtlas 超额 → 报错说今天用完了', /今天生图次数用完了/.test(msg), msg);
+  check('把 dailyLimit 设成 3 → 到顶还是拦下来', /今天生图次数用完了/.test(msg), msg);
   msg = '';
   try { await api.evolveAtlas('a kitten', 'a hat', { size: 1 }); } catch (e) { msg = e.message || String(e); }
-  check('evolveAtlas 超额 → 同样拦下来', /今天生图次数用完了/.test(msg), msg);
+  check('蜕变同样拦下来', /今天生图次数用完了/.test(msg), msg);
+  api.CFG.dailyLimit = 0;                  // 还原成不限
 }
 section('每日上限: 蜕变必须有参考图');
 {
@@ -242,12 +299,17 @@ section('每日上限: 自动换装和手动生图分开算（2026-10-27）');
 
   let msg = '';
   try { await api.generateAtlas('a kitten'); } catch (e) { msg = e.message || String(e); }
-  check('手动到顶 → 还是拦下来', /今天生图次数用完了/.test(msg), msg);
+  check('手动到顶也不再拦（不限次数了）', !/今天生图次数用完了/.test(msg), msg);
 
   msg = '';
   try { await api.generateAtlas('a kitten', { counter: 'auto', budget: 4 }); } catch (e) { msg = e.message || String(e); }
   check('自动换装有自己的名额（不被手动用满挡住）→ 走到发请求那一步',
     /还没配生图 API 地址/.test(msg), msg);
+
+  msg = '';
+  try { await api.generateAtlas('a kitten', { counter: 'auto', budget: 1 }); } catch (e) { msg = e.message || String(e); }
+  check('显式给了 budget 且用满了 → 还是拦（名额机制没坏）',
+    /今天生图次数用完了/.test(msg), msg);
 
   store.petNestImageAutoCount = '4';
   msg = '';
@@ -515,9 +577,111 @@ section('图集: 按格处理');
 }
 
 // ============================================================
+// 「用户指定的初始形象」当垫图时，发出去的提示词长什么样 · 2026-10-30
+//
+//   用户原话：「每天换装的时候拿头一天的图去垫图……导致宠物的长相越画越不像了」
+//   → 参考图从「上一张六格图集」换成「用户指定的一张单人像」时，
+//     提示词必须跟着换 —— 否则那句兜底「参考图里有同一个角色的六个姿势」
+//     就是对着单人像骗模型。
+// ============================================================
+section('初始形象当垫图 → 真正发出去的提示词');
+{
+  // 带假 fetch 的沙箱：把 /images/edits 真正发出去的那份 prompt 抓出来
+  function makeEditSandbox() {
+    const src = read('modules/pet-image.js');
+    const sent = [];
+    const store = {
+      openaiCompatImageBaseUrl: 'https://example.test/v1',
+      openaiCompatImageApiKey: 'sk-test',
+      openaiCompatImageModel: 'gpt-image-1'
+    };
+    const sandbox = {
+      console: { log() {}, warn() {}, error() {}, info() {} },
+      setTimeout, clearTimeout, setInterval, clearInterval,
+      atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+      Blob: typeof Blob !== 'undefined' ? Blob : function () {},
+      FormData: typeof FormData !== 'undefined' ? FormData : function () {},
+      URL: { createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} },
+      localStorage: {
+        getItem: (k) => (k in store ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); },
+        removeItem: (k) => { delete store[k]; }
+      },
+      document: {
+        readyState: 'loading',
+        addEventListener() {},
+        getElementById: () => null,
+        querySelectorAll: () => [],
+        createElement: () => ({ width: 0, height: 0, getContext: () => null })
+      },
+      fetch: async (url, opt) => {
+        let prompt = '';
+        try { prompt = opt && opt.body && opt.body.get ? String(opt.body.get('prompt')) : ''; } catch (e) { prompt = ''; }
+        sent.push({ url: String(url), prompt: prompt });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ b64_json: Buffer.from('fake-png').toString('base64') }] }),
+          text: async () => ''
+        };
+      },
+      window: null
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox, { filename: 'pet-image.js' });
+    return { api: sandbox.window.PetImage, sent: sent };
+  }
+
+  const fakeRef = typeof Blob !== 'undefined' ? new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }) : null;
+
+  // --- 参考图 = 用户指定的一张单人像 ---
+  const p = makeEditSandbox();
+  try {
+    await p.api.evolveAtlas('a fluffy cat, wearing a red hat', '', fakeRef, { referenceKind: 'portrait' });
+  } catch (e) { /* 抠图那步在沙箱里跑不动没关系 —— prompt 已经抓到了 */ }
+  const portraitPrompt = p.sent[0] ? p.sent[0].prompt : '';
+  check('★ 真的发出去的是 /images/edits（带参考图那条路）',
+    p.sent[0] && /\/images\/edits/.test(p.sent[0].url), p.sent[0] ? p.sent[0].url : '没发出去');
+  check('★ 参考图是单张图时，提示词要说明白「这是一张单张图」',
+    /SINGLE PICTURE/.test(portraitPrompt), portraitPrompt.slice(0, 160));
+  check('★ 单人像参考图要明确说「忽略参考图里的衣服/背景」',
+    /IGNORE everything else in the reference image/.test(portraitPrompt));
+  check('★ 单人像参考图时不能再出现「参考图里有同一个角色的六个姿势」那句',
+    !/The reference image shows the same character in six poses\./.test(portraitPrompt));
+  check('★ 物种/配色跟参考图冲突时，以参考图为准',
+    /follow the reference image/.test(portraitPrompt));
+  check('★ ★ 六格必须是六个【明显不同】的姿势（不许六个格子画成同一个姿势）',
+    /SIX poses described above/.test(portraitPrompt) &&
+    /never the same pose repeated/.test(portraitPrompt));
+  check('★ 单人像那套也写明了「画小一点、四周留白、不碰格边」（用户要的 70-80% 留白）',
+    // ⚠️ 必须认【单人像那段】里的措辞 —— 光认 "filling only about 75%" 的话,
+    //   老代码的 layout 那句本来就这么说 → 线上版也绿 → 假绿
+    /In every one of the six cells/.test(portraitPrompt) &&
+    /filling only about 75% of that cell/.test(portraitPrompt) &&
+    /never touching or crossing the cell edges/.test(portraitPrompt));
+  check('★ 今天这身穿搭照样写进提示词（换衣服不能被参考图压掉）',
+    /Redraw it exactly as described here/.test(portraitPrompt) &&
+    /wearing a red hat/.test(portraitPrompt));
+
+  // --- 参考图 = 上一张六格图集（老行为，不能被改坏）---
+  const q = makeEditSandbox();
+  try {
+    await q.api.evolveAtlas('a fluffy cat, wearing a red hat', '', fakeRef, { referenceKind: 'atlas' });
+  } catch (e) { /* 同上 */ }
+  const atlasPrompt = q.sent[0] ? q.sent[0].prompt : '';
+  check('★ 参考图还是六格图集时，老那句兜底还在（老行为没被改坏）',
+    /The reference image shows the same character in six poses\./.test(atlasPrompt));
+  check('六格图集那条路不该出现单人像的话',
+    !/SINGLE PORTRAIT/.test(atlasPrompt));
+}
+
+// ============================================================
 // 汇总
 // ============================================================
 console.log('\n通过 ' + passed + ' / 失败 ' + failed);
+console.log('__FAILURES__' + failedNames.join(''));
 if (failed > 0) {
   console.error('\n❌ 有 ' + failed + ' 条断言没过');
   process.exit(1);

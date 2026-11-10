@@ -3121,129 +3121,45 @@
                width: 100% !important;
            }
 
-           #toggle-reading-fullscreen-btn {
-               background: none;
-               border: none;
-               cursor: pointer;
-               color: var(--text-secondary);
-               padding: 4px 8px;
-               border-radius: 4px;
-               display: flex;
-               align-items: center;
-               justify-content: center;
-               transition: background-color 0.2s;
-           }
+           
 
-           #toggle-reading-fullscreen-btn:hover {
-               background-color: rgba(0, 0, 0, 0.1);
-           }
+           
 
            /* 2. 当窗口全屏时，切换按钮内的图标 */
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-maximize {
-               display: none;
-           }
+           
 
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-minimize {
-               display: block;
-           }
+           
 
            /* 3. 窗口全屏时的核心样式 */
-           #reading-window.fullscreen {
-               width: 100%;
-               height: 100%;
-               max-width: 100%;
-               max-height: 100%;
-               top: 0 !important;
-               left: 0 !important;
-               border-radius: 0;
-               box-shadow: none;
-               transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-           }
+           
 
            /* 4. 遮罩层在全屏时的样式 */
-           #reading-overlay.fullscreen-active {
-               align-items: stretch;
-               justify-content: stretch;
-           }
+           
 
            /* --- “一起读书”全屏功能样式 优化版 --- */
 
            /* 1. 修复头部布局，防止标题过长把按钮挤下去 */
-           .reading-header {
-               display: flex;
-               justify-content: space-between;
-               align-items: center;
-               gap: 10px;
-               /* 标题和按钮组之间的间距 */
-               flex-wrap: nowrap;
-               /* 强制不换行 */
-           }
+           
 
-           #reading-title {
-               flex: 1;
-               /* 占据可用空间 */
-               min-width: 0;
-               /* 允许被压缩 */
-               white-space: nowrap;
-               overflow: hidden;
-               text-overflow: ellipsis;
-               /* 标题过长时显示省略号 */
-           }
+           
 
-           .reading-controls {
-               flex-shrink: 0;
-               /* 防止按钮组被压缩 */
-               display: flex;
-               /* 确保内部按钮水平排列 */
-               align-items: center;
-           }
+           
 
            /* 2. 美化新的全屏/最小化按钮 */
-           #toggle-reading-fullscreen-btn {
-               background: none;
-               border: none;
-               cursor: pointer;
-               color: var(--text-secondary);
-               padding: 4px 8px;
-               /* 调整点击区域 */
-               border-radius: 4px;
-               display: flex;
-               align-items: center;
-               justify-content: center;
-               transition: background-color 0.2s;
-           }
+           
 
-           #toggle-reading-fullscreen-btn:hover {
-               background-color: rgba(0, 0, 0, 0.1);
-           }
+           
 
            /* 3. 当窗口全屏时，切换按钮内的图标显示 */
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-maximize {
-               display: none;
-           }
+           
 
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-minimize {
-               display: block;
-           }
+           
 
            /* 4. 窗口全屏时的核心样式 (与上次相同) */
-           #reading-window.fullscreen {
-               width: 100%;
-               height: 100%;
-               max-width: 100%;
-               max-height: 100%;
-               top: 0 !important;
-               left: 0 !important;
-               border-radius: 0;
-               box-shadow: none;
-               transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-           }
+           
 
            /* 5. 遮罩层在全屏时的样式 (与上次相同) */
-           #reading-overlay.fullscreen-active {
-               align-items: stretch;
-               justify-content: stretch;
-           }
+           
 
            /* =========================================== */
            /* ▼▼▼ 阅读模式全屏/头部修复补丁 ▼▼▼ */
@@ -3251,67 +3167,23 @@
 
            /* 1. 修复全屏状态下的图标切换逻辑 */
            /* 默认状态：显示最大化图标，隐藏还原图标 */
-           #toggle-reading-fullscreen-btn .icon-maximize {
-               display: block !important;
-           }
+           
 
-           #toggle-reading-fullscreen-btn .icon-minimize {
-               display: none !important;
-           }
+           
 
            /* 全屏状态：隐藏最大化图标，显示还原图标 */
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-maximize {
-               display: none !important;
-           }
+           
 
-           #reading-window.fullscreen #toggle-reading-fullscreen-btn .icon-minimize {
-               display: block !important;
-           }
+           
 
            /* 2. 修复全屏时的头部布局与间距 (解决重叠问题) */
-           #reading-window.fullscreen .reading-header {
-               /* 【核心修复】增加顶部内边距：
-       45px 是避让状态栏的基础高度，
-       env(safe-area-inset-top) 是适配刘海屏/灵动岛
-    */
-               padding-top: calc(45px + env(safe-area-inset-top)) !important;
-               padding-bottom: 15px !important;
-               padding-left: 20px !important;
-               padding-right: 20px !important;
-
-               /* 强制高度自适应 */
-               height: auto !important;
-               min-height: 80px !important;
-               /* 保证有足够的高度 */
-
-               /* 修复背景色：全屏时必须有不透明背景，否则内容会透出来 */
-               background-color: #fff !important;
-               /* 加上底部边框线 */
-               border-bottom: 1px solid var(--border-color) !important;
-
-               /* 确保头部在最上层 */
-               z-index: 10 !important;
-
-               /* 强制且绝对的顶部定位，防止被父级flex影响 */
-               position: absolute !important;
-               top: 0 !important;
-               left: 0 !important;
-               width: 100% !important;
-               box-sizing: border-box !important;
-           }
+           
 
            /* 3. 暗黑模式适配 */
-           #phone-screen.dark-mode #reading-window.fullscreen .reading-header {
-               background-color: #1c1c1e !important;
-               /* 暗黑模式背景色 */
-               border-bottom-color: #38383a !important;
-           }
+           
 
            /* 4. 修复全屏时的内容区域，防止被加高的头部遮挡 */
-           #reading-window.fullscreen #reading-content {
-               /* 给内容顶部增加更多的内边距，因为头部变高了 */
-               padding-top: calc(100px + env(safe-area-inset-top)) !important;
-           }
+           
 
            /* --- iOS 风格通用化适配 (适配外观设置页) --- */
 

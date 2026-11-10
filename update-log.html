@@ -166,11 +166,680 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.61 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.61</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">AI 回复：要求它分段、不要时间戳、不要名字前缀</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「AI 一开始没有加换行符，还是一整段输出，我提示他加换行符才分了气泡」。</li>
+          <li><strong>为什么上一版没生效</strong> —— 上一版只是把回复<strong>按段切开</strong>，但模型自己不分段的话，切出来还是一整段。提示词里没要求它分段。</li>
+          <li><strong>现在</strong> —— 提示词里明确写了：<strong>要说两层以上意思时，每层单独一段、段与段之间空一行</strong>（不用列表符号，就像说话一样自然分段）。这样它一开口就是分成几段的，界面自然拆成几个气泡。</li>
+          <li><strong>时间戳和名字也去掉了</strong> —— 之前你看到每句都带 <code>(2026-11-03 20:43) 名字: </code>，那是因为<strong>聊天记录里给 AI 看的格式就是这样</strong>，它照着模仿。主聊天那边靠"必须输出 JSON"把这种模仿挡住了，而书屋和影院是纯文字，只能在提示词里明说 —— 现在明说了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书屋的 AI 气泡加上了角色头像</div>
+        <ul class="item-list">
+          <li>书屋聊天里 AI 说的话，左边会显示你给这个角色配的头像（跟主聊天一个观感）。影院本来就有。</li>
+          <li>没配头像的话就不显示，不会出现破图。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修一个真 bug：宠物说的话被当成了「你」说的</div>
+        <ul class="item-list">
+          <li><strong>怎么发现的</strong> —— 你问「主聊天记录里有宠物的语言，图书馆 AI 能不能区分」。查下来：<strong>不能</strong>。</li>
+          <li><strong>原因</strong> —— 宠物的话在数据库里存成一种特殊类型（系统消息 + 标记），主聊天里是有专门处理的，会转成「[宠物 啾啾] 内容」；而书屋和影院用的那份历史整理逻辑<strong>漏了这个判断</strong>，宠物的话直接落进"其他"→ 被当成了你说的。</li>
+          <li><strong>影响</strong> —— AI 会把宠物说的话算在你头上，还可能出现"你怎么又说了一遍"这种错乱。</li>
+          <li><strong>现在</strong> —— 宠物的话会明确标成「[宠物 啾啾] 」，旁白之类的系统消息也会标「[系统]」，不再冒充你。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.60 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.60</span>
+        <span class="version-date">2026-11-03</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">读书屋和影院的 AI 回复，改成一段一个气泡</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「影院和书屋聊天有一个共同的问题是气泡没有像主聊天框里一样一个一个的渲染，是所有话混在一个框里的」。</li>
+          <li><strong>原因</strong> —— 主聊天那边 AI 一次回复会返回好几条消息，所以显示成好几个独立气泡；而书屋和影院的 AI 返回的是一整段纯文字，程序就把它全塞进<strong>同一个气泡</strong>里 → 看起来就是一坨。</li>
+          <li><strong>现在</strong> —— 回复结束后按<strong>段落</strong>切开，一段一个气泡，跟主聊天一个观感。打字过程中还是在一个气泡里滚动（这样不会跳），打完才拆分。</li>
+          <li><strong>怎么判定分段</strong> —— 优先按空行切；模型没分段的话按换行切；实在没分段就还是一整段。不会按句子硬切，免得一句话被拦腰截断。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋：AI 现在知道你在读哪本书了</div>
+        <ul class="item-list">
+          <li><strong>一直是个小疏漏</strong> —— 读书屋其实把书名传给程序了，但组提示词的时候<strong>没把它读进去</strong>，所以 AI 只能看到"第几页、哪一章、这一页写了什么"，<strong>不知道书名</strong>。</li>
+          <li><strong>现在补上</strong> —— 提示词里会写「（书：《二十四史》）」，它就能说"《二十四史》这段…"，而不是泛泛而谈。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.59 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.59</span>
+        <span class="version-date">2026-11-03</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书架卡片：只留封面，字数挪到顶栏</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「感觉这个封面图不能占全部好看啊，那个下面的说明文字是否可以不要？」</li>
+          <li><strong>封面现在整张都看得见</strong> —— 以前是"铺满裁切"，竖着的封面会被<strong>切掉两边</strong>，只能看到中间一截。现在改成<strong>完整显示，一条边都不裁</strong>；卡片按 3:4 的开本比例留位，图和卡片比例不一样时四周会留一点白（这是"不裁切"必然的代价）。</li>
+          <li><strong>下面那块白底说明区整个去掉了</strong> —— 书名、字数页数、那条细进度条，都不再挤在封面底下。卡片现在干干净净，<strong>就是一张封面图</strong>，右上角还是那个 ⋯。</li>
+          <li><strong>字数没丢，挪到阅读页顶栏了</strong> —— 顶栏现在是「书名 · <strong>字数</strong> · 页码」，比如「477.7 万字」。进书就能看到，在书架上则是一张干净的封面。</li>
+          <li><strong>顺带修掉一条老红字</strong> —— 代码里有一处用了 <code>Dexie.Table</code>，但实际加载的那个 Dexie 4 里<strong>根本没有这个属性</strong>，所以每次启动都会抛一次错。功能不受影响，但很容易在排查时把人带偏。现在改成没有就安静跳过。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.58 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.58</span>
+        <span class="version-date">2026-11-03</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">紧急修复：整个应用白屏、怎么刷新都进不去</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「就是起不来了，我开文件版刷新之后也是到现在都没打开」。</li>
+          <li><strong>是我上一版的锅，跟你电脑、跟你数据都没关系</strong> —— 上一版为了给书加封面，往<strong>主数据库</strong>上加了一个新版本号。数据库这东西有个死规矩：<strong>只要还有一个旧连接开着（哪怕是一个卡住的旧标签页），这次升级就要无限期排队等着</strong>。等不到就不报错、也不失败，就那么干等着 —— 于是启动流程卡在"打开数据库"这一步，首页永远出不来，<strong>控制台还一条红字都没有</strong>。</li>
+          <li><strong>为什么特别难查</strong> —— 控制台里所有脚本都加载完了，看起来"一切正常"，只是没动静。没有红字可看，所以既看不出是数据库的问题，也看不出是哪个文件的问题。我是用无头浏览器 + 调试协议把"升级请求被挡住"这个状态复现出来，才敢下结论的。</li>
+          <li><strong>现在怎么修的</strong> —— 封面<strong>不再放进主数据库</strong>，改成单独一个小库（跟项目里宠物屋、观影厅各自一个库一个道理）。<strong>主数据库的版本号退回原样，一个数字都没动</strong> —— 不需要升级，就不可能被卡住，这个病根直接没了。没换过封面的人，手机里连这个小库都不会出现。</li>
+          <li><strong>顺手加了两道保险</strong> —— ① 以后再遇到"升级被别的页面挡住"，控制台会明确告诉你是被挡住了；② 打开数据库超过 20 秒还没好，屏幕上<strong>会直接弹提示 + 一个「重新加载」按钮</strong>，不再让你对着白屏干等。</li>
+          <li><strong>顺带清掉一条会误导排查的老红字</strong> —— 代码里有一处用了 <code>Dexie.Table</code>，但实际加载的那个 Dexie 4 里<strong>根本没有这个属性</strong>，所以每次启动都会抛一次错、留一条红字。功能其实不受影响，但下次再出"打不开"的问题，它会把你带偏。现在改成没有就安静跳过。（反过来这也是个证据：你之前的控制台里<strong>没有</strong>这条红字，说明数据库从头到尾就没打开过。）</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.57 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.57</span>
+        <span class="version-date">2026-11-02</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">书架上的那个垃圾桶，变成了一张羊皮纸小菜单</div>
+        <ul class="item-list">
+          <li><strong>以前</strong> —— 每本书右上角常驻一个醒目的 🗑，删书就靠它。</li>
+          <li><strong>现在</strong> —— 换成一个不抢戏的 <strong>⋯ 三点按钮</strong>（深咖啡色，三个点是 CSS 画的，没另外做素材）。点开是一张<strong>羊皮纸小卷轴</strong>，里面只有两项：<strong>更换封面</strong>、<strong>删除书籍</strong>。</li>
+          <li><strong>卷轴上没有一个字是画出来的</strong> —— 你给的素材只有卷轴本身（白底已经抠成透明），两个选项都是页面上的文字，居中排好；手指按住或鼠标划上去时字会变色。</li>
+          <li><strong>细节</strong> —— 点菜单外面就关掉；同一时间只会有一个菜单开着；卷轴贴着你点的那个按钮，手机上也不会跑出屏幕。</li>
+          <li><strong>删除还是原来那个删除</strong> —— 照样弹二次确认，确认了才真删，取消什么都不发生。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">新功能：自己给书换封面</div>
+        <ul class="item-list">
+          <li><strong>怎么用</strong> —— 点 ⋯ → <strong>更换封面</strong> → 从相册里挑一张 → 会先给你看一眼预览 → 按「确认更换」才真的换。</li>
+          <li><strong>只换封面，别的什么都不碰</strong> —— 书的内容、读到第几页、聊天里的讨论记录、这本书的编号，<strong>全都原样不动</strong>，也不用重新导入这本书。</li>
+          <li><strong>存哪儿</strong> —— 封面单独存一个<strong>独立的小数据库</strong>（不跟正文混在一起，也不动你原本那个大数据库）。开书架还是只读书的元数据，速度跟以前一样。</li>
+          <li><strong>怕占手机内存</strong> —— 选完图会自动缩到<strong>最长边 420 像素</strong>再存（书架上那本书才 136 像素宽，够清楚了），一张大约 <strong>20~40KB</strong>；手机竖拍的照片还会自动摆正。刷新页面、关掉再开，封面都还在。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">顺手修掉一个老毛病：点哪本书都打开最后一本</div>
+        <ul class="item-list">
+          <li><strong>症状</strong> —— 书架上有多本书时，点第一本、第二本，打开的<strong>都是列表里最后那一本</strong>。</li>
+          <li><strong>原因</strong> —— 卡片那段代码写在一个循环里，循环里用 <code>var</code> 声明的变量是<strong>整个函数共用一个</strong>，循环跑完它就只剩最后一个值 → 所有卡片的点击回调拿到的都是最后一本书。</li>
+          <li><strong>为什么之前没发现</strong> —— 你书架上一直只有一本书，所以看不出来。现在每张卡片单独生成，<strong>点哪本开哪本</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.56 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.56</span>
+        <span class="version-date">2026-11-02</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋说"找不到配置的 API"，问不了 AI（已修）</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「共读发现两个问题，图1显示找不到配置的API，没法跟AI讨论」。</li>
+          <li><strong>这不是你配置的问题</strong> —— 读书屋去拿 API 配置的那段代码里有个<strong>自己跟自己过不去的错</strong>：它把"拿到的配置"存进一个变量里，却<strong>没把这个变量交出去</strong>，于是下一层拿到的<strong>永远是空的</strong> → 一律报「地址 / API Key / 模型缺一个」。所以不管你 API 配得多对，读书屋都问不了。</li>
+          <li><strong>改成把结果直接往下传</strong> —— 现在<strong>站点预设、直填地址、角色独立 API</strong>四种配法都实测能正常解析出来（每种都单测了一遍，不是靠猜）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">读书屋一点输入框，整个屏幕就放大了（已修）</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「图二，只要点击输入框，屏幕就会异常放大」。</li>
+          <li><strong>原因</strong> —— iPhone 上的 Safari 有个规矩：<strong>你点的输入框，字号小于 16 像素，它就会自动把整个页面放大</strong>好让你看清（而且 iOS 10 以后，它<strong>不认</strong>网页里写的"禁止缩放"，拦都拦不住）。读书屋里的输入框和搜索框当时都只有 <strong>14 像素</strong> → 一碰就放大。</li>
+          <li><strong>改成 16 像素</strong> —— 现在两个输入框都是 16 像素了，跟<strong>主聊天那边的输入框一样大</strong>，放大这件事就不会发生了。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.55 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.55</span>
+        <span class="version-date">2026-11-01</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">「一起读书」改成独立的读书屋了（不是小浮窗）</div>
+        <ul class="item-list">
+          <li><strong>以前的样子</strong> —— 点 📖 出来的是聊天页里一个 <strong>340px 的小浮窗</strong>，整本书塞在一条记录里。实测一本 2000 万字的书：翻一页 <strong>96~126 毫秒</strong>、开书库 39 毫秒、页面常驻内存 <strong>307MB</strong> → 手机上就是卡、发烫。</li>
+          <li><strong>现在的样子</strong> —— 点 📖 直接进<strong>全屏读书屋</strong>：先是<strong>书架大厅</strong>（你给的那张背景），点书就进<strong>全屏阅读室</strong>（另一张背景，宋体正文、宣纸色卡片、章节标题居中）。</li>
+          <li><strong>为什么能快</strong> —— 数据改成<strong>一页存一条</strong>，翻页只取当前这一页。实测连翻 50 页 <strong>64 毫秒</strong>（旧版要 5.1 秒左右，快了 80 倍）。</li>
+          <li><strong>再大的书也不怕</strong> —— 导入是<strong>流式</strong>的：文件边读边切页，内存里一次只放一页，不会把整本书塞进去。</li>
+          <li><strong>旧的小浮窗彻底下线了</strong> —— 入口只剩这一个 📖，不会再有两个地方能开书。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">页面下半部固定一个 AI 聊天窗</div>
+        <ul class="item-list">
+          <li><strong>读着读着想聊</strong> —— 不用切页面，读书屋<strong>下半屏</strong>就是聊天窗，边读边讨论。</li>
+          <li><strong>长出来一句想问</strong> —— 正文里选中一句话，旁边冒出「<strong>💬 问 AI</strong>」，点一下就把这句带进对话。</li>
+          <li><strong>AI 知道的上下文</strong> —— <strong>当前这一页的全文 + 你选中的那句话</strong>，问什么它都能对上你正在读的地方。</li>
+          <li><strong>可以调大小</strong> —— 中间的分隔条能拖，右上角也能整个收起（收起来只占一条，读书的地方就大了）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">你昨天在手机上试过之后提的七个问题，全改了</div>
+        <ul class="item-list">
+          <li><strong>书架大厅没有「返回聊天」的键</strong> —— 原来右上角只有一个小小的 ✕，谁也不知道那是回聊天。现在左上角是明明白白的<strong>「‹ 返回聊天」</strong>。</li>
+          <li><strong>返回键顶到状态栏了</strong> —— 手机 PWA 上状态栏（时间/信号）是盖在内容上面的，所以返回键得往下让一块。现在顶栏会自动避开状态栏的高度。</li>
+          <li><strong>导入的小说全是乱码</strong> —— 以前只试了一种中文编码，浏览器不认那种写法时就悄悄按 UTF-8 解，整本报废。现在会<strong>先试 UTF-8、再试 GB18030/GBK</strong>，而且<strong>文件头尾各看一段</strong>（只看开头的话，小说前面的版权页全是英文，会误判）。章节也认得更多了：<strong>「第一章：」「第一章」「序章」「楔子」「Chapter 1」</strong>都认。</li>
+          <li><strong>书架上的书删不掉</strong> —— 那个删除按钮其实<strong>从来没显示出来</strong>（样式写成了隐藏，而代码没去点亮它）。现在每本书右上角都常驻一个 🗑，点一下就移除。</li>
+          <li><strong>提示语写着"史书里看不懂的，尽管问"</strong> —— 你说得对，不是所有人都看史书。已经改成<strong>「问点什么…」</strong>。</li>
+          <li><strong>MiniMax 的 think 思维链全露出来了</strong> —— 现在流式输出会把 <strong><think> 思考过程整段吞掉</strong>（流式下这个标签还可能被切断，所以做了专门的过滤），收尾再按主聊天那套清一次。提示词里也写死了"不要输出思考过程"。</li>
+          <li><strong>API 线路要跟主聊天一样</strong> —— 现在<strong>OpenAI 兼容</strong>和<strong>谷歌原生直连</strong>都支持（谷歌原生由主界面代打，沙盒自己拼地址会 404），另外还补上了<strong>角色独立 API</strong>（你在角色设置里换过线路的话，读书屋也跟着用），并且改成<strong>实时读取</strong>当前预设（以前缓存了一份，你中途切预设读书屋不跟着变）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">桌宠底下那条看不见的长条，挡住了聊天框（已修）</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「聊天框的那个宠物桌宠虽然图片下方看不见东西，但是好像有很长一片区域在隐形遮挡聊天框的其他功能，如果桌宠放右上，我甚至点不到右下弹出来的匹配表情包，就是桌宠下方很长的遮挡区域在遮挡，挪开就能点了」。</li>
+          <li><strong>真因不是层级，是盒子被撑长了</strong> —— 桌宠平时靠样式摆在右下角，一旦你<strong>拖动过</strong>，代码就改用「左上角坐标」来定位，但<strong>右边和下边的定位没撤掉</strong>。两套一起生效时，那个容器的<strong>高度会被撑满从顶到底的一整段</strong> —— 实测 430×900 的屏上：没拖过时是 98×106 像素，拖过一次就变成 98×<strong>673</strong> 像素。一整条透明的长柱就那么横在屏幕右边。</li>
+          <li><strong>所以你点不到右下角的表情包</strong> —— 那条长柱虽然一个像素都看不见，但它实实在在吃掉了鼠标事件，下面的按钮根本收不到点击。</li>
+          <li><strong>顺带还修了两个连带毛病</strong> —— ① 桌宠一旦被拉长就<strong>再也拖不到下面</strong>（拖动范围被那条长柱算成了 0）；② 弹出来的<strong>菜单会被顶到屏幕外</strong>，根本点不着。</li>
+          <li><strong>现在长条没了，挡路的只剩桌宠自己</strong> —— 定位切换时会明确把「右/下」撤掉；容器的高度也写死了只跟内容走；而且容器<strong>本身不再接管鼠标</strong>，只有<strong>宠物图片、名字和菜单</strong>能点。所以哪怕真挡住了，也就挡住桌宠自己那一小块。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">浅色宠物（淡蓝色那种）抠完自己那块变透明了</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「如果宠物画出来是比较浅的颜色，比如淡蓝色，就很容易在抠图处理以后出来的是透明的，就是宠物自身的浅色区域也被扣掉了」。</li>
+          <li><strong>原因</strong> —— 抠图是从画面四边往里"漫水"过去的，遇到<strong>颜色慢慢变的地方</strong>它会顺着一起走进去。宠物头顶那条由浅到深的过渡带在像素上<strong>宽达 40 像素</strong>，一格一格只差一点点 → 漫水就钻进宠物肚子里，把浅色身体全吃掉了。<strong>深色宠物没事</strong>，因为它们的轮廓是"硬边"，漫水跨不过去 —— 这也正是你说的「稍微画深色一点点就能正常抠」。</li>
+          <li><strong>还查出一个连带问题</strong> —— 本来有一道保险叫「画面不能被抠空」，但它<strong>只在整张图都没有深色颜色时才生效</strong>。浅色宠物身上有一双眼睛 → 这道保险被跳过 → 宠物被吃光都没人拦。</li>
+          <li><strong>改了两处</strong> —— ① 那道保险改成<strong>一直生效</strong>，宠物快被吃光时会自动回滚、改用保守参数重来；② 保守参数的力度又收了一点（原来还会啃掉色距很近的浅紫、浅灰蓝，现在<strong>12 种浅色深色宠物全部 100% 保住</strong>，背景也照样抠得干干净净）。</li>
+          <li><strong>容差本身没动</strong> —— 实测调小容差不是解法：浅色宠物照样被吃光，而背景会开始抠不干净（容差降到 12 时背景残留近两成，降到 8 时超过六成），就是以前你反馈过的"宠物旁边残留色块"。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">几个说明</div>
+        <ul class="item-list">
+          <li><strong>翻页不会去烦 AI</strong> —— 每次翻页都问一次太慢也太费。翻页只是把「你在读哪一页」悄悄同步给主聊天那边的 AI，下次你直接问，它知道你读到哪了。</li>
+          <li><strong>以前导入的书会自动搬过来</strong> —— 而且是<strong>你第一次打开读书屋的时候</strong>才搬（不让你开机时卡一下）。</li>
+          <li><strong>备份和清数据里已经有读书屋了</strong> —— 换手机、备份恢复都算得进去。</li>
+          <li><strong>这次动过书库版本号</strong> —— 第一次打开会比平时慢一两秒（要把书库升一版），之后就正常了。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.54 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.54</span>
+        <span class="version-date">2026-10-30</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">宠物屋「初始形象」—— 换装不再越画越不像</div>
+        <ul class="item-list">
+          <li><strong>你原话</strong> —— 「<strong>我之前宠物系统的设计是每天换装的时候，拿头一天的图去垫图画新衣服新形象，结果因为每次垫的图都有之前的衣服和形象，导致宠物的长相越画越不像了，时间久了肯定更严重，我想改成以后用用户指定的形象去垫</strong>」。</li>
+          <li><strong>确实是这么设计的，改了</strong> —— 以前每天换装，是拿<strong>昨天那张画好的图</strong>当垫图，让模型在那张图上改出新衣服。这样每天都在昨天那张的基础上再改一次，<strong>脸和花纹会一层层叠上去</strong>，越画越不像。</li>
+          <li><strong>现在改成：拿你指定的图垫</strong> —— 每次换装都从<strong>同一张固定的形象图</strong>重新画。衣服和道具照常天天换，但<strong>长相每次都从你那张图出发</strong>，不会越跑越偏。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">怎么用</div>
+        <ul class="item-list">
+          <li><strong>在小窝里点右上角的 ⚙（小屋管理）</strong> —— 那里多了一块<strong>「初始形象」</strong>，每只宠物一行，点<strong>「上传」</strong>选一张图（一张正脸照就行，会自动裁成方的）。</li>
+          <li><strong>一只宠物一张</strong> —— 不同宠物可以指定不同的形象（猫和鹦鹉当然不该用同一张）。</li>
+          <li><strong>换完不会自动重画</strong>（生图次数你自己掌握）—— 想马上看效果，回小窝点一下<strong>「换个模样」</strong>，那一次就会照着新形象画。</li>
+          <li><strong>不想要了</strong> —— 点「清除」就回到原来的样子。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">几个说明</div>
+        <ul class="item-list">
+          <li><strong>没设初始形象的宠物，行为一个字都没变</strong> —— 还是拿上一张当垫（老样子），你可以一只一只慢慢设。</li>
+          <li><strong>蛋还没孵出来的时候不用这张图</strong> —— 那时候画的是蛋，拿一张动物肖像当参考反而会把蛋画歪。孵出来以后才开始用。</li>
+          <li><strong>上传的图只裁方+缩小，不会自动抠背景</strong> —— 真实照片的背景很难在本地抠干净，所以改成在提示词里明确告诉模型「<strong>只取这张图的长相和配色，忽略它里面的衣服和背景</strong>」。</li>
+          <li><strong>以前画歪的那些不会自动变回来</strong> —— 从下一次换装开始按新形象画。老图我还留着（成长相册里能翻到）。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.53 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.53</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">新功能（宠物屋可以换房间背景了）</div>
+        <ul class="item-list">
+          <li><strong>你给的</strong> —— 「我想换成这张插画，可以把这个加进去备选吗，<strong>原来那个也留着，想选哪个选哪个</strong>」。</li>
+          <li><strong>新房间：星夜树屋</strong> —— 开满白花的树洞，挂着星星灯和水晶，窗外是远处的城堡。你那张图原比例是 940×1672，我裁到 <strong>1024×1536（跟原来那张一样是 2:3）</strong>，所以<strong>场景容器不用改</strong>，两张背景共用同一个比例。</li>
+          <li><strong>怎么换</strong> —— 小窝场景<strong>右上角多了一个 🎨 按钮</strong>，点一下弹出两间房的缩略图，选哪间就搬哪间；<strong>选中哪间会记住</strong>，下次进来还是你选的那间。</li>
+          <li><strong>原来那张「阳光小屋」还留着</strong> —— 老用户进来默认还是那间，随时能切回去。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title feat">精灵大一倍，槽位减到 3 个</div>
+        <ul class="item-list">
+          <li><strong>你又改了一次口</strong> —— 「<strong>精灵不要弄小了，我们基本上只养一只，不需要 12 个槽位，给我把屋里的宠物弄大点，现在大一倍都可以，不然看都看不清</strong>」。</li>
+          <li><strong>精灵大一倍</strong> —— 原来占场景宽度的 21%，现在 <strong>42%</strong>（手机上从 82px 变成 165px）。<strong>两间房一样大</strong>，不再是一套大一套小。</li>
+          <li><strong>12 个槽位 → 一排最多 3 只</strong>，而且<strong>只有 1 只的时候它站在正中间</strong>当主角（以前第 1 只固定在左上角）。2 只一左一右，3 只均匀铺开。</li>
+          <li><strong>蛋不占地面的名额</strong> —— 所以「1 颗蛋 + 1 只猫」的时候，那只猫<strong>还是在正中间</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">你看完图又提的两处，已经改掉</div>
+        <ul class="item-list">
+          <li><strong>「老背景的宠物全部站在地毯外面去了，得往上挪点」</strong> —— 属实。<strong>阳光小屋的地毯实测在 38%~62%</strong>，而精灵的脚原来落在 <strong>71.8%</strong>，整排都站在毯子外面。现在<strong>整体往上挪</strong>，脚落回 <strong>55.8%</strong>，站在毯子上。</li>
+          <li><strong>「星夜图的蛋太小了差点没看见，你没调整蛋的大小」</strong> —— 属实，之前蛋只有 11%（43px）。现在<strong>阳光小屋的蛋 14%（藤篮里）、星夜树屋的蛋 20%（78px，躺在树洞那张床上）</strong>，一眼能看见。</li>
+          <li><strong>「星夜的蛋还是太靠外了，能不能往右挪点」</strong> —— 属实。星夜树屋那张床上能躺东西的<strong>白绒巢实测在 x 51.5%~85%</strong>，而蛋原来在 57%（占 47%~67%），<strong>左边缘是凸在巢外面的</strong>。现在挪到 <strong>63%（占 53%~73%，整个躺在巢里）</strong>。</li>
+          <li><strong>顺带</strong>：3 只并排时左右边缘原来会超出画面 4%（猫的爪子尾巴被切掉），现在收到 <strong>1%~99%</strong>，不裁边了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">为什么换背景要连带改站位</div>
+        <ul class="item-list">
+          <li>宠物是<strong>站在背景图上</strong>的，位置以前是写死的百分比 —— 照着「阳光小屋」那张图调的（地毯在 42%~68%，下面是木地板）。</li>
+          <li>换一张图，宠物就会<strong>浮空或者埋进家具里</strong>。所以现在<strong>每套背景自带自己的站位和精灵大小</strong>：阳光小屋站在地毯上（y=44%），星夜树屋站在蓝白圆毯上（y=80%）。</li>
+          <li>站位是<strong>拿真实精灵图一张张模拟出来的</strong>，不是拍脑袋填的 —— 名字标签被裁掉 0.4% 这种事都量过、改过。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>进小窝，点<strong>右上角的 🎨</strong>，看看两间房对不对。</li>
+          <li>星夜树屋那张要是哪里不对（比如宠物该站的位置、蛋该放哪），<strong>跟我说就行</strong>，站位是改数字的事。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.52 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.52</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（影院「总结一段以后，再过两分钟没有发起总结」）</div>
+        <ul class="item-list">
+          <li><strong>你报的</strong> —— 「<strong>live 就没有显示断过，跟重连没关系</strong>，就是总结一段以后再过两分钟没有发起总结」。</li>
+          <li><strong>这次没再靠猜</strong> —— 前两轮我修的是「怎么连上」，你这次说清了是<strong>另一件事</strong>：连接一直好好的，是<strong>第二段摘要压根没发起</strong>。这条我按你说的重查了。</li>
+          <li><strong>真因（这次是结构性的）</strong> —— 摘要的触发一直是<strong>靠一个计时器「自己接自己」</strong>：这次到点了写完，它顺带给下一次排上。链上<strong>任何一环被吃掉</strong>（切后台、拖进度条、换片、连接抖一下），<strong>后面就永远不再发起</strong>，而且现场一点线索都没有。</li>
+          <li><strong>还挖出一条断线</strong> —— 视频「暂停」事件会<strong>把摘要计时器和「已经看了多久」一起清掉</strong>，可视频「播放」事件<strong>只管连 live，从来不把它们恢复</strong>。所以拖一下进度条、切一下 app 回来，摘要就哑了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>计时器不再说了算</strong> —— 现在每 30 秒核对一次：<strong>「你已经看了 X 分钟，剧情还没写进去」就直接补一次</strong>，管它那个计时器还在不在。<strong>「每 2 分钟必有一段」从靠运气变成硬保证</strong>。</li>
+          <li><strong>播放事件补上恢复动作</strong> —— 视频一恢复播放，就把「看了多久」和摘要计时器都接回去。</li>
+          <li><strong>诊断框加了摘要时间线</strong> —— 每次「发起 / 没发出去 / 强制补一次」都记一条，<strong>下次一张截图就能直接看出卡在哪</strong>，不用再猜。</li>
+          <li><strong>画面、画质、总结节奏都没动</strong>（还是一秒一帧、长边 768、每 2 分钟一段）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>看本地长剧，<strong>过几分钟应该能连着总结好几次</strong>。</li>
+          <li>万一这次还是只写了一段，<strong>点 ⚙设置 → 底部「诊断」截个图给我</strong> —— 现在里面有摘要时间线（几点发起的、有没有发出去、有没有强制补过），<strong>一眼就能定位</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.51 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.51</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（影院只总结了第一段，之后就再也没总结）</div>
+        <ul class="item-list">
+          <li><strong>你报的</strong> —— 「又是只总结了第一个 2 分钟的剧情，就是第一段，<strong>之后就再也没总结了，换了一集看也没总结</strong>」。</li>
+          <li><strong>这次是真复现出来了</strong> —— 上次没抓到的原因：那条测试只要求「<strong>至少写了 1 段</strong>」，而你的症状正好是「只有第一段」→ 1 段也算通过，所以一直没人发现。这次把测试改严，并且<strong>在同一个场景下把旧版跑了一遍</strong>：旧版写的段数和你看到的一模一样。</li>
+          <li><strong>真因</strong> —— 连接断了以后，程序会重连 5 次；<strong>5 次都失败它就彻底放弃了</strong>（提示写着「已停止自动重连」）。live 永远回不来 → 它就没法看画面 → <strong>剧情就再也写不出来了</strong>，只留下断之前的那一段。</li>
+          <li><strong>还有几条同路的坑</strong>：切后台回来时如果 live 还没接上，摘要的计时器<strong>直接就不排了</strong>；连接失败一次就把整个功能<strong>关掉</strong>；连接进「出错」状态时<strong>没人管</strong>，一次失败就永远不重连。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>不再彻底放弃</strong> —— 重连 5 次失败后改成<strong>每 60 秒继续试一次</strong>，永远不会自己放弃（提示只说一次，不会刷屏）。</li>
+          <li><strong>加了看门狗</strong> —— 每 30 秒看一眼：<strong>摘要的计时器丢了就补上</strong>；<strong>live 掉线了就安排重连</strong>。上面那几条坑不管从哪条路踩进来，都会被它兜住。</li>
+          <li><strong>切后台回来也能接着写</strong> —— 以前这时如果 live 还没接上就直接放弃了，现在会照常排上计时器。</li>
+          <li><strong>连接失败不再把功能整个关掉</strong>，改成交给重连；<strong>「出错」状态也会安排重连</strong>（以前一次失败就永远不重连）。</li>
+          <li><strong>画面、画质、总结节奏都没动</strong>（还是一秒一帧、长边 768、每 2 分钟一段）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>看本地长剧，<strong>过几分钟应该能连着总结好几次</strong>。</li>
+          <li>万一这次还是只写了一段，<strong>把影院的聊天框截个图给我</strong> —— 里面现在会明说卡在哪一步（「还没连上」「重连中」「连续重连失败」），一眼就能看出来，比再猜一轮快得多。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.50 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.50</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（影院 live 断了重连不上 / 再进去看再久都不总结剧情）</div>
+        <ul class="item-list">
+          <li><strong>你报的</strong> —— 「看到三分钟左右，总结了一次剧情提要，然后 <strong>live 断了怎么都重连不上</strong>，于是我退出了影院，再次进去接着看<strong>这下看再久都不总结剧情了</strong>」。</li>
+          <li><strong>找到真凶了</strong> —— 上次那版为了防发烫，加了一条「<strong>每次总结完就换一次干净会话</strong>」。换会话的时候，<strong>旧连接没被关干净</strong>：旧连接后来被服务端一关，顺手把<strong>新连接也判成了死的</strong>（它俩用的是同一个状态对象）。</li>
+          <li><strong>连起来是这样死的</strong>：新连接被判死 → 程序以为「没连上」→ 又重连 → 每次重连又留一个旧连接 → <strong>无限循环</strong>。界面上看就是「怎么都重连不上」。</li>
+          <li><strong>为什么「再进去也不总结」是同一个病</strong> —— 剧情总结要靠 live 才能写。live 一直判死 → <strong>总结那条路每次都提前退出</strong> → 所以视频照看，<strong>但一句剧情都不会写</strong>。不是两个毛病，是一个。</li>
+          <li><strong>为什么以前没犯</strong> —— 老代码只在「服务端先断开」之后才重连，那时候旧连接早关好了。<strong>新加的「总结完换会话」是第一次在连接还活着的时候主动换</strong> → 才踩到这个坑。所以这是上次那版修发烫时带出来的。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>换会话时先把旧连接关干净</strong>：先把旧连接的回调摘掉（它之后怎么关都碰不到新连接），再关掉它。</li>
+          <li><strong>换会话失败不再悄悄消失</strong> —— 以前失败是个没人接的<strong>空头承诺</strong>（连重连都不会安排）。现在失败就当「连接有问题」，按重连处理。</li>
+          <li><strong>以后不写剧情会告诉你原因</strong> —— 以前 live 没连上时是<strong>闷声不响</strong>，你只看到「一句总结都没写」，完全不知道卡在哪。现在聊天区会直接说：<strong>「Gemini Live 还没连上 —— 剧情要靠它整理，所以现在还没写」</strong>。</li>
+          <li><strong>画面和画质一行没动</strong>（还是一秒一帧、长边 768），还是每 2 分钟总结一次。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（桌宠下面一大块空白，点到会乱动）</div>
+        <ul class="item-list">
+          <li><strong>你报的</strong> —— 「宠物桌宠本来只有小小的一块面积，但是<strong>宠物下方很长一个空间，点到都会挪动宠物或者弹出弹窗</strong>，是不是它那个透明面积太大了」。</li>
+          <li><strong>你猜对了</strong> —— 确实是透明面积太大。桌宠的图是<strong>六格拼图</strong>，宠物只画在每格中间，<strong>下面那截是空的</strong>；但点鼠标这件事认的是<strong>整个大方框</strong>，不管那里有没有东西。</li>
+          <li><strong>量出来有多少</strong> —— 宠物本身只占格子的 <strong>50%~91%</strong>，下面平均空出 <strong>9%~20%</strong>；再加上名字那一小条，宠物底下有<strong>近 30px 看不见但能点</strong>的地方（手机上一样宽）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">桌宠这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>先量一遍，再按实物判定</strong> —— 页面会自己量一遍你那张图，算出宠物真正占的地方；<strong>点到宠物身上才响应，点到下面那片空白就当没点</strong>（不会乱拖，也不会乱弹菜单）。</li>
+          <li><strong>画面一个字没改</strong> —— 宠物长什么样、放在哪、多大，全都跟以前一样，只是「哪里算点到它」变准了。</li>
+          <li><strong>万一量不出来</strong>（图加载失败之类），就<strong>退回以前的行为</strong>，绝不会变成「点不到了」。</li>
+          <li><strong>名字那一小条仍然能点</strong>（点名字照样弹菜单）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>影院：看本地长剧，<strong>过几分钟应该能连着总结好几次</strong>；万一又断了，聊天区会直接告诉你断在哪一步。</li>
+          <li>桌宠：<strong>点宠物身上</strong>能拖能弹菜单；<strong>点它下面那片空白</strong>什么都不会发生。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.49 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.49</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">改动一：生图次数不再限制 3 次</div>
+        <ul class="item-list">
+          <li><strong>你提的</strong> —— 「生图次数，她们不想要三次的限制，<strong>反正画多少自己掌握</strong>」。</li>
+          <li><strong>改了什么</strong> —— 以前每天默认只准画 <strong>3 次</strong>，画满就直接拦下来。现在默认<strong>不限次</strong>，想画多少次画多少次。</li>
+          <li><strong>拦的功能没坏，只是默认不拦</strong> —— 你要是自己在设置里写死一个次数，或者给某次生图单独标了预算，<strong>照样拦得住</strong>。只是「什么都不设」的时候＝随便画。</li>
+          <li><strong>每天自动换装那条路单独算</strong> —— 它不受这次改动影响（还是每只宠物每天自动画一次），<strong>手动点「换个模样」才是你说了算</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">改动二：影院陪聊改走谷歌直连</div>
+        <ul class="item-list">
+          <li><strong>你说要加的</strong> —— 「影院主 API 聊天不能走谷歌直连吗？这的给我加上啊」。</li>
+          <li><strong>之前为什么走不通</strong> —— 影院是一个<strong>单独的小页面</strong>，它只加载了 7 个文件，<strong>主聊天那套「把消息转成谷歌格式」的工具不在里面</strong>。所以你在设置里把主 API 换成谷歌原生地址（<code>…/v1beta/models/…</code> 那种）时，影院这边<strong>自己转不了格式</strong>，就报错了。</li>
+          <li><strong>这次改了什么</strong> —— <strong>外面那页替你转</strong>：影院把要问的话交给外面的主聊天页，外面的页用<strong>和主聊天完全同一套</strong>转换逻辑发给谷歌，再把回答带回来给影院。</li>
+          <li><strong>不是另写一份，是复用同一套</strong> —— 所以影院和主聊天对同一句话的理解、格式、报错方式<strong>完全一致</strong>，不会出现「主聊天好好的，影院就说不行」。</li>
+          <li><strong>等不到就明说</strong> —— 外面那页处理失败，影院会<strong>把失败原因显示出来</strong>，不会闷声卡住让你以为是自己网络的问题。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>影院陪聊：把主 API 设成<strong>谷歌原生地址</strong>，进影院问一句话试试，看能不能正常回。</li>
+          <li>宠物屋：连着点几次「<strong>换个模样</strong>」，看会不会真的能一张接一张画下去。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.48 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.48</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（鹦鹉换装只有徽章，没有新衣服）</div>
+        <ul class="item-list">
+          <li><strong>你报的现象</strong> —— 「怎么我刚才更新了，鹦鹉只有徽章，没有新衣服」。</li>
+          <li><strong>徽章是画出来了的</strong> —— 那是<strong>道具</strong>，本来就能画。<strong>没画出来的是「衣服」</strong>，因为给模型的条件自相矛盾。</li>
+          <li><strong>矛盾在哪</strong> —— 我们让模型画一张<strong>六格图</strong>，六个姿势写的是：<strong>抬起一只前爪、蜷着睡、趴着、耳朵和尾巴和爪子不许碰格边</strong>。这些全是<strong>猫狗那一套</strong>。让一只<strong>鹦鹉</strong>「抬起前爪」，模型就会把它画成毛茸茸的圆球兽 —— <strong>草莓裙、小熊睡衣、绣花鞋</strong>这些它根本穿不上，于是衣服被丢掉，只剩胸口一个小东西（看着就是一枚徽章）。</li>
+          <li><strong>衣服库也是问题</strong> —— 那 72 件衣服里，鸟穿不了一批（连衣裙、连体衣、鞋、袜子、围裙），还有两件干脆是「<strong>胸口别一个小东西</strong>」→ 画出来同样是徽章。</li>
+          <li><strong>道具里还写着「爪子」</strong> —— 有一批道具写的是「<strong>拿在爪子里</strong>」。鸟没有爪子，写爪子模型就会给它配上两只小爪，同样把它画成四足兽。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>鹦鹉改用鸟的六个姿势</strong>：<strong>站在枝头、闭眼、埋头理羽、低头啄食、抬头看、展翅</strong>；「不许碰格边」也改成<strong>喙、头、翅膀、尾羽</strong>。</li>
+          <li><strong>鹦鹉有自己的 24 件衣服</strong> —— 全是<strong>穿在身上</strong>的：<strong>奶油领结、小饼干帽、棒棒糖丝带、草莓围兜、珍珠小皇冠、蕾丝领巾、小花环、天鹅绒小斗篷、流星围巾、小宇航头盔、喷气小背包、极光小纱、竹斗笠、祥云腰封、点翠发簪、红绸小披帛、贝壳发夹、浪花围巾、圆潜水镜、救生圈、巫师尖帽、兔耳兜帽、魔法书包、星星小披肩</strong>（6 个系列各 4 件，衣服和道具还是配套挑）。</li>
+          <li><strong>衣服位里不许再出现「顶在头上的一颗小行星」这种</strong> —— 你截图里那句「一顶小皇冠、<strong>头顶小行星的</strong>」：前面那个是<strong>道具</strong>，后面那个本来该是<strong>衣服</strong>，可它其实是「顶在头上的一颗小行星」，根本不是衣服 → 画出来只是头顶一个小东西，看着就像一枚徽章。现在<strong>衣服位只放穿在身上的东西</strong>（戴着/围着/披着/背着/系着/套着）。</li>
+          <li><strong>鹦鹉的道具改成用喙拿</strong>：「拿在爪子里」→「<strong>拿在喙里</strong>」。</li>
+          <li><strong>名册和图对上了</strong> —— 之前名册写的衣服和图上画的<b>可能不是同一套</b>，这次一并对齐（今天这身按宠物种类算，名册、说明、图、给 AI 看的那份全都用同一套）。</li>
+          <li><strong>猫狗和幻兽一点没动</strong> —— 它们本来就是四足，「爪子」对它们是对的，姿势和衣服保持原样。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">要看的</div>
+        <ul class="item-list">
+          <li>明天鹦鹉自动换装时，看它是不是<strong>穿上了</strong>（领结/帽/围巾/斗篷这类），而不是只多了一个小徽章。</li>
+          <li>想马上看：手动点一次「<strong>换个模样</strong>」就行（手动和自动分开算次数）。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.47 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.47</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（影院越看越烫 / 不写总结 / 闪退）</div>
+        <ul class="item-list">
+          <li><strong>你报的三个问题</strong> —— 「本地视频看的时候越看手机越烫，看了十分钟动漫一句剧情总结都没写，最后十五分钟左右浏览器崩溃闪退」。</li>
+          <li><strong>先认一件事：你是对的</strong> —— 影院从一开始就是<strong>一秒一帧</strong>，从来没变过；刚写好那版放一集也不会发热闪退。所以「少传画面」这个方向是错的，这一版把画面质量<strong>原样还回去了</strong>。</li>
+          <li><strong>真正的原因是「此刻画面」</strong> —— 影院每隔一会儿会问模型一句「此刻屏幕上是什么」，用来给陪聊提供画面描述。<strong>但模型的对话是一次只能做一件事</strong>：这句问话和「写剧情总结」抢同一个位置。问话每 30 秒占一次，总结就被挤到后面排队，<strong>排到 141~173 秒</strong> → 超时作废 → <strong>一句剧情总结都没写</strong>。</li>
+          <li><strong>为什么最后会闪退</strong> —— 模型每回一句话都要把<strong>这个对话里看过的全部画面</strong>重新算一遍。攒到 899 帧时，<strong>一句话的输入就高达 23 万 token</strong>，而额度只有 13 万 —— 早就超了。超了之后自动重连，而重连<strong>又带着爆掉的上下文</strong> → 立刻再爆 → 反复重连 → 手机狂热 + 闪退。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这次改了什么</div>
+        <ul class="item-list">
+          <li><strong>「此刻画面」这个通道整个取消</strong> —— 模型的对话位置<strong>全留给写剧情总结</strong>。陪聊照样能聊，只是它靠<strong>文字剧情</strong>说话，不再每 30 秒去打断模型。</li>
+          <li><strong>画面质量一点没降</strong> —— 还是<strong>每秒一帧、长边 768、压缩质量照旧</strong>。你看得清，模型也看得清。</li>
+          <li><strong>剧情总结从 5 分钟一段改成 2 分钟一段</strong> —— 更细，主 API 答得更准；单段字数下限从 80 字放宽到 50 字（2 分钟确实写不出 80 字）。</li>
+          <li><strong>每写完一段就换个干净对话</strong> —— 这样单个回合要读的永远只有这一段的量（2 分钟 = 120 帧 = 3 万 token，<strong>只用掉额度的 24%</strong>），<strong>永远不会再超</strong>。写失败也会换（不然会越失败越慢）。</li>
+          <li><strong>每次总结截一张图给主 API，看完就烧</strong> —— 只在内存里放这一张，请求发出去立刻销毁：<strong>不存库、不进备份、不进导出、不进草稿</strong>，最多就一张，绝不堆积。</li>
+          <li><strong>写不出来会明说</strong> —— 聊天框里会直接告诉你「这段没写进去」，而且 <strong>60 秒后自动再试一次</strong>（以前是完全一声不吭）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">实测数字（同一份代码，只切换「此刻画面」开关）</div>
+        <ul class="item-list">
+          <li>15 分钟：画面帧数 <strong>902 → 902</strong>（一点没少）、上行 <strong>79.3MB → 79.3MB</strong>（<strong>证明「少传画面」本来就不是病根</strong>）。</li>
+          <li>模型的对话次数 <strong>28 次 → 7 次</strong>；剧情总结写进去的段数 <strong>0 段 → 7 段</strong>（修前一段都写不进去）。</li>
+          <li>单次对话要读的帧数 <strong>899 → 119</strong>；单次输入 token <strong>23 万 → 3 万</strong>（额度 13 万，再也不会爆）。</li>
+          <li>如果还有异常，<strong>聊天框里会出现一行「诊断：连上几次 / 断了几次 / 摘要成几次败几次 / 已发多少帧」</strong> —— 你截图给我，我就能直接看到，不用再猜。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.46 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.46</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（家庭影院立绘没进备份）</div>
+        <ul class="item-list">
+          <li><strong>你问的「家庭影院记录是不是没进备份」</strong> —— 查清楚了，答案是<strong>「一半进了，一半被吞了」</strong>。</li>
+          <li><strong>进了的</strong>：片单（片名 / 时长 / 加进去的时间）、播放进度、剧情记忆（每一集的摘要、整部剧的前情提要）、以及<strong>你在影院里说过的对话</strong>（它跟外面聊天记在同一个地方）—— 这些都好好地在备份里。</li>
+          <li><strong>被吞掉的</strong>：<strong>人物立绘和房间背景</strong>。原因是备份文件是把数据库转成 JSON 存的，而这两样是「图片文件」本身 —— 一转 JSON 就变成了一个空壳 <code>{}</code>，等于什么都没存。<strong>换个网址或换台手机导入，影院里的人就只剩空位</strong>。</li>
+          <li>改法：这两张图在导出时<strong>转成图片数据（base64）一起带走</strong>，导入时再还原成真正的图片，<strong>立绘的位置、大小都照旧</strong>。</li>
+          <li><strong>影片文件本体还是不带</strong> —— 一部片子可能几百 MB，塞进备份会把手机内存撑爆。片单和进度会保留，换设备后<strong>重新添加一次影片文件</strong>就能看（影院里本来就有「影片本体不在了，请重新添加」这句提示）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">顺带说清楚两件事</div>
+        <ul class="item-list">
+          <li><strong>换网址之后「前情提要全没了」，不是备份丢了</strong> —— 是浏览器<strong>按网址隔离本地数据</strong>：网址一换，就相当于换了一台空白的手机。旧网址的数据还好好地待在旧网址里，<strong>旧站导出 → 新站导入</strong>就能接上。</li>
+          <li>如果你用的是<strong>换网址之前的旧站导出的备份</strong>，那一份里的<strong>立绘本来就是空的</strong>（旧站没有这个能力），救不回来；但<strong>从这一版起，之后的备份都能带走立绘了</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.45 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.45</span>
+        <span class="version-date">2026-10-29</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（生图颜色老是变回原来那个）</div>
+        <ul class="item-list">
+          <li><strong>画出来的宠物，颜色每次都在两个色之间跳</strong> —— 你的原话：「音音的宠物九尾狐，刚破壳的时候是黑紫色的不好看，她画到第三次的时候变成好看的玫红色了，后面想保持，又怕生图参考是第一次破壳那张」。</li>
+          <li><strong>先回答你的担心：参考图一直是【上一张】</strong> —— 每画完一次，下一次就把「参考图」换成刚画出来的那张，一路往前滚。<strong>所以「玫红那张」会被一直当参考</strong>，不会突然跳回第一次破壳那张。</li>
+          <li><strong>真正把颜色拉回去的，是提示词里写死的那句话</strong> —— 每只宠物的<strong>底色是领养那天就定死的</strong>（16 种配色抽一个），你那只九尾狐抽到的是「莓紫」。于是<strong>每次画图都在请求里硬写「深紫毛」</strong>，一边又要模型「保持参考图的颜色」—— 两句打架，<strong>颜色就来回漂</strong>。你看到的「第三次变玫红」，就是这么来的。</li>
+          <li>改法：<strong>只要有参考图，就不再写死底色</strong>，改成「<strong>跟参考图同一个颜色</strong>」—— 这样<strong>玫红就能稳稳留住</strong>；只有<strong>第一次</strong>画（还没参考图）才按抽到的底色来。</li>
+          <li>⚠️ 例外：<strong>羽化成神兽</strong>时颜色<strong>本来就应该换</strong>，那一步还是按神兽的配色走。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">顺带说清楚</div>
+        <ul class="item-list">
+          <li><strong>每天的「衣服」跟聊天内容无关，一天一套</strong> —— 这是你要的：衣服每天从 72 件娃衣里按「今天 + 这只宠物」定一套，<strong>聊什么都不会改它</strong>；<strong>只有道具</strong>会跟着当天聊的内容走（聊咖啡配热饮、聊生日配气球）。</li>
+          <li>如果你在界面上看到的还是<strong>旧衣服</strong>，多半是<strong>今天早上那次生图算出来的</strong>被缓存着（界面优先显示"画图时算的那一份"，这是为了保证名册写的和图上画的一致）—— <strong>刷新一下页面</strong>，或者等它下一次换装，就会是新的华丽衣服。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.44 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.44</span>
+        <span class="version-date">2026-10-28</span>
+      </div>
+      <div class="section">
+        <div class="section-title new">新增（服装库大扩容）</div>
+        <ul class="item-list">
+          <li><strong>宠物的衣服库从 20 件扩到 <strong>72 件</strong></strong> —— 你的原话：「这个服装系统到底都有些什么衣服，能不能搞点炫丽可爱的服装库，像奇迹暖暖那样的娃衣一堆堆，一天一个造型？」以前那 20 件大半是日常款（草帽、西装、围裙、袜子、眼镜、雨衣、白手套…），<strong>而且很容易撞车</strong> —— 200 只宠物里平均每 10 只就穿同一件，最热的一件 16 只在穿。</li>
+          <li>现在分成<strong>六大系列</strong>，每系列 12 件，全是「娃衣」那一挂的：
+            <ul>
+              <li><strong>甜品系</strong> —— 奶油蝴蝶结、草莓裙、棉花糖帽、马卡龙盘、格纹围裙、小蛋糕、焦糖背心、棒棒糖、巧克力贝雷帽、奶泡长袜、热可可、薄荷糖</li>
+              <li><strong>童话系</strong> —— 蕾丝长裙、珍珠小皇冠、天鹅绒斗篷、缎面蝴蝶结、蕾丝伞、蓬蓬纱裙、花环、水晶鞋、芭蕾舞鞋、星星发箍、荷叶边睡裙、珍珠胸针</li>
+              <li><strong>星际系</strong> —— 星光斗篷、宇航头盔、流星围巾、喷气小背包、头顶小行星、银河长裙、月牙灯、彗星光环、小卫星、宇宙连体衣、行星光环、极光纱</li>
+              <li><strong>国风系</strong> —— 绣花汉服、竹斗笠、红灯笼、祥云腰带、点翠发簪、小折扇、绣花鞋、锦绣披帛、虎头帽、团花旗袍、小铜铃、玉镯</li>
+              <li><strong>海洋系</strong> —— 贝壳发夹、浪花围巾、水母纱裙、小海星灯、圆潜水镜、救生泡泡、珊瑚手提袋、鲸鱼帽、浪花短袜、小丑鱼帽、海玻璃、海藻斗篷</li>
+              <li><strong>魔法萌系</strong> —— 巫师尖帽、魔法书包、泡泡袖裙、兔耳兜帽、小熊睡衣、猫耳帽、蝴蝶翅膀、小熊鼻、小泰迪、恐龙连体衣、星星小毯、小水晶球</li>
+            </ul>
+          </li>
+          <li><strong>道具也扩了一大批</strong> —— 新增 <strong>40 件「每日造型款」</strong>（马卡龙盒、小蛋糕、棉花糖、奶昔、蕾丝伞、珍珠冠、水晶鞋、粉钻、小行星、彗星尾、流星徽章、太空盔、团扇、玉如意、宫灯、小毛笔、香囊、玉坠、铜镜、海螺号、小水花、小螃蟹、睡帽、许愿瓶、幸运珠…）。</li>
+          <li><strong>「磨刀石、白手套」这种不会再出现了</strong> —— 你的原话：「什么磨刀石，白手套都来了」。<strong>磨刀石、小砖头、小印章、小碗、硬币、梳子</strong>这些是「当天聊到啥才配啥」的日常道具，<strong>现在不会再被随机兜底挑中</strong>；而「白手套」那种旧衣服已经换成 72 件新娃衣了。</li>
+          <li><strong>衣服和道具现在是一整套</strong> —— 就像暖暖的套装：<strong>同一个系列的衣服配同系列的道具</strong>（比如国风的汉服配玉如意、星际的宇航服配太空盔、甜品的草莓裙配马卡龙盒），<strong>不会再出现「一件汉服配一把小梳子」这种搭不上边的组合</strong>。</li>
+          <li>⚠️ <strong>但你当天聊的内容还是优先的</strong> —— 你之前说过「道具服饰应该在记忆里匹配」，这条没变：<strong>当天聊到咖啡就配热饮、聊到生日就配气球、聊到小说就配书</strong>；只有那天<strong>没什么可聊</strong>的时候，才换成那套配套的华丽造型。</li>
+          <li>另外：<strong>同一件东西不会再出现两次</strong>（以前会拼出「一双水晶鞋、提着水晶鞋的」），<strong>连着三天基本不重样</strong>，200 只宠物里最热的一件从 16 只降到 <strong>8 只</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title note">小提示</div>
+        <ul class="item-list">
+          <li>这次换的<strong>是全部衣服</strong> —— 所以今天开始，每只宠物的衣服都会<strong>重新抽一次</strong>（一天一套新衣服），这是正常的一次性刷新，不是出错。</li>
+          <li>这一轮<strong>不花钱</strong>：只是把衣服库换大，不用重新生图也能看到新衣服；等它自己换装的时候，新衣服才会画进图里。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.43 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.43</span>
+        <span class="version-date">2026-10-28</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（每日换装）</div>
+        <ul class="item-list">
+          <li><strong>每天该换衣服和道具，但换出来的图里没道具、衣服也没换</strong> —— 你的原话：「有换服装但没画道具」「手动点换个模样，虽然重新画了但衣服都没换」。真因：蜕变（重新生成）用的那段话里，「<strong>就照今天这身重画</strong>」这句被「<strong>只改这一处花纹</strong>」整条<strong>替换</strong>掉了 —— 而几乎每只从蛋里孵出来的宠物都带着花纹，所以这句<strong>每次都没发出去</strong>。模型手里只有旧图，就照着旧图抄，<strong>衣服和道具自然一动不动</strong>。</li>
+          <li>改法：<strong>「就照今天这身重画」这句话永远都要说</strong>（它和「改花纹」是两件独立的事，不该互相顶掉），并且额外点名一句「<strong>衣服和道具六格里都要看得见，不许哪一格缺一件</strong>」—— 小道具模型最容易漏的就是这个。</li>
+          <li><strong>所有用户的宠物服饰都是「一个小碗一双白手套」，太雷同了</strong> —— 你的原话：「怎么我今天看见所有用户的宠物服饰描述都是拿个小碗一双白手套，如此雷同」。真因：挑道具靠<strong>关键词</strong>，而关键词表里有一堆<strong>泛词</strong>（吃 / 饭 / 饿 / 喝 / 玩 / 睡 / 冷 / 热 …）—— 谁的一天里都会冒出「今天吃了饭」「今天很热」，于是<strong>人人都命中同一个小碗</strong>；再加上原来<strong>同分时是按中文名排</strong>的，第一个永远是小碗。</li>
+          <li>改法：<strong>泛词命中不算数</strong>了 —— 只有像「咖啡 / 拿铁 / 生日 / 照片 / 下雨 / 小说」这种<strong>具体</strong>的词才算命中。哪天聊的都是泛词（没聊什么特别的），就<strong>按「今天 + 你这只宠物的种子」兜底</strong>挑一个 —— <strong>每只宠物每天都不一样</strong>；就算撞上同一个，同分也<strong>按种子排</strong>，不会全网撞车。<br>（实测：20 条真实的一天里，「小碗」从 8 次降到 <strong>0 次</strong>，同时「喝咖啡」这种该命中的<strong>照样命中热饮</strong>，没被误伤。）</li>
+          <li><strong>界面上写的穿搭和图上画的不是一个东西</strong> —— 界面读的是一份可能过期的缓存，图是用当下重新算的，两边能算出<strong>不同的道具</strong>（名册写着「小碗」，图上画的是「渔夫帽」）。现在<strong>画图时算出来的那一份会被记下来</strong>，界面优先用它 —— <strong>名册写什么，图上就是什么</strong>。</li>
+          <li><strong>刚领养的宠物，名册上只有品种名，看不到今天这身</strong> —— 现在名册和照顾弹窗里也会写出来（比如「一只小扇子、顶着小皇冠的」）。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（宠物说的话不落进聊天框）</div>
+        <ul class="item-list">
+          <li><strong>宠物说的话要退出聊天框再进去才看得见</strong> —— 你的原话：「宠物调后台活动 API 说的话，不能立刻落进聊天框，不像主 API 说的能马上显示」。真因：宠物说完话是<strong>写进库了</strong>，但让它「顺手把界面重画一下」的那个函数<strong>全项目根本没定义</strong> —— 真正干这活的是另一个名字，所以那句判断<strong>永远不成立</strong>，界面<strong>从来不重画</strong>。直到你退出聊天框再进去（那次走的是正常的渲染流程）才看得见。</li>
+          <li>改法：<strong>改调真正存在的那个渲染函数</strong>，宠物的话<strong>说完立刻就出现在聊天框里</strong>。同样写错的那两处（主动搭话、应用内巡场）也一并改了。</li>
+          <li><strong>刚开软件时弹的那句宠物话，最后聊天框里也没有</strong> —— 真因：刚启动时<strong>还没确定当前是哪个聊天</strong>，那句话<strong>一句都没写进任何会话</strong>。现在会<strong>落到你最近聊过的那一个</strong>里去。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title optimize">优化（桌宠变大）</div>
+        <ul class="item-list">
+          <li><strong>桌宠显示得有点小</strong> —— 你的原话：「桌宠我感觉显示的小了一点，能不能给它再放大个百分之二三十？」。按你说的区间取了中间值 <strong>+25%</strong>：电脑上 <strong>78px → 98px</strong>、手机上 <strong>66px → 83px</strong>。尺寸统一走一个变量，<strong>想再大一点或小一点，改一个数就行</strong>。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.42 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.42</span>
+        <span class="version-date">2026-10-28</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复</div>
+        <ul class="item-list">
+          <li><strong>影院里的聊天接不上话了，还完全不知道你在外面聊过什么</strong> —— 你的原话：「视频模型重连成功，但聊天模型就接不上话了」「主 API 在影院里没有外面聊天框的上文记忆」。真因：<strong>影院跑在一个单独的小页面里，那个页面只加载了 7 个文件</strong> —— 读不到你的聊天记录、读不到长期记忆、也读不到主聊天那套提示词预设。所以影院里的它<strong>是在一张白纸上跟你说话</strong>，外面聊过什么它一件都不知道。</li>
+          <li>改法：<strong>外面把这些都算好，再交给影院</strong> —— 外面聊天框的上下文、长期记忆、你的提示词预设，由外面读出来发过去；而且<strong>每发一句之前还会再问一次</strong>，所以你在外面新聊的内容，影院里下一句就能接上。</li>
+          <li><strong>影院里的对话现在也会进主聊天历史了</strong> —— 之前影院里说的话只留在影院那个小页面里，一关就没了；现在你在影院里说的话，外面聊天框里<strong>接着就能看见</strong>，出门接着聊能接上茬。</li>
+          <li><strong>观影模型（Gemini Live）断线重连，不再影响影院里的聊天</strong> —— 它们本来就是两条独立的路：一条看画面、一条说话。现在这条路上任何一步取不到东西，<strong>都会明确告诉你原因</strong>，不会再出现「打了字没反应、也不知道哪坏了」。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（导出剧情记忆）</div>
+        <ul class="item-list">
+          <li><strong>导出的剧情记忆，其实只进去了最后一块，前面的全丢了</strong> —— 你的原话：「导出总结的剧情记忆，结果发现并没有写进长期记忆里」「之前的也白看了」。真因：影院那个小页面里的「聊天表」是个<strong>假的</strong>，它<strong>只会把最后一条记忆发出去</strong>，前面几条全丢；而导出完紧接着又把库里的行全删了 —— 所以界面明明报「✅ 已导出 N 条」，实际只进去了最后一块，<strong>其余既没进长期记忆、也没留在库里</strong>。</li>
+          <li>实测：8 段剧情（40 分钟）切 4 块，<strong>实际只进去 1 块，丢了 74%</strong>。看得越久丢得越多。</li>
+          <li>改法：<strong>导出改成一条正经的通道</strong> —— 影院把<strong>所有</strong>块一起交给外面，由外面写进真正的长期记忆；<strong>外面确认写成功了，影院才去清账</strong>。没写成功就<strong>一行都不删</strong>，还能再点一次。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title optimize">优化（长片卡住）</div>
+        <ul class="item-list">
+          <li><strong>比较长的本地文件播一截就卡住</strong> —— 找到两条实锤：<strong>往观影模型推画面帧的时候完全没做背压保护</strong>（网络一堵，浏览器就把待发的画面<strong>无限堆在内存里</strong>，1 帧/秒、每帧几十上百 KB，堵久了整页内存被打爆 —— 手机上就表现成「卡住放不动」「退出影院外面也聊不了」「只有杀掉 app 才恢复」）；还有<strong>服务端说「我要断了」之后我们还在猛推帧</strong>，把重连要用的存档点撑得巨大，重连就又慢又容易失败。</li>
+          <li>改法：<strong>发送缓冲超过 2MB 就丢帧</strong>（宁可少看几帧也不吃内存），并且<strong>服务端一说要断就立刻停推</strong>，等重连成功再恢复。丢帧的时候<strong>会明确告诉你</strong>「网络堵住了，已经丢掉 N 帧」，不用再猜。</li>
+          <li>加本地影片超过 300MB 时，提示改成<strong>说实话</strong>：大文件在手机上播容易卡（片源要塞进手机内存，解码和推帧一起抢资源），并建议长剧改走<strong>短剧库 / 在线片源</strong>那条路 —— 电脑那边放文件、手机流式播，不占手机内存。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修复（退出影院后外面点不动）</div>
+        <ul class="item-list">
+          <li><strong>退出影院以后，外面整个 app 点不动，只有杀掉 app 才恢复</strong> —— 你的原话：「出错退出来以后外面也不能聊天，只有大退才恢复」。真因：影院是<strong>一个盖住整屏的小窗口</strong>（层级高到不能再高，连外面顶栏和「再点一次退出」那个按钮都在它底下），而外面<strong>收掉它的唯一途径</strong>是影院那边<strong>主动说一声「我关了」</strong>。那句话只要因为各种原因没送到 —— 影院退出的流程中途出错、影院那个小页面被重新加载、它崩了 —— 那个<strong>盖住整屏的窗口就留在屏幕上不动了</strong>，外面点哪儿都没反应。</li>
+          <li>改法：<strong>不再只等影院说「我关了」</strong> —— 外面每 0.7 秒<strong>自己看一眼影院那边的状态</strong>（同一个站，读得到），<strong>发现房间已经没了就自己把那个窗口收掉</strong>；影院页被换掉或重载时，也会<strong>主动补报一声</strong>。现在就算影院那边出了岔子，<strong>外面也一定能自己恢复</strong>，不会再出现「只有大退才行」。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.41 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.41</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-10-27</span>
       </div>
       <div class="section">
         <div class="section-title fix">修复</div>

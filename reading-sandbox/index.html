@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<title>读书屋</title>
+<link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.5">
+<!--
+  ============================================================================
+  读书屋 · iframe 沙盒 (2026-11-01)
+
+  这个页面【就是】读书屋本体, 跑的是和生产完全相同的模块文件:
+    ../modules/reading-sandbox.css
+    ../modules/reading-sandbox.js
+
+  为什么必须独立成一个沙盒 (而不是像旧版那样在宿主里开个小浮窗):
+    旧版「一起读书」是宿主页面里的一个 340px 可拖拽小浮窗, 整本书一条记录。
+    实测 2000 万字的书 → 翻一页 96~126ms / 开书库 39ms / 常驻 heap 307MB
+    → 手机上卡 + 发烫。
+    而"宿主文档大 → 点输入框主线程冻 4~5 秒"这个坑, 影院已经踩过一遍
+    (modules/cinema-room.js:2754): 同一份代码, 装在 3552 个节点的宿主里
+    点输入框冻 4~5 秒, 装进 187 个节点的 iframe 就完全不卡。
+    读书屋要同时干"长文本 + 输入框 + 全屏背景", 正是最容易触发这条雷的组合。
+
+  和宿主的通信 (postMessage):
+    宿主 → 本页  { type:'reading:init', chat:{...} }
+              { type:'reading:apiConfig', apiConfig }
+              { type:'reading:books', books:[...] }        ← 2026-11-02: 每本多了 cover(dataURL|null)
+              { type:'reading:page', bookId, pageNo, text, chapterTitle, pageCount }
+              { type:'reading:importProgress' | 'reading:importDone' | 'reading:importError' }
+              { type:'reading:chatDelta' | 'reading:chatDone' | 'reading:chatError' }
+              { type:'reading:coverDone' | 'reading:coverError' }
+    本页 → 宿主  { type:'reading:needChat' | 'reading:ready' }
+              { type:'reading:needBooks' }
+              { type:'reading:requestPage', bookId, pageNo }
+              { type:'reading:saveProgress', bookId, pageNo }
+              { type:'reading:importFile', file, title }
+              { type:'reading:deleteBook', bookId }
+              { type:'reading:setCover', bookId, cover }    ← 2026-11-02: 换封面 (只写封面, 不动书)
+              { type:'reading:chat', requestId, text, selected, pageContext }
+              { type:'reading:pageState', ... }
+              { type:'reading:closed' }
+
+  ⚠️ 数据不在本页: 沙盒不碰 IndexedDB (同源开同一个库会撞 versionchange,
+     而且老代码里 "db.close() 自愈" 那条路能把宿主库的自动重开永久关掉)。
+     正文页、书库、AI 请求全部由宿主算好后用 postMessage 发过来。
+  ============================================================================
+-->
+</head>
+<body>
+
+<div id="rr-boot">
+  <div class="t">读 书 屋</div>
+  <div class="s" id="rr-boot-msg">正在连接 330 宿主…</div>
+</div>
+
+<div id="rr-root" hidden>
+
+  <!-- ============ 书架大厅 ============ -->
+  <section id="rr-hall" class="rr-view">
+    <div class="rr-topbar">
+      <!--
+        ⚠️ 2026-11-02 用户反馈"书架大厅没看见返回聊天框的返回键"。
+        原来这里只有右上角一个 22px 的 × 图标, 谁也不知道那是回聊天。
+        → 改成明确的「‹ 返回聊天」文字按钮 (跟阅读室的「‹ 书架」一个样式)。
+      -->
+      <button class="rr-back" id="rr-hall-close" title="返回聊天">‹ 返回聊天</button>
+      <span class="rr-title">书架</span>
+    </div>
+    <div class="rr-hall-inner">
+      <div class="rr-hall-bar">
+        <input type="search" id="rr-search" class="rr-search" placeholder="搜索书名…">
+        <button class="rr-add-btn" id="rr-import-btn">导入</button>
+      </div>
+      <div class="rr-grid" id="rr-grid"></div>
+      <div class="rr-empty" id="rr-empty" style="display:none">
+        <span class="big">📚</span>
+        书架还是空的<br>点「导入」放一本书进来
+      </div>
+    </div>
+    <input type="file" id="rr-file-input" accept=".txt,text/plain" hidden>
+  </section>
+
+  <!-- ============ 阅读室 ============ -->
+  <section id="rr-reader" class="rr-view">
+    <div class="rr-topbar">
+      <button class="rr-back" id="rr-back">‹ 书架</button>
+      <span class="rr-title" id="rr-book-title">未选择书籍</span>
+      <!--
+        字数统计 (2026-11-03):
+        书架卡片的说明区(书名/字数/页数/进度条)按用户要求去掉了,
+        整张卡片只留封面图。但字数这个信息不能跟着消失 ——
+        阅读页顶栏补上, 跟页码挨着。
+      -->
+      <span class="rr-sub" id="rr-book-stat"></span>
+      <span class="rr-sub" id="rr-page-label">— / —</span>
+    </div>
+
+    <div class="rr-page-area" id="rr-page-area">
+      <div class="rr-page-card" id="rr-page-card">
+        <div class="rr-chapter" id="rr-chapter" style="display:none"></div>
+        <div class="rr-page-text" id="rr-page-text"></div>
+      </div>
+      <!-- 选中提示条: 放在卡片【外面】, sticky 贴在可视区底部 (见 reading-sandbox.css) -->
+      <div class="rr-picked" id="rr-picked"></div>
+      <button class="rr-pick-fab" id="rr-pick-fab">💬 问 AI</button>
+    </div>
+
+    <div class="rr-page-nav">
+      <button class="rr-nav-btn" id="rr-prev">‹ 上一页</button>
+      <span class="rr-page-num" id="rr-page-num">— / —</span>
+      <button class="rr-nav-btn" id="rr-next">下一页 ›</button>
+    </div>
+
+    <!-- 可拖动分隔条 -->
+    <div id="rr-splitter"></div>
+
+    <!-- 下半屏固定聊天窗口 -->
+    <section id="rr-chat">
+      <div class="rr-chat-head">
+        <span class="t"><span class="dot"></span>和 AI 讨论</span>
+        <span class="s" id="rr-chat-hint">选一句话可以直接问</span>
+        <button class="rr-icon-btn" id="rr-chat-toggle" title="收起 / 展开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <polyline points="18 15 12 9 6 15"></polyline>
+          </svg>
+        </button>
+      </div>
+      <div id="rr-chat-body"></div>
+      <div id="rr-chat-input-wrap">
+        <textarea id="rr-chat-input" rows="1" placeholder="问点什么…"></textarea>
+        <button id="rr-send-btn" disabled>发送</button>
+      </div>
+    </section>
+  </section>
+
+</div>
+
+<div id="rr-toast"></div>
+
+<!--
+  换封面 (2026-11-02)
+  · 选图 → 沙盒里压成小图 → 弹预览 → 确认后交给宿主存进 readingCovers
+  · 沙盒不碰 IndexedDB, 所以"选图/预览"在沙盒, "保存"在宿主
+-->
+<input type="file" id="rr-cover-input" accept="image/*" hidden>
+<div id="rr-cover-preview" class="rr-cover-preview">
+  <div class="rr-cover-preview-card">
+    <div class="rr-cover-preview-tip">用这张当封面？</div>
+    <img id="rr-cover-preview-img" alt="新封面预览">
+    <div class="rr-cover-preview-actions">
+      <button id="rr-cover-cancel" class="rr-cover-pbtn">取消</button>
+      <button id="rr-cover-confirm" class="rr-cover-pbtn primary">确认更换</button>
+    </div>
+  </div>
+</div>
+
+<div id="rr-import">
+  <div class="t" id="rr-import-title">正在导入…</div>
+  <div class="bar"><i id="rr-import-bar"></i></div>
+  <div class="s" id="rr-import-sub">正在切页…</div>
+</div>
+
+<script src="../modules/reading-sandbox.js?v=0.1.5"></script>
+</body>
+</html>

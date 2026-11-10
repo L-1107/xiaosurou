@@ -71,7 +71,14 @@
     const authorMap = new Map(authors.map(a => [a.id, a.name]));
 
     // 获取已关联的书籍ID集合
-    const existingBooks = await db.readingLibrary.toArray();
+    // ⚠️ 2026-11-01: 原来是 db.readingLibrary.toArray() —— 那张表里每条记录都带
+    //   整本书的正文 (旧的「一起读书」把整本书塞进 content 字段), 只为拿几个
+    //   linkedStoryId 却把整本书搬进内存 → 每开一次绿江页就卡一次。
+    //   现在读书屋的书分成 readingBooks(元数据) / readingPages(正文页) 两张表,
+    //   这里只读元数据, 永远不碰正文。
+    const existingBooks = (window.ReadingStorage && typeof window.ReadingStorage.listBooks === 'function')
+      ? await window.ReadingStorage.listBooks()
+      : [];
     const linkedIds = new Set(existingBooks.map(b => b.linkedStoryId).filter(id => id));
 
     if (stories.length === 0) {

@@ -290,7 +290,12 @@
   // ===== 渲染 UI (如果当前显示这个 chat) =====
   function renderToUIIfActive(chatId) {
     try {
-      if (window.state?.activeChatId === chatId && typeof window.renderChatMessages === 'function') {
+      if (window.state?.activeChatId !== chatId) return;
+      // ⚠️【2026-10-28 修】原来调 window.renderChatMessages —— 那函数【全项目都没定义】,
+      //   typeof 判断永远为假 → 主动搭话的消息写进库了但界面从不重绘。真正的渲染函数是 renderChatInterface。
+      if (typeof window.renderChatInterface === 'function') {
+        try { window.renderChatInterface(chatId); } catch (e) {}
+      } else if (typeof window.renderChatMessages === 'function') {
         window.renderChatMessages();
       }
     } catch (e) {}

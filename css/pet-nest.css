@@ -230,11 +230,13 @@
 #pet-nest-screen .pn-hint-go:hover { background: #b5772e; }
 
 /* 还没画像的宠物，头上挂个小金点 */
+/* ⚠️ 精灵大一倍以后，这个点原来的固定 4px / 16px 会飘到猫耳朵外面去
+   —— 改成按精灵大小走的百分比，点的位置不变。 */
 #pet-nest-screen .pn-pet-dot {
   position: absolute;
-  top: 4px;
+  top: 6%;
   left: 50%;
-  margin-left: 16px;
+  margin-left: 20%;
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -275,10 +277,20 @@
   border: 0;
   background: transparent;
   padding: 0;
-  width: 21%;
-  max-width: 128px;
+  /* 🔴 2026-10-29: 每套房间的精灵大小不一样 (JS 按当前背景写这个变量) */
+  width: var(--pn-pet-w, 42%);
+  /* ⚠️ 原来是 128px —— 精灵放大到 42% 以后会被这个上限又掐回原大小
+     (手机上 42% ≈ 164px)，「大一倍」根本看不出来。跟着一起放到 300px。 */
+  max-width: 300px;
   text-align: center;
   cursor: pointer;
+}
+
+/* 还没孵出来的蛋：单独小一号，不跟着精灵一起翻倍（否则会糊住藤篮 / 床） */
+/* fallback 14%：JS 会按房间写准（阳光小屋 14% / 星夜树屋 20%） */
+#pet-nest-screen .pn-pet.pn-pet-egg {
+  width: var(--pn-egg-w, 14%);
+  max-width: 120px;
 }
 
 #pet-nest-screen .pn-pet:hover {
@@ -459,6 +471,17 @@
 
 #pet-nest-screen .pn-btn-primary:hover {
   background: #63584a;
+}
+
+/* 🔴 2026-11-04: 「让它当桌宠」已经在当的时候会禁用 —— 必须有【看得见】的样子,
+   不然用户一直点、以为按钮坏了（跟 2026-10-26 那两个说话开关同一类问题）。 */
+#pet-nest-screen .pn-btn:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+#pet-nest-screen .pn-btn:disabled:hover {
+  background: #efe8d4;
 }
 
 #pet-nest-screen .pn-events {
@@ -669,7 +692,16 @@ dialog.pn-dialog {
   position: fixed;
   right: 14px;
   bottom: 92px;
-  width: 78px;
+  /* ⚠️ 2026-10-28 用户提「桌宠感觉显示的小了一点」→ 放大 25%
+     （原来 78px）。放大的倍数只在这一处调, 想再改改这里就行。 */
+  --pn-desktop-pet-size: 98px;
+  width: var(--pn-desktop-pet-size);
+  /* ⚠️ 2026-11-02 用户实测「桌宠下面有一长条看不见的区域, 把聊天框按钮都挡住了」:
+     拖过之后 JS 会写 left/top, 跟这里的 right/bottom 【同时生效】;
+     绝对定位元素在 top+bottom 都指定、height 是 auto 时, 高度会被撑满整段
+     (CSS2.1 §10.6.4) → 容器变成一条从顶到底的透明长条。
+     写死 height: fit-content → 高度只跟内容走, 永远不会被拉长。 */
+  height: fit-content;
   z-index: 900;
   display: flex;
   flex-direction: column;
@@ -679,6 +711,11 @@ dialog.pn-dialog {
   user-select: none;
   -webkit-user-select: none;
   cursor: grab;
+  /* ⚠️ 2026-11-02: 容器【自己】不接指针事件。
+     否则容器盒子有多大, 就有多大一片看不见的地方在替下层按钮挡鼠标 ——
+     用户点不到右下弹出来的表情包, 就是因为这个。
+     真正能点的只有下面三样: 宠物图片 / 名字 / 菜单。 */
+  pointer-events: none;
 }
 
 #pn-desktop-pet.is-dragging {
@@ -699,7 +736,8 @@ dialog.pn-dialog {
   background-position: 0 0;
   filter: drop-shadow(0 4px 6px rgba(80, 56, 26, .28));
   animation: pn-breathe 4s ease-in-out infinite;
-  pointer-events: none;
+  /* 容器不接事件了, 宠物图片自己接 → 能挡路的就只有宠物这一小块 */
+  pointer-events: auto;
 }
 
 #pn-desktop-pet-name {
@@ -712,7 +750,8 @@ dialog.pn-dialog {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
+  /* 名字标签紧挨着宠物, 算宠物的一部分 → 可以点 (跟 2026-10-29 的命中判定一致) */
+  pointer-events: auto;
 }
 
 #pn-desktop-pet-bubble {
@@ -749,6 +788,9 @@ dialog.pn-dialog {
   padding: 6px;
   min-width: 132px;
   z-index: 901;
+  /* 容器 pointer-events:none 会【继承】给菜单 → 菜单按钮就点不动了,
+     这里必须显式打开, 不然「喂食/摸摸/陪玩/进入小屋」全部失灵 */
+  pointer-events: auto;
 }
 
 #pn-desktop-pet-menu[hidden] {
@@ -792,9 +834,189 @@ dialog.pn-dialog {
 
 @media (max-width: 480px) {
   #pet-nest-screen .pn-scene { border-radius: 0; }
-  #pn-desktop-pet { width: 66px; bottom: 110px; }
+  /* 同样 +25% (原来 66px) */
+  #pn-desktop-pet { --pn-desktop-pet-size: 83px; bottom: 110px; }
 }
 
+/* ============================================================
+   换房间背景 (2026-10-29)
+   · 场景右上角一个小按钮
+   · 选择器里每套背景一张缩略图
+   ============================================================ */
+
+#pet-nest-screen .pn-room-switch {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(122, 98, 62, .28);
+  background: rgba(250, 244, 230, .82);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+#pet-nest-screen .pn-room-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+#pet-nest-screen .pn-room-card {
+  width: 96px;
+  padding: 0;
+  border: 2px solid rgba(122, 98, 62, .2);
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+#pet-nest-screen .pn-room-card.is-current {
+  border-color: #c98a3c;
+  box-shadow: 0 0 0 2px rgba(201, 138, 60, .25);
+}
+
+#pet-nest-screen .pn-room-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+}
+
+#pet-nest-screen .pn-room-card-name {
+  display: block;
+  padding: 5px 4px;
+  font-size: 12px;
+  color: #6b5638;
+  background: rgba(250, 244, 230, .9);
+}
+
+/* ============================================================
+   小屋管理面板里的「初始形象」（垫图）· 2026-10-30
+   · 用户给每只宠物指定一张固定形象图，以后每天换装都拿它当垫图
+   · 长相不会因为「拿上一张当垫」而一天比一天偏
+   ⚠️ 这块住在【小屋管理弹窗】里（不是总设置页）—— 用户 2026-10-30 定的
+   ============================================================ */
+
+.pn-species-block {
+  margin: 14px 0 10px;
+  padding: 12px 12px 6px;
+  border: 1px solid rgba(122, 98, 62, .22);
+  border-radius: 12px;
+  background: rgba(255, 253, 248, .55);
+}
+
+.pn-species-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #5a4f3d;
+}
+
+.pn-species-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #8a7660;
+}
+
+.pn-species-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pn-species-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(122, 98, 62, .12);
+}
+
+.pn-species-row:last-child {
+  border-bottom: none;
+}
+
+.pn-species-thumb {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(122, 98, 62, .08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #a1907a;
+}
+
+.pn-species-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pn-species-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pn-species-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #4c3828;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pn-species-state {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #8a7660;
+  margin-top: 2px;
+}
+
+.pn-species-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.pn-species-btn {
+  border: 1px solid rgba(122, 98, 62, .3);
+  border-radius: 999px;
+  background: #fffdf8;
+  color: #5a4f3d;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.pn-species-btn:active {
+  background: rgba(122, 98, 62, .12);
+}
+
+.pn-species-btn-ghost {
+  color: #a1907a;
+  border-color: rgba(122, 98, 62, .18);
+}
+
+.pn-species-empty {
+  font-size: 12px;
+  color: #a1907a;
+  padding: 6px 0;
+}
 /* ============================================================
    宠物说话系统（2026-10-26）
    · 小窝照顾弹窗里的两个开关
