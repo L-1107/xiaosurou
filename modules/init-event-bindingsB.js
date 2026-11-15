@@ -4492,9 +4492,15 @@ window.initEventBindingsB = function(state, db) {
                 const core = im && (im.coreModel || im._model || (im.coreModel && im.coreModel._model));
                 if (core && typeof core.setParameterValueByIndex === 'function') {
                   let n = 0;
-                  canvas._live2dInitialParams.forEach(function (val, idx) {
-                    try { core.setParameterValueByIndex(idx, val); n++; } catch (e) {}
-                  });
+                  // 优先走 loader 的公共实现: 还原完顺手让"转头/视线驱动"重新认基值,
+                  // 否则还原之后驱动还拿着旧表情的基值, 头会一直歪着。
+                  if (window.Live2DLoader && typeof window.Live2DLoader.resetParametersByScope === 'function') {
+                    n = window.Live2DLoader.resetParametersByScope(canvas, null);
+                  } else {
+                    canvas._live2dInitialParams.forEach(function (val, idx) {
+                      try { core.setParameterValueByIndex(idx, val); n++; } catch (e) {}
+                    });
+                  }
                   if (n > 0) {
                     applied = true;
                     console.log('[ModelManage] ↺ 默认: 路径 1 (快照) 应用了 ' + n + ' 个参数');

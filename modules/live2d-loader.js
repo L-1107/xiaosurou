@@ -248,22 +248,25 @@
   // v0.5.0 P2.5: 从 .exp3.json 的 Parameters 数组, 用 SDK coreModel.setParameterValueByIndex 直改模型参数
   // 抄糯米机 Live2DAvatarCanvas + live2d-manager.js applyExpressionToModel 已验证的路径.
   // 0.4.0 cubism4 fork 不实例化 expressionManager, 走库 setExpression 会抛异常, 这里绕开库直写参数.
-  // 返回 true = 至少应用了一个参数; false = 找不到 expression 对应参数 (调用方 fallback).
+  // 返回 { ok, values }:
+  //   ok     = 至少应用了一个参数 (false = 找不到 expression 对应参数, 调用方 fallback)
+  //   values = 本条表情真正写进去的值 { 参数id: 数值 }
+  //     用来给"转头/视线驱动"认基值 —— 见 applyGazeBase 的说明。
   async function applyExpressionViaCoreModel(model, expressionId, data) {
     // 1. 从 data.files 找 .exp3.json (basename 匹配 expressionId, 忽略大小写)
     //    data 由 mountLive2DFromIDB 缓存到 canvas._live2dModelData.
     if (!model || !model.internalModel || !expressionId || !data || !data.files) {
-      return false;
+      return { ok: false, values: {} };
     }
     const core = model.internalModel.coreModel
       || model.internalModel._model
       || (model.internalModel.coreModel && model.internalModel.coreModel._model)
       || null;
     if (!core || typeof core.setParameterValueByIndex !== 'function') {
-      return false;
+      return { ok: false, values: {} };
     }
     if (typeof core.getParameterIndex !== 'function') {
-      return false;
+      return { ok: false, values: {} };
     }
 
     // 2. 定位匹配的 .exp3.json blob
@@ -277,11 +280,13 @@
       if (base === want) { exp3Blob = blob; break; }
     }
     if (!exp3Blob || typeof exp3Blob.text !== 'function') {
-      return false;
+      return { ok: false, values: {} };
     }
 
     // 3. 解析 Parameters, 逐个 setParameterValueByIndex
+    //    values 记下每个参数**最终写进去的值**(Add/Multiply 要算叠加后的), 供视线驱动认基值
     let applied = 0;
+    const values = {};
     try {
       const expJson = JSON.parse(await exp3Blob.text());
       const params = Array.isArray(expJson.Parameters) ? expJson.Parameters : [];
@@ -300,14 +305,54 @@
             newVal = core.getParameterValueByIndex(index) * value;
           }
           core.setParameterValueByIndex(index, newVal);
+          values[p.Id] = newVal;
           applied++;
         } catch (e) { /* skip this param */ }
       }
     } catch (e) {
       console.warn('[Live2D] applyExpressionViaCoreModel parse exp3 failed:', e);
-      return false;
+      return { ok: false, values: {} };
     }
-    return applied > 0;
+    return { ok: applied > 0, values: values };
+  }
+
+  /**
+   * 让"转头/视线驱动"把某条表情写在**视线参数**上的值认作新基值。
+   *
+   * 为什么必须有: 视频通话页的视线驱动 (video-voice-call.js) 每帧把这 5 个参数写成
+   * 「基值 + 鼠标偏移」。基值要是"挂载那一刻的快照", 快照里就没有表情写的值 ——
+   * 歪头卖萌 ParamAngleZ=30 / 整领带 ParamAngleY=35 会被每帧抹成 0
+   * → 调试台里能歪头, 正式视频通话里歪不了。
+   *
+   * values 只放这条表情**声明过**的参数; 默认是合并语义(没给的原样留着)——
+   *   脸表情和姿势表情可以同时存在(整领带是姿势, 歪头卖萌是脸),
+   *   姿势表情只写 ParamPose, 不能顺手把脸表情的歪头基线清成 0。
+   *   replace=true 时整份替换(恢复默认表情用)。
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @param {Object<string, number>} values {参数id: 数值}
+   * @param {boolean} [replace]
+   */
+  function applyGazeBase(canvas, values, replace) {
+    try {
+      const setBase = canvas && canvas._live2dGazeSetBase;
+      if (typeof setBase === 'function') setBase(values || {}, !!replace);
+    } catch (e) { /* ignore */ }
+  }
+
+  /**
+   * 让"转头/视线驱动"按**现场值**重新认基值 —— 参数刚被还原成默认值时用
+   * (快照还原之后, 现场值就是默认值, 拿它当基值才对)。
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @param {string[]|null} ids 要认的参数 id; null/undefined = 全部
+   */
+  function recaptureGazeBase(canvas, ids) {
+    try {
+      const rec = canvas && canvas._live2dGazeRecapture;
+      if (typeof rec !== 'function') return;      // 调试台没有视线驱动, 不用管
+      rec(Array.isArray(ids) && ids.length ? ids : null);
+    } catch (e) { /* ignore */ }
   }
 
   async function setExpression(canvas, expressionId) {
@@ -315,6 +360,9 @@
     if (!model) return false;
     try {
       if (!expressionId) {
+        // 恢复默认表情: 视线参数全部归 0(整份替换)
+        //   (脸上的其它参数由调用方用挂载快照还原, 这里只管视线驱动认的基值)
+        applyGazeBase(canvas, {}, true);
         const em = model.internalModel && model.internalModel.motionManager && model.internalModel.motionManager.expressionManager;
         if (em && typeof em.resetExpression === 'function') {
           em.resetExpression();
@@ -329,12 +377,18 @@
       //    我们又直接 return true → SDK fallback 走不到 → 按钮按了不响应.
       //    SDK 路径预览台已经验证对所有 .exp3.json 都生效.
       //    data 从 canvas._live2dModelData 拿 (mountLive2DFromIDB 缓存).
-      const viaCore = await applyExpressionViaCoreModel(model, expressionId, canvas._live2dModelData);
-      if (viaCore) return true;
+      const res = await applyExpressionViaCoreModel(model, expressionId, canvas._live2dModelData);
+      if (res && res.ok) {
+        // 视线驱动把这条表情声明的值认作新基值 —— 表情的歪头(ParamAngleZ)才不会被每帧抹掉
+        applyGazeBase(canvas, res.values);
+        return true;
+      }
       // 2. SDK 失败 → 再尝试库 expressionManager (某些模型 em 注册了部分声明过的表情, 兜底保留)
       const em = model.internalModel && model.internalModel.expressionManager;
       if (em && typeof em.setExpression === 'function') {
         em.setExpression(expressionId);
+        // 库路径拿不到这条表情写了什么值, 只能保守地按 0 认基值(整份替换)
+        applyGazeBase(canvas, {}, true);
         return true;
       }
       console.warn('[Live2D] setExpression: SDK 直改及库 expressionManager 都不可用 (id=' + expressionId + ')');
@@ -587,6 +641,100 @@
     }, 100);
   }
 
+  /**
+   * 读这个模型**每条表情各写了哪些参数**, 结果缓存在 canvas._live2dExprParams。
+   *
+   * 用途: 把表情分成「面部表情」和「身体动作」两组。判据是"这条 exp3 有没有写
+   * ParamPose" —— 写了就是整块身体的姿势(枚举), 没写就是面部参数。
+   * 不能只看表情名: 名字是用户随便起的, 只有 exp3 里的参数是硬事实。
+   *
+   * @returns {Promise<Map<string, string[]>>} key = 表情名(小写), value = 参数 id 数组
+   */
+  async function getExpressionParamMap(canvas) {
+    const empty = new Map();
+    try {
+      if (!canvas) return empty;
+      if (canvas._live2dExprParams instanceof Map) return canvas._live2dExprParams;
+      const data = canvas._live2dModelData;
+      if (!data || !data.files || typeof data.files.entries !== 'function') return empty;
+
+      const map = new Map();
+      const suffix = '.exp3.json';
+      for (const [filePath, blob] of data.files.entries()) {
+        const path = String(filePath || '');
+        const lower = path.toLowerCase();
+        if (!lower.endsWith(suffix)) continue;
+        const base = path.substring(path.lastIndexOf('/') + 1, path.length - suffix.length);
+        if (!base || !blob || typeof blob.text !== 'function') continue;
+        try {
+          const json = JSON.parse(await blob.text());
+          const params = Array.isArray(json.Parameters) ? json.Parameters : [];
+          const ids = [];
+          for (const p of params) {
+            if (p && p.Id && ids.indexOf(p.Id) < 0) ids.push(p.Id);
+          }
+          map.set(base.toLowerCase(), ids);
+        } catch (e) { /* 单条读失败跳过, 不拖垮整张表 */ }
+      }
+      // 只缓存读到了东西的结果, 读空了下一次还能重试
+      if (map.size > 0) canvas._live2dExprParams = map;
+      return map;
+    } catch (e) {
+      return empty;
+    }
+  }
+
+  /**
+   * 只把**指定参数**写回挂载时拍的出厂快照。
+   *
+   * 为什么要按作用域: 整份快照还原会把 ParamPose 一起写回 0 →
+   * 切面部表情必然把手势卸掉, 切手势也必然把面部表情卸掉 (两者被硬性互斥)。
+   * 按组还原之后, 面部参数和 ParamPose 互不干扰, 就能同时生效。
+   *
+   * @param {Array<string>|null} paramIds 要还原的参数 id;
+   *   传 null/undefined = 整份还原(旧行为);
+   *   传 [] = 什么都不做 (调用方还没拿到该组的参数集, 宁可不动也不能误伤另一组)
+   * @returns {number} 实际写回的参数个数
+   */
+  function resetParametersByScope(canvas, paramIds) {
+    try {
+      const model = canvas && canvas._live2dModel;
+      const im = model && model.internalModel;
+      const core = im && (im.coreModel || im._model || (im.coreModel && im.coreModel._model));
+      const snap = canvas && canvas._live2dInitialParams;
+      if (!core || !snap || !snap.size) return 0;
+      if (typeof core.setParameterValueByIndex !== 'function') return 0;
+
+      let n = 0;
+      if (!Array.isArray(paramIds)) {
+        // 旧行为: 整份快照写回
+        snap.forEach((val, idx) => {
+          try { core.setParameterValueByIndex(idx, val); n++; } catch (e) { /* 跳过 */ }
+        });
+        // 整份还原 → 视线参数的基线也跟着回到默认值
+        recaptureGazeBase(canvas, null);
+        return n;
+      }
+      // 空数组 = 明确什么都不做。绝不能当成"整份还原" —— 那会把另一组的参数一起写回,
+      // 正好是目前要修的那个"面部/动作互相卸掉"的 bug。
+      if (paramIds.length === 0) return 0;
+
+      const canIndex = typeof core.getParameterIndex === 'function';
+      if (!canIndex) return 0;
+      for (const id of paramIds) {
+        let idx = -1;
+        try { idx = core.getParameterIndex(id); } catch (e) { idx = -1; }
+        if (idx < 0 || !snap.has(idx)) continue;
+        try { core.setParameterValueByIndex(idx, snap.get(idx)); n++; } catch (e) { /* 跳过 */ }
+      }
+      // 按组还原 → 只让这一组的视线参数重新认基值(别的组不受影响)
+      recaptureGazeBase(canvas, paramIds);
+      return n;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   global.Live2DLoader = {
     mountLive2D,
     mountLive2DFromIDB,
@@ -594,5 +742,7 @@
     playMotion,
     setExpression,
     isMounted,
+    getExpressionParamMap,
+    resetParametersByScope,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

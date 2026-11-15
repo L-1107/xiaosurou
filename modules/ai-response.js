@@ -8289,7 +8289,10 @@ ${getActiveThoughtsPrompt()}
 
     const callFeed = document.getElementById('video-call-main');
     callFeed.innerHTML = '';
-    videoCallState.callHistory.forEach(msg => {
+    // v0.5.x: 气泡 DOM 上限 —— 只渲染最近 20 条 (和 video-voice-call.js 的 CALL_FEED_MAX_BUBBLES 一致)。
+    //   否则这里会按 callHistory 全量重渲染 (最多 100 条), 把通话中刚压下来的气泡又撑爆。
+    const maxBubbles = (typeof window.CALL_FEED_MAX_BUBBLES === 'number') ? window.CALL_FEED_MAX_BUBBLES : 20;
+    videoCallState.callHistory.slice(-maxBubbles).forEach(msg => {
       const bubble = document.createElement('div');
 
       const speechClass = msg.role === 'assistant' ? 'ai-speech' : 'user-speech';

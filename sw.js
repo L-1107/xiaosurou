@@ -1221,7 +1221,89 @@
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.82 → 0.0.83、
 //   modules/live2d-manager.js 0.0.7 → 0.0.8。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.119.0';
+// v0.2.120.0 (2026-11-11): 视频通话 —— 面部表情 / 身体动作 拆成两组, 加转头 + 视线跟随 + 戳脸歪头。
+//   ① live2d-loader.js 新增 getExpressionParamMap / resetParametersByScope
+//      原来"恢复默认"是整份参数快照逐参数写回, ParamPose 也在快照里 →
+//      切面部表情必然把手势卸掉, 切手势也必然把表情卸掉 (两者被硬性互斥)。
+//      现在按参数作用域还原: 面部组只动面部, 动作组只动 ParamPose, 两组互不干扰。
+//      契约: null = 整份还原(旧行为), [] = 什么都不做 (绝不能当成整份)。
+//   ② video-voice-call.js 把表情清单按"exp3 里有没有 ParamPose"拆两组
+//      (不按名字判断 —— 名字是人起的, 参数是硬事实), 指令新增 [[动作:xxx]]。
+//      每轮: 动作先放下(除非这轮要换新的)、再比新的; 动作只生效一轮。
+//      提示词分两段: 面部表情仍"每轮必须写一条", 动作改成"默认不写、语义匹配才写"。
+//   ③ 新增 attachCallGazeDriver: 手指位置驱动 ParamAngleX/Y/Z + ParamEyeBallX/Y。
+//      写法是"表情基值 + 偏移"(基值由 recapture 在表情写入后刷新), 所以表情不会被抹掉。
+//      眼睛跟得快(9.0)、头跟得慢(2.6) → 先看再转; 抬手 300ms 后回正;
+//      手指按着不动不回正 (手机上 pointermove 不再触发, 不能误判成松手)。
+//      戳脸(脸椭圆判定, 放宽 1.35 倍) → 往被戳的反方向歪头约 7°, 保持 900ms。
+//      应急开关: localStorage 'mavis-call-gaze' = 'off' / 'mavis-call-action-split' = 'off'。
+//   ④ 戳脸 → 下一轮告诉 AI: 命中脸椭圆时记一条 pending, 组装请求时临时 push 一条
+//      ※【真实发生】... 的 user 消息 (跟 callIdleNudge 一样【不写进 callHistory】)。
+//      TTL 8 秒(戳完太久就不报, 免得 AI 突然说"你干嘛戳我")、冷却 10 秒(狂戳不会死循环)、
+//      报过即清。主 prompt 加了第 6 条规则解释 ※ 标记, 否则模型会跟着写 (动作) 违反禁旁白。
+//      ⚠️ 主 prompt 原「错误示例」里写着「[[动作:挥手]] —— 没有 [[动作:]] 这种开关」,
+//      和 ② 直接用动作开关自相矛盾, 已改成 [[心情:开心]] 的示例; 白名单从三种改四种。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.83 → 0.0.85、
+//   modules/live2d-loader.js 0.3.7 → 0.3.8。
+//   新增回归: tests/_call-directives.cjs / tests/_call-gaze.cjs / tests/_call-scope.cjs /
+//   tests/_call-poke.cjs。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.121.0 (2026-11-11): 视频通话底部外框换成不透明奶黄底板 + 三个小动物按钮。
+//   ① 素材: assets/live2d-call/视频通话正式页按钮框.png 换成 1774x887 (比例 2.0),
+//      奶黄底板中央 alpha≈254/255 → 挡住 Live2D 半身的下半截, 不再看着像"断腿";
+//      四角 alpha=0 (透明) → 边缘融进背景, 不会出现白边。
+//      ⚠️ 踩过的坑: 上传副本会被服务端转码成 JPEG (mimeType=image/jpeg), 透明通道丢失
+//      → 渲染出来是一块带白边的矩形。合成必须用 *.asset.json 里 sourcePath 指向的原始 PNG。
+//   ② 布局: .video-call-controls 从 flex 居中改成 aspect-ratio:2/1 + 绝对定位,
+//      并且跟 #video-call-controls-frame 用同一套 width:380/max-width:92%/left:50%/bottom:0
+//      → 两者永远重合, 素材在窄屏等比缩放不变形。
+//   ③ 三个按钮图案已画进素材 → HTML 按钮退化成透明点击热区, 用百分比定位
+//      (left 16.5%/40%/63%, top 30%, 21%x40%) 跟着素材一起缩放。
+//      踩过的坑: 原来固定 px 定位, 窄屏上 max-width:92% 把容器缩到 358px 后热区错位 23px。
+//   ④ 删掉 ::before 半透明玻璃底板 → 图层从 2 层减到 1 层, 比改动前更省
+//      (顺带消除 backdrop-filter 被误开的风险 —— 它背后是 60fps 的 Live2D 画布)。
+//   index.html 的 ?v=：css/video-voice-call.css 0.0.50 → 0.0.51。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.122.0 (2026-11-12): 视频通话底部外框整体上移 64px。
+//   用户反馈"皮套的腿不够长, 按钮框太靠近底部" → 底板往上顶, 多挡住那截短腿。
+//   ① #video-call-controls-frame 和 .video-call-controls 的 bottom: 0 → 64px
+//      (两个盒子仍然完全重合, 按钮的百分比定位还是同一个坐标系)。
+//   ② 状态胶囊 #video-call-status-text 跟着一起上移: bottom 230px → 294px
+//      → 跟底板保持原来的 40px 间隙, 不会被底板压住。
+//   index.html 的 ?v=：css/video-voice-call.css 0.0.51 → 0.0.52。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.123.0 (2026-11-12): 通话发烫优化 —— 气泡 DOM 上限 + 摄像头帧阅后即焚。
+//   排查结论: #video-call-main / #voice-call-main 【两个气泡容器都是隐藏的】
+//   (前者 CSS display:none !important, 后者 index.html 行内 style="display:none")
+//   → 之前怀疑的 "语音通话 backdrop-filter: blur(10px)" 从来没生效过 (元素不生成盒子),
+//     那条不是发烫原因, 已排除。
+//   真正持续累积的是【DOM 节点】: 气泡一路 appendChild 到挂断才 innerHTML='' 清空,
+//   每个节点还挂着长按监听器 → 通话越久内存越大 + GC 压力 → 手机发热。
+//   ① 气泡 DOM 上限: 只保留最近 20 条 (video-voice-call.js 的 CALL_FEED_MAX_BUBBLES,
+//      新增 appendCallBubble/trimCallFeed, 10 处 appendChild 全走它);
+//      ai-response.js 的「重新生成回应」重渲染也改成只渲染最近 20 条。
+//   ② 摄像头帧阅后即焚: trimCallHistory 里 delete entry.visionContent
+//      —— 帧只属于产生它的那一轮, 以前每轮都重发一遍历史图片, payload 越滚越大。
+//      现在每轮 payload 恒定最多 1 张图。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.85 → 0.0.86,
+//                    modules/ai-response.js 0.0.57 → 0.0.58。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.124.0 (2026-11-12): 语音通话 AudioContext 复用对齐 (抄视频侧 v0.5.0 P26)。
+//   排查"通话久了手机发烫"时发现: 视频侧早就改成"整个通话复用同一个 AudioContext",
+//   语音侧却漏了 —— startVoiceCallAutoListening 每轮 listening 都 new 一个 AudioContext,
+//   cleanupVoiceCallAudioAnalysis 每轮又 close 掉。
+//   AudioContext 不是普通对象: 每 new 一个就拉起一个【实时音频渲染线程】
+//   (Android 上还会触发音频设备重配置) → 等于每 10~20 秒创建/销毁一次音频线程。
+//   改动 (五处, 全部与视频侧对称):
+//   ① 新增模块级 voiceCallAudioSource (原来 source 是局部变量, 从不 disconnect)。
+//   ② startVoiceCall: 在用户手势链路内预创建 + resume AudioContext (抄视频侧 v0.5.0 P27),
+//      避免 iOS Safari 上 analyser 永远读到全 0 → "用户说话没人听"。
+//   ③ startVoiceCallAutoListening: 复用已有 context (只在 closed 时才 new) + resume 兜底。
+//   ④ cleanupVoiceCallAudioAnalysis: 只 disconnect source/analyser, 【不再 close context】。
+//   ⑤ endVoiceCall: 统一 close 一次 + 清引用。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.86 → 0.0.87。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.125.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

@@ -23,7 +23,10 @@
     isTtsPlaying: false,
     canUserSpeak: true,
     // v0.5.0 P20: 表情互斥叠加处理用 —— 记下"上一轮实际生效"的表情, 切新表情时先卸
-    lastAppliedExpression: ''
+    lastAppliedExpression: '',
+    // v0.5.1: 身体动作(ParamPose)独立记一份。动作和表情现在互不干扰,
+    // 混用一个字段会让"先卸动作"和"先卸表情"互相踩。
+    lastAppliedAction: ''
   };
 
   let voiceCallState = {
@@ -76,6 +79,55 @@
   let live2dCallGestureActiveModel = null; // 当前手势操作的 PIXI Live2D Model
   let live2dCallGestureInitial = null;     // 本次通话初始 { scale, x, y } (安全复位用)
   let live2dCallGestureDetach = null;      // 解绑函数 (由 attach 时生成)
+  let live2dCallGazeDetach = null;         // v0.5.1: 转头/视线驱动的解绑函数
+
+  // v0.5.1: 戳脸 → 下一轮告诉 AI。
+  //   这里只记"发生过", 真正注入在组装请求时(buildCallPokeNote) —— 用和 callIdleNudge 一样的
+  //   临时 user 消息, 不写进 callHistory, 所以通话记录保持干净。
+  //   为什么要 TTL: 戳完过一分钟 AI 突然说"你干嘛戳我"很出戏, 所以超时就不报了。
+  //   为什么要冷却: 狂戳会变成"你戳我→我回应→你再戳"的死循环, 所以一段时间内只报一次。
+  const CALL_POKE_TTL_MS = 8000;       // 戳完 8 秒内还算数
+  const CALL_POKE_COOLDOWN_MS = 10000; // 10 秒内最多报一次
+  let callPokePending = null;          // { at: Date.now(), side: 'left' | 'right' }
+  let callPokeLastReportAt = 0;
+
+  // ============================================================
+  // v0.5.1: 戳脸 → 下一轮告诉 AI
+  // ============================================================
+  /**
+   * 生成"刚才被戳了"的临时提示句。**不写进 callHistory**, 只跟着这一条请求发出去。
+   *
+   * 三条策略:
+   *   TTL      —— 戳完 8 秒内才算数。再久就丢掉, 否则戳一下过一分钟 AI 突然说
+   *               "你干嘛戳我" 会很出戏。
+   *   冷却     —— 10 秒内最多报一次。狂戳会变成"你戳我→我回应→你再戳"的死循环。
+   *   一次性   —— 报过就清掉, 不会连报两轮。
+   *
+   * 文案用 ※【真实发生】 开头: 主 prompt 里禁旁白/禁动作描写, 所以必须明确告诉模型
+   * "这是系统给你的真实事实, 不是你该模仿的格式", 否则它会跟着写出 (动作) 这类东西。
+   */
+  function buildCallPokeNote() {
+    try {
+      if (!callPokePending) return '';
+      const now = Date.now();
+      if (now - callPokePending.at > CALL_POKE_TTL_MS) {
+        callPokePending = null;
+        return '';
+      }
+      if (callPokeLastReportAt && now - callPokeLastReportAt < CALL_POKE_COOLDOWN_MS) {
+        return '';
+      }
+      const where = callPokePending.pokeSide === 'right' ? '右边脸颊' : '左边脸颊';
+      callPokeLastReportAt = now;
+      callPokePending = null;
+      console.log('[视频通话视线] 本轮把"被戳了"告诉 AI (' + where + ')');
+      return '※【真实发生, 不是对方说的话, 也不是让你模仿的格式】'
+        + '刚才对方伸手戳了一下你的' + where + ', 你下意识歪了下头躲开。'
+        + '请自然地对此做出反应, 不要用括号或星号描写动作, 照旧输出纯台词。';
+    } catch (e) {
+      return '';
+    }
+  }
 
   // v0.5.1: 本次通话正在被 #video-call-screen 的 background-image 引用的 blob URL。
   // 换背景时用它决定"什么时候可以安全 revoke 上一张" —— 见 applyVideoCallBackgroundDirective。
@@ -345,6 +397,300 @@
     }
   }
 
+  // ============================================================
+  // v0.5.1: 转头 + 视线跟随手指 / 戳脸歪头
+  // ============================================================
+  // 模型端本来就支持: ParamAngleX/Y/Z (头) 和 ParamEyeBallX/Y (瞳孔) 都在 moc3 里,
+  // 但 330 一直没有代码去驱动它们 —— 全项目(排除 lib/) 搜 ParamAngleX 是零命中,
+  // 而且 live2d-loader.js 里 autoInteract:false 把库自带的"跟随鼠标"也关了。
+  //
+  // 方向是**渲染实测**量出来的(不是猜的):
+  //   ParamAngleX + → 头往画面右   ParamAngleY + → 抬头      ParamAngleZ + → 往画面左歪
+  //   ParamEyeBallX + → 瞳孔往右   ParamEyeBallY + → 瞳孔往下
+  //   所以手指在脸右上方 → EyeBallX 正 / EyeBallY 负。
+  //
+  // 写参数的位置: beforeModelUpdate —— 和 call-lip-sync.js 用同一个可写点(那边已验证)。
+  // 写法是 base + offset: base = 当前值 - 上一帧我们写的 offset,
+  //   所以表情写进去的值不会被抹掉, 而是"在表情的基础上再偏一点";
+  //   松手后 offset 回到 0, base 自然自愈。
+  const CALL_GAZE_PARAMS = ['ParamEyeBallX', 'ParamEyeBallY', 'ParamAngleX', 'ParamAngleY', 'ParamAngleZ'];
+  // 脸在模型 canvas 里的位置。来自 character.json 的 head.face:
+  //   centre [643,194]  rx 75  ry_up 86  ry_down 110  (canvas 1280×1280)
+  const CALL_FACE_FRAC = {
+    cx: 643 / 1280, cy: 194 / 1280,
+    rx: 75 / 1280, ru: 86 / 1280, rd: 110 / 1280
+  };
+
+  /** 应急开关: 控制台 setItem('mavis-call-gaze','off') 后刷新 → 彻底关掉转头/视线跟随 */
+  function isCallGazeDisabled() {
+    try {
+      return !!(window.localStorage && window.localStorage.getItem('mavis-call-gaze') === 'off');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * 绑定"转头 + 视线跟随 + 戳脸歪头"。
+   * @returns {Function|null} 解绑函数
+   */
+  function attachCallGazeDriver(canvas, model) {
+    if (!canvas || !model || isCallGazeDisabled()) return null;
+    const im = model.internalModel;
+    const core = im && (im.coreModel || im._model || (im.coreModel && im.coreModel._model));
+    if (!im || !core) return null;
+    if (typeof im.on !== 'function' || typeof im.off !== 'function') return null;
+    if (typeof core.getParameterIndex !== 'function' || typeof core.setParameterValueByIndex !== 'function') return null;
+
+    const CFG = {
+      eyeMaxX: 0.85,      // 瞳孔横向偏移上限 (参数范围的比例)
+      eyeMaxY: 0.55,      // 瞳孔纵向: 这个模型纵向幅度天生小, 给足一点
+      angleMaxX: 0.45,    // 头横向: 只跟一半, 眼睛先看、头再跟一点才有"看过去"的感觉
+      angleMaxY: 0.30,
+      eyeSpeed: 9.0,      // 眼睛跟得快
+      headSpeed: 2.6,     // 头跟得慢
+      backSpeed: 3.2,     // 松手回正的速度
+      idleBackMs: 300,    // 松手后多久开始回正
+      pokeHoldMs: 900,    // 戳脸后歪头保持多久
+      pokeTilt: 0.7       // 歪头幅度 (占 AngleZ 范围的比例; 0.7×30≈21 → 约 7° 实际倾斜)
+    };
+
+    const idx = {};
+    CALL_GAZE_PARAMS.forEach(function (id) {
+      let k = -1;
+      try { k = core.getParameterIndex(id); } catch (e) { k = -1; }
+      idx[id] = k;
+    });
+    // 一个参数都拿不到就别绑了(比如模型没有 ParamAngle*)
+    if (CALL_GAZE_PARAMS.every(function (id) { return idx[id] < 0; })) return null;
+
+    const lastOff = {};
+    // 表情/默认态给这 5 个参数写的"基值"(不含我们的偏移)。
+    // 由 recapture() 在"外部刚写过这些参数"之后刷新 —— 这样我们只做叠加, 绝不抹掉表情。
+    // 不用"当前值 - 上一帧偏移"反推基值: 表情中途写入会把那个反推污染掉(实测会偏 0.55)。
+    const exprVals = {};
+    CALL_GAZE_PARAMS.forEach(function (id) {
+      lastOff[id] = 0;
+      const k = idx[id];
+      let v = 0;
+      if (k >= 0) { try { v = core.getParameterValueByIndex(k); } catch (e) { v = 0; } }
+      exprVals[id] = v;
+    });
+
+    /**
+     * 外部(表情/恢复)刚写过这些参数之后调用, 把这些参数当前的值认作新基值。
+     * @param {Array<string>|null} ids 传 null/空 = 这 5 个参数全部重认
+     */
+    const recapture = function (ids) {
+      const list = (Array.isArray(ids) && ids.length) ? ids : CALL_GAZE_PARAMS;
+      list.forEach(function (id) {
+        const k = idx[id];
+        if (typeof k !== 'number' || k < 0) return;
+        try { exprVals[id] = core.getParameterValueByIndex(k); } catch (e) { /* ignore */ }
+        lastOff[id] = 0;
+      });
+    };
+    try { canvas._live2dGazeRecapture = recapture; } catch (e) { /* ignore */ }
+
+    /**
+     * 换基值: 把"当前表情写在视线参数上的值"认作新基值。
+     *
+     * 为什么不能用"挂载那一刻的快照": 快照里没有表情写的值 → 表情的歪头
+     * (歪头卖萌 ParamAngleZ=30 / 整领带 ParamAngleY=35) 每帧都被抹成 0
+     * → 调试台(没有这个驱动)能歪头, 正式视频通话里歪不了。
+     *
+     * 默认是**合并**语义: values 里给了的参数才改, 没给的原样留着。
+     *   因为脸表情和姿势表情可以同时存在(整领带是姿势, 歪头卖萌是脸),
+     *   姿势表情只写 ParamPose, 不能顺手把脸表情的歪头基线清成 0。
+     * replace=true 时才整份替换(恢复默认表情用)。
+     *
+     * @param {Object<string, number>} values {参数id: 数值}
+     * @param {boolean} [replace]
+     */
+    const setBase = function (values, replace) {
+      const v = (values && typeof values === 'object') ? values : {};
+      CALL_GAZE_PARAMS.forEach(function (id) {
+        const n = v[id];
+        const has = (typeof n === 'number' && isFinite(n));
+        if (!replace && !has) return;            // 合并: 这条表情没写这个参数 → 不动
+        exprVals[id] = has ? n : 0;
+        lastOff[id] = 0;
+      });
+    };
+    try { canvas._live2dGazeSetBase = setBase; } catch (e) { /* ignore */ }
+
+    let target = { x: 0, y: 0 };
+    let eye = { x: 0, y: 0 };
+    let head = { x: 0, y: 0 };
+    let tilt = 0;
+    let lastPointerAt = 0;
+    let pointerHeld = false;   // 手指/鼠标还按着 → 不能因为"没动"就回正
+    let pokeUntil = 0;
+    let bounds = null;
+    let boundsAt = 0;
+    let attached = true;
+
+    const nowMs = function () {
+      return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    };
+
+    const readBounds = function (force) {
+      const now = nowMs();
+      if (!force && bounds && now - boundsAt < 400) return bounds;
+      try {
+        const b = model.getBounds();
+        if (b && isFinite(b.width) && b.width > 0) {
+          bounds = { x: b.x, y: b.y, w: b.width, h: b.height };
+          boundsAt = now;
+        }
+      } catch (e) { /* ignore */ }
+      return bounds;
+    };
+
+    /** 屏幕坐标 → 模型 canvas 的归一化坐标(0..1) */
+    const toModel = function (ev) {
+      const b = readBounds(false);
+      if (!b) return null;
+      let rect = null;
+      try { rect = canvas.getBoundingClientRect(); } catch (e) { rect = null; }
+      if (!rect || !rect.width || !rect.height) return null;
+      return {
+        x: (ev.clientX - rect.left - b.x) / b.w,
+        y: (ev.clientY - rect.top - b.y) / b.h
+      };
+    };
+
+    const isOnFace = function (mp) {
+      if (!mp) return false;
+      // 判定椭圆放宽 1.35 倍: 手机上手指粗, 严格椭圆很难戳中
+      const rx = CALL_FACE_FRAC.rx * 1.35;
+      const ry = (mp.y < CALL_FACE_FRAC.cy ? CALL_FACE_FRAC.ru : CALL_FACE_FRAC.rd) * 1.35;
+      const dx = (mp.x - CALL_FACE_FRAC.cx) / rx;
+      const dy = (mp.y - CALL_FACE_FRAC.cy) / ry;
+      return (dx * dx + dy * dy) <= 1;
+    };
+
+    const setTargetFromPoint = function (mp) {
+      if (!mp) return;
+      // 参考系用脸的大小: 手指移到脸的左侧边缘外一点就已经是"看到极限", 手感才跟手
+      const halfX = CALL_FACE_FRAC.rx * 3.2;
+      const halfY = CALL_FACE_FRAC.ru * 2.6;
+      target.x = Math.max(-1, Math.min(1, (mp.x - CALL_FACE_FRAC.cx) / halfX));
+      target.y = Math.max(-1, Math.min(1, (mp.y - CALL_FACE_FRAC.cy) / halfY));
+    };
+
+    const onDown = function (ev) {
+      const mp = toModel(ev);
+      if (!mp) return;
+      pointerHeld = true;
+      readBounds(true);
+      if (isOnFace(mp)) {
+        // 戳脸: 往被戳的**反方向**歪一下头 (被戳到会躲开)
+        // ParamAngleZ + = 往画面左歪, 所以戳右脸要让 AngleZ 变正
+        const side = mp.x >= CALL_FACE_FRAC.cx ? 1 : -1;
+        tilt = CFG.pokeTilt * side;
+        pokeUntil = nowMs() + CFG.pokeHoldMs;
+        // 记下来, 下一轮组装请求时告诉 AI "刚才被戳了"
+        // 用 Date.now() 而不是 performance.now(): 这里要和组装请求那边同一套时钟
+        callPokePending = {
+          at: Date.now(),
+          pokeSide: side > 0 ? 'right' : 'left'   // 被戳的是哪一侧脸颊 (side>0 = 被戳的是右脸)
+        };
+        console.log('[视频通话视线] 戳到脸 → 歪头躲向' + (side > 0 ? '左' : '右'));
+        return;
+      }
+      lastPointerAt = nowMs();
+      setTargetFromPoint(mp);
+    };
+
+    const onMove = function (ev) {
+      const mp = toModel(ev);
+      if (!mp) return;
+      lastPointerAt = nowMs();
+      setTargetFromPoint(mp);
+    };
+
+    // 抬手 / 指针离开 → 从现在开始算"多久没动", 到点就回正
+    const onLeave = function () {
+      pointerHeld = false;
+      lastPointerAt = nowMs();
+    };
+
+    const frame = function () {
+      if (!attached) return;
+      const now = nowMs();
+      const dt = 1 / 60;
+      // 关键: 手指按着不动时 pointermove 不再触发, 不能因此判定"松手了"。
+      // 只有真的抬手/离开(pointerHeld=false)且超过 idleBackMs 才回正。
+      const idle = !pointerHeld && (now - lastPointerAt) > CFG.idleBackMs;
+      const tx = idle ? 0 : target.x;
+      const ty = idle ? 0 : target.y;
+
+      const kEye = 1 - Math.exp(-CFG.eyeSpeed * dt);
+      const kHead = 1 - Math.exp(-CFG.headSpeed * dt);
+      const kBack = 1 - Math.exp(-CFG.backSpeed * dt);
+      eye.x += (tx - eye.x) * kEye;
+      eye.y += (ty - eye.y) * kEye;
+      head.x += (tx - head.x) * kHead;
+      head.y += (ty - head.y) * kHead;
+
+      // 歪头期间不跟随, 保持歪着; 过了保持时间就回正
+      if (now >= pokeUntil) tilt += (0 - tilt) * kBack;
+
+      // 这些都是**比例**(-1..1 量级), 真正写进去要乘上该参数自己的范围 ——
+      // ParamEyeBall* 范围是 ±1, ParamAngle* 是 ±30, 不乘的话头只会动 0.45 度, 等于没动。
+      const frac = {
+        ParamEyeBallX: eye.x * CFG.eyeMaxX,
+        ParamEyeBallY: eye.y * CFG.eyeMaxY,
+        ParamAngleX: head.x * CFG.angleMaxX,
+        ParamAngleY: -head.y * CFG.angleMaxY,   // 屏幕 y 向下为正, 抬头要写负
+        ParamAngleZ: tilt
+      };
+
+      for (let i = 0; i < CALL_GAZE_PARAMS.length; i++) {
+        const id = CALL_GAZE_PARAMS[i];
+        const k = idx[id];
+        if (k < 0) continue;
+        let lo = -1;
+        let hi = 1;
+        try {
+          if (typeof core.getParameterMinimumValue === 'function') lo = core.getParameterMinimumValue(k);
+          if (typeof core.getParameterMaximumValue === 'function') hi = core.getParameterMaximumValue(k);
+        } catch (e) { continue; }
+        const span = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+        const off = frac[id] * span;
+        // 基值(当前表情写的) + 偏移, 两边都不丢
+        let v = (exprVals[id] || 0) + off;
+        if (v < lo) v = lo; else if (v > hi) v = hi;
+        try { core.setParameterValueByIndex(k, v); } catch (e) { /* ignore */ }
+        lastOff[id] = off;
+      }
+    };
+
+    try { im.on('beforeModelUpdate', frame); } catch (e) { return null; }
+    canvas.addEventListener('pointerdown', onDown, { passive: true });
+    canvas.addEventListener('pointermove', onMove, { passive: true });
+    canvas.addEventListener('pointerup', onLeave, { passive: true });
+    canvas.addEventListener('pointercancel', onLeave, { passive: true });
+    canvas.addEventListener('pointerleave', onLeave, { passive: true });
+
+    return function detachGaze() {
+      attached = false;
+      try {
+        if (canvas._live2dGazeRecapture === recapture) canvas._live2dGazeRecapture = null;
+      } catch (e) { /* ignore */ }
+      try {
+        if (canvas._live2dGazeSetBase === setBase) canvas._live2dGazeSetBase = null;
+      } catch (e) { /* ignore */ }
+      try { im.off('beforeModelUpdate', frame); } catch (e) { /* ignore */ }
+      try { canvas.removeEventListener('pointerdown', onDown); } catch (e) { /* ignore */ }
+      try { canvas.removeEventListener('pointermove', onMove); } catch (e) { /* ignore */ }
+      try { canvas.removeEventListener('pointerup', onLeave); } catch (e) { /* ignore */ }
+      try { canvas.removeEventListener('pointercancel', onLeave); } catch (e) { /* ignore */ }
+      try { canvas.removeEventListener('pointerleave', onLeave); } catch (e) { /* ignore */ }
+    };
+  }
+
   /**
    * 给正式视频通话页的 Live2D canvas 绑定手势: 单指拖拽 + 双指捏合缩放
    * - 单指: 跟随手指平移 (activeModel.x/y)
@@ -568,7 +914,22 @@
     canvas.addEventListener('pointerup', onPointerEnd);
     canvas.addEventListener('pointercancel', onPointerEnd);
 
+    // v0.5.1: 转头 + 视线跟随手指 + 戳脸歪头 (独立于拖拽/缩放, 只是读同一批指针事件)
+    if (live2dCallGazeDetach) {
+      try { live2dCallGazeDetach(); } catch (e) { /* ignore */ }
+      live2dCallGazeDetach = null;
+    }
+    live2dCallGazeDetach = attachCallGazeDriver(canvas, activeModel);
+    if (live2dCallGazeDetach) {
+      console.log('[视频通话视线] 转头/视线跟随已启用 (关掉: localStorage.setItem(\'mavis-call-gaze\',\'off\'))');
+    }
+
     live2dCallGestureDetach = function detach() {
+      // v0.5.1: 转头/视线驱动也在这里收, 否则挂断后 beforeModelUpdate 里还在写已销毁的模型
+      if (live2dCallGazeDetach) {
+        try { live2dCallGazeDetach(); } catch (e) { /* ignore */ }
+        live2dCallGazeDetach = null;
+      }
       try { canvas.removeEventListener('pointerdown', onPointerDown); } catch (e) { /* ignore */ }
       try { canvas.removeEventListener('pointermove', onPointerMove); } catch (e) { /* ignore */ }
       try { canvas.removeEventListener('pointerup', onPointerEnd); } catch (e) { /* ignore */ }
@@ -784,6 +1145,9 @@
   let voiceCallIsRecording = false;
   let voiceCallIsRecognizing = false;
   let voiceCallAudioContext = null;
+  // v0.5.x: 音量检测输入节点 (麦克风流 → analyser)。抄视频侧 videoCallAudioSource:
+  //   每轮 listening 都新建, 每轮 cleanup 都 disconnect, 避免节点越堆越多。
+  let voiceCallAudioSource = null;
   let voiceCallAnalyser = null;
   let voiceCallAutoListenAnimationFrame = null;
   let voiceCallAutoListenTimers = [];
@@ -1108,30 +1472,35 @@ let voiceCallStatusHoldUntil = 0;
   // 三段式匹配, 从"最理想"到"最兜底"依次剥:
   // 1) 独占一行的标准写法 (prompt 要求的写法, 绝大多数情况走这条)
   // v0.5.0 P14: 支持两种指令 —— 舞台(背景) / 表情. 第 1 组 = 指令类型, 第 2 组 = 值.
-  const VIDEO_CALL_DIRECTIVE_MARKER_RE = /^[ \t]*\[{1,2}[ \t]*(舞台|表情)[ \t]*[:：][ \t]*([^\]\n]*?)[ \t]*\]{1,2}[ \t]*$/gm;
+  // v0.5.1 拆分: 再加「动作」(身体姿势)。动作和表情写的是两套不同参数, 可以同时存在,
+  //   所以必须单独一个 kind, 否则 AI 写 [[动作:剪刀手]] 会被当成"舞台名"去换背景。
+  //   「手势」也当动作的别名收 —— 实测模型会混着写。
+  const VIDEO_CALL_DIRECTIVE_MARKER_RE = /^[ \t]*\[{1,2}[ \t]*(舞台|表情|动作|手势)[ \t]*[:：][ \t]*([^\]\n]*?)[ \t]*\]{1,2}[ \t]*$/gm;
   // 2) 行内写法 (标记没独占一行, 但括号完整) —— 只剥标记本身, 保住同行剩下的台词
   //    注意: 括号数必须放宽到 1~2 个, 实测 AI 会写单括号 [舞台:xxx],
   //    也实测过少半个右括号 [[舞台:xxx], 严格匹配会漏掉
-  const VIDEO_CALL_DIRECTIVE_INLINE_RE = /\[{1,2}[ \t]*(舞台|表情)[ \t]*[:：][ \t]*([^\]\n]*?)[ \t]*\]{1,2}/g;
+  const VIDEO_CALL_DIRECTIVE_INLINE_RE = /\[{1,2}[ \t]*(舞台|表情|动作|手势)[ \t]*[:：][ \t]*([^\]\n]*?)[ \t]*\]{1,2}/g;
   // 3) 兜底: 括号残缺到连右括号都没有 → 剥到行尾
   //    (宁可多剥一点, 也绝不能让它被 TTS 念出来)
   //    v0.5.0 P14: 这里也捕获值 —— 之前只剥不取, 导致 AI 写 "[[舞台:雨夜"(少半个右括号)
   //    时标记被清掉了、但背景也不换 (实测 AI 真的会这么写). 捕获后能正常换.
-  const VIDEO_CALL_DIRECTIVE_LOOSE_RE = /\[{1,2}[ \t]*(舞台|表情)[ \t]*[:：][ \t]*([^\n]*)/g;
+  const VIDEO_CALL_DIRECTIVE_LOOSE_RE = /\[{1,2}[ \t]*(舞台|表情|动作|手势)[ \t]*[:：][ \t]*([^\n]*)/g;
 
   /**
    * 从 AI 回复里摘出所有指令, 并返回"已被剥干净的文本"(进 TTS 用)
-   * names = 舞台(背景)指令, expressions = 表情指令 (都按出现顺序)
-   * @returns {{ text: string, names: string[], expressions: string[] }}
+   * names = 舞台(背景)指令, expressions = 表情指令, actions = 动作指令 (都按出现顺序)
+   * @returns {{ text: string, names: string[], expressions: string[], actions: string[] }}
    */
   function extractVideoCallDirectives(text) {
     const raw = String(text || '');
     const names = [];
     const expressions = [];
+    const actions = [];
     const collect = function (kind, value) {
       const v = String(value || '').trim();
       if (!v) return;
       if (kind === '表情') expressions.push(v);
+      else if (kind === '动作' || kind === '手势') actions.push(v);
       else names.push(v);
     };
 
@@ -1148,7 +1517,7 @@ let voiceCallStatusHoldUntil = 0;
       return '';
     });
     out = out.replace(/\n{3,}/g, '\n\n').trim();
-    return { text: out, names: names, expressions: expressions };
+    return { text: out, names: names, expressions: expressions, actions: actions };
   }
 
   /** 读背景库 (背景库是全局的, per-chat 只决定哪张是 active) */
@@ -1328,6 +1697,85 @@ let voiceCallStatusHoldUntil = 0;
     }
   }
 
+  // ============================================================
+  // v0.5.1: 面部表情 / 身体动作 分组
+  // ============================================================
+  // 模型端本来就是两套参数: 面部表情写 嘴/眼/眉/腮红, 动作只写 ParamPose(枚举)。
+  // 两组参数不重叠, 天生可以同时生效 —— 以前做不到, 是因为"切新表情前先整份参数快照还原"
+  // 把 ParamPose 一起写回了 0, 于是切脸必卸手势、切手势必卸脸。
+  // 现在改成"按组还原", 两者互不干扰。
+  //
+  // 判据必须是 exp3 里真正写的参数, 不能靠表情名: 名字是人起的, 参数是硬事实。
+  const CALL_POSE_PARAM_IDS = ['ParamPose'];
+
+  /** 应急开关: 控制台 setItem('mavis-call-action-split','off') 后刷新 → 退回"全部当表情"的老行为 */
+  function isCallActionSplitEnabled() {
+    try {
+      return !(window.localStorage && window.localStorage.getItem('mavis-call-action-split') === 'off');
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /** 一条表情的参数里有没有姿势参数 → 是动作还是面部 */
+  function isCallPoseParamSet(ids) {
+    if (!Array.isArray(ids)) return false;
+    for (const id of ids) {
+      if (CALL_POSE_PARAM_IDS.indexOf(id) >= 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 把当前模型的表情清单拆成两组。
+   * @returns {Promise<{face: Array, action: Array, faceParams: string[], poseParams: string[]}>}
+   *   face/action = 跟 getVideoCallExpressionOptions 同结构的条目数组;
+   *   faceParams/poseParams = 该组所有 exp3 写过的参数并集(按组还原时用)
+   */
+  async function getCallExpressionGroups() {
+    const empty = { face: [], action: [], faceParams: [], poseParams: [] };
+    try {
+      const options = getVideoCallExpressionOptions();
+      if (!options.length) return empty;
+      const canvas = document.getElementById('live2d-canvas');
+      const loader = window.Live2DLoader;
+      const map = (loader && typeof loader.getExpressionParamMap === 'function')
+        ? await loader.getExpressionParamMap(canvas)
+        : new Map();
+
+      const face = [];
+      const action = [];
+      const faceSet = new Set();
+      const poseSet = new Set();
+
+      for (const opt of options) {
+        const ids = map.get(String(opt.id || '').toLowerCase()) || [];
+        if (isCallActionSplitEnabled() && isCallPoseParamSet(ids)) {
+          action.push(opt);
+          ids.forEach(id => poseSet.add(id));
+        } else {
+          face.push(opt);
+          ids.forEach(id => faceSet.add(id));
+        }
+      }
+
+      // 一组都没分出来 = exp3 读不到 → 退回老行为(全当表情), 不能凭空空掉表情功能
+      if (!action.length && !face.length) return empty;
+      // 动作组至少要覆盖 ParamPose 本身, 否则"放下"写不回 0
+      if (action.length && poseSet.size === 0) CALL_POSE_PARAM_IDS.forEach(id => poseSet.add(id));
+
+      return {
+        face: face,
+        action: action,
+        faceParams: Array.from(faceSet),
+        poseParams: Array.from(poseSet)
+      };
+    } catch (e) {
+      console.warn('[视频通话表情] 拆分表情/动作失败, 退回老行为:', e);
+      return empty;
+    }
+  }
+
   /** AI 给的名字 → 清单条目 (精确 → 忽略大小写 → 包含); 匹配不到返回 null */
   function findVideoCallExpressionOption(options, rawName) {
     const target = String(rawName || '').trim();
@@ -1354,9 +1802,22 @@ let voiceCallStatusHoldUntil = 0;
 
   /**
    * 执行一条表情指令。失败静默 (匹配不到 / 通话已结束 / 模型未挂载都只是不换)
+   * @param {string} rawName 表情名 / "恢复"
+   * @param {Object} chat
+   * @param {{scope?: 'all'|'face'|'pose', paramIds?: string[]}} [opts]
+   *   scope='pose' → 只动身体动作那组参数, 不碰面部表情 (反之 'face')。
+   *   不传 = 老行为, 整份参数快照还原。
    * @returns {Promise<boolean>}
    */
-  async function applyVideoCallExpressionDirective(rawName, chat) {
+  async function applyVideoCallExpressionDirective(rawName, chat, opts) {
+    let scope = (opts && opts.scope) || 'all';
+    const scopeIds = (opts && Array.isArray(opts.paramIds)) ? opts.paramIds : null;
+    // 拿不到该组的参数集时【退回老的整体还原】, 不能传空数组 ——
+    // 空数组在 loader 里是"什么都不做", 那样旧表情的参数会残留成混脸。
+    if (scope !== 'all' && (!scopeIds || !scopeIds.length)) {
+      console.warn('[视频通话表情] 拿不到 ' + scope + ' 组参数集, 本次退回整体还原');
+      scope = 'all';
+    }
     try {
       if (typeof videoCallState === 'undefined' || !videoCallState || !videoCallState.isActive) return false;
       const canvas = document.getElementById('live2d-canvas');
@@ -1376,6 +1837,10 @@ let voiceCallStatusHoldUntil = 0;
       //   修法: 首选跟模型管理页「↺ 默认」完全同一套 —— 参数快照还原。
       //         canvas._live2dInitialParams 是 live2d-loader.js 在【模型挂载完成时】
       //         拍的"出厂表情"基线 (严格早于任何表情生效), 逐参数写回 = 真卸干净。
+      //
+      // v0.5.1 按作用域还原:
+      //   整份快照还原会把 ParamPose 一起写回 0 → 切面部表情必然把手势卸掉。
+      //   scope='pose'/'face' 时只写回该组参数, 两组就能同时存在。
       if (isVideoCallExpressionReset(rawName)) {
         let okReset = false;
         let how = '(无可用路径)';
@@ -1387,17 +1852,29 @@ let voiceCallStatusHoldUntil = 0;
           const snap = canvas._live2dInitialParams;
           if (snap && snap.size > 0 && core && typeof core.setParameterValueByIndex === 'function') {
             let n = 0;
-            snap.forEach((val, idx) => {
-              try { core.setParameterValueByIndex(idx, val); n++; } catch (e) { /* 跳过该参数 */ }
-            });
-            if (n > 0) { okReset = true; how = '快照还原 ' + n + ' 个参数'; }
+            // 按作用域还原优先走 loader 的公共实现; 拿不到就退回原地整份写回
+            if (scope !== 'all' && window.Live2DLoader
+                && typeof window.Live2DLoader.resetParametersByScope === 'function') {
+              n = window.Live2DLoader.resetParametersByScope(canvas, scopeIds);
+              if (n > 0) {
+                okReset = true;
+                how = '按组还原(' + scope + ') ' + n + ' 个参数';
+              }
+            } else {
+              snap.forEach((val, idx) => {
+                try { core.setParameterValueByIndex(idx, val); n++; } catch (e) { /* 跳过该参数 */ }
+              });
+              if (n > 0) { okReset = true; how = '快照还原 ' + n + ' 个参数'; }
+            }
           }
         } catch (e) {
           console.warn('[视频通话表情] 快照还原异常:', e);
         }
 
         // 路径 2 (兜底): 没有基线快照 → 重新应用用户在该角色保存的起始表情
-        if (!okReset) {
+        // 路径 2 (兜底): 没有基线快照 → 重新应用用户在该角色保存的起始表情
+        // v0.5.1: scope='pose' 时跳过 —— 收手势不该顺手把"起始表情"贴回脸上
+        if (!okReset && scope !== 'pose') {
           let def = '';
           try {
             if (chat && chat.id && window.Live2DStorage
@@ -1413,14 +1890,25 @@ let voiceCallStatusHoldUntil = 0;
         }
 
         // 路径 3 (最后兜底): 库 resetExpression (该 fork 上通常返回 false, 保留以防换库)
-        if (!okReset) {
+        // v0.5.1: scope='pose' 时同样跳过 —— 这条会动面部参数
+        if (!okReset && scope !== 'pose') {
           okReset = await window.Live2DLoader.setExpression(canvas, '');
           how = '库 resetExpression';
         }
 
+        // v0.5.1: 让转头/视线驱动重新认一次基值 ——
+        //   否则它还在拿"恢复前那一版"的值做叠加, 表情会被偏掉。
+        try {
+          if (canvas._live2dGazeRecapture) {
+            canvas._live2dGazeRecapture(scope === 'all' ? null : scopeIds);
+          }
+        } catch (e) { /* ignore */ }
+
         // 命中 "保持/不变" 时打另一条 log, 区分 "回默认" 和 "维持当前"
         const isKeep = /^(保持|不变|none|keep)$/i.test(String(rawName || '').trim());
-        console.log('[视频通话表情] AI ' + (isKeep ? '维持当前表情 (走默认)' : '恢复默认表情')
+        const scopeTag = scope === 'all' ? '' : '[' + scope + '] ';
+        console.log('[视频通话表情] ' + scopeTag + 'AI '
+          + (isKeep ? '维持当前表情 (走默认)' : '恢复默认表情')
           + ' | ' + how + ' | ok=' + okReset);
         return !!okReset;
       }
@@ -1435,8 +1923,25 @@ let voiceCallStatusHoldUntil = 0;
         console.log('[视频通话表情] AI 给的表情匹配不到, 跳过:', rawName);
         return false;
       }
+      // v0.5.1: 应用前**先按本组作用域卸旧** ——
+      //   跨组卸旧的活由调用方做, 这里只保证"同一组内切换不留残留参数"。
+      //   否则切到一条只写部分参数的表情时, 上一条写在同一组其它参数上的值会残留。
+      if (scope !== 'all' && scopeIds && scopeIds.length
+          && window.Live2DLoader && typeof window.Live2DLoader.resetParametersByScope === 'function') {
+        try { window.Live2DLoader.resetParametersByScope(canvas, scopeIds); } catch (e) { /* ignore */ }
+      }
       const ok = await window.Live2DLoader.setExpression(canvas, hit.id);
-      console.log('[视频通话表情] AI 切表情:', hit.id, 'ok=' + ok);
+      // v0.5.1: 表情刚写过参数 → 让转头/视线驱动把"这些参数"认作新基值。
+      //   只认这条 exp3 真正声明过的参数, 不是全部, 否则会把另一组的值也误认进来。
+      if (ok && canvas._live2dGazeRecapture
+          && window.Live2DLoader && typeof window.Live2DLoader.getExpressionParamMap === 'function') {
+        try {
+          const map = await window.Live2DLoader.getExpressionParamMap(canvas);
+          const ids = map && map.get ? map.get(String(hit.id || '').toLowerCase()) : null;
+          canvas._live2dGazeRecapture(Array.isArray(ids) && ids.length ? ids : null);
+        } catch (e) { /* ignore */ }
+      }
+      console.log('[视频通话表情] AI 切表情' + (scope === 'all' ? '' : '(' + scope + ')') + ':', hit.id, 'ok=' + ok);
       return !!ok;
     } catch (e) {
       console.warn('[视频通话表情] 指令执行异常:', e);
@@ -1444,24 +1949,48 @@ let voiceCallStatusHoldUntil = 0;
     }
   }
 
-  /** 生成 prompt 里的「表情控制」段落; 当前模型没有表情时返回 '' (不给 AI 空口承诺) */
-  function buildVideoCallExpressionPromptBlock() {
+  /**
+   * 生成 prompt 里的「表情控制 / 动作控制」两段。
+   *
+   * v0.5.1 拆成两组, 两段的规则【故意不一样】:
+   *   面部表情 —— 每轮必须写一条 (老规矩, 保证脸上一直有状态)
+   *   身体动作 —— 默认不写, 只在语义明确匹配时写, 而且只生效这一轮
+   * 为什么动作不能也"每轮必须写": ParamPose 是枚举参数、切换是硬切(无淡入),
+   * 每句都比一个手势 = 手臂一直抬放, 比没动作难看得多。
+   *
+   * 两段都写不出来(模型没有 exp3)就返回 '' —— 不给 AI 空口承诺。
+   */
+  async function buildVideoCallExpressionPromptBlock() {
     try {
-      const options = getVideoCallExpressionOptions();
-      if (!options.length) {
-        console.warn('[视频通话表情] 当前模型没有 .exp3.json 表情 → 清单没写进 prompt, AI 不会换表情');
-        return '';
+      const groups = await getCallExpressionGroups();
+      let face = groups.face || [];
+      let action = groups.action || [];
+
+      // 拆不出来(读不到 exp3 / 旧模型没有 ParamPose) → 退回老行为: 全部当面部表情
+      if (!face.length && !action.length) {
+        const options = getVideoCallExpressionOptions();
+        if (!options.length) {
+          console.warn('[视频通话表情] 当前模型没有 .exp3.json 表情 → 清单没写进 prompt, AI 不会换表情');
+          return '';
+        }
+        face = options;
       }
+
       // 给 AI 看"人话版": 有中文名就写 "举手猫爪(cat_paw_up)", 没有就写原 id。
       // 只喂英文 id / 纯数字 id 时 AI 不知道该在什么场合用哪个, 结果就是干脆不写表情指令。
-      // 上限从 16 提到 64: 原来 16 是给"一堆长英文 id"的模型省 prompt 用的;
-      // 表情 id 是中文名时, 几十个也就几十个字, 不该被截断 (用户要全部能用)。
-      // 64 只是兜底, 防止个别模型塞几百个表情把 prompt 撑爆。
-      const nameList = options.slice(0, 64)
+      // 上限 64 只是兜底, 防止个别模型塞几百个表情把 prompt 撑爆。
+      const fmt = (arr) => arr.slice(0, 64)
         .map(o => (o.label ? (o.label + '(' + o.id + ')') : o.id))
         .join(' / ');
-      console.log('[视频通话表情] 已把表情清单写进 prompt: ' + options.length + ' 个 → ' + nameList);
-      return `
+
+      const faceList = face.length ? fmt(face) : '';
+      const actionList = action.length ? fmt(action) : '';
+      const hasAction = action.length > 0;
+      let out = '';
+
+      if (face.length) {
+        console.log('[视频通话表情] 已把面部表情清单写进 prompt: ' + face.length + ' 个 → ' + faceList);
+        out += `
         # 表情控制 (系统开关 —— 跟【舞台控制】一样, 是【输出格式】里的那个【唯一例外】)
         表情要【像活人一样跟着情绪走】, 不是每句必换、也不是死活不换 —— 是该动才动, 就像微信视频里真人在说话, 你不会觉得他每 5 秒换一次脸, 也不会看到他从头到尾都一个表情。
 
@@ -1488,22 +2017,50 @@ let voiceCallStatusHoldUntil = 0;
           ① 情绪【有变化】或【有高光瞬间】(被逗乐/被夸/害羞/想撒娇/俏皮/被关心/嘴硬念叨/想表示"我在认真听") → 挑一个最贴的写上, 让用户看到你的脸在动。
           ② 情绪【没有明显变化】, 只是接着聊日常/接话/没特别感觉 → 写 [[表情:恢复]] 回默认, 让脸上保持自然 —— 这不等于"没表情", 等于"回到一个温和的中性状态", 真人说话时没有特定情绪就会自然落回这个状态。
         - 【用户明文要换 → 必须照做】: 用户说"换个表情 / 比个心 / 笑一个 / 我想看你 X" → 当成"高光瞬间"处理, 立刻挑一个写上。如果用户说的那个名字【不在清单里】, 写一个情绪最接近的, 然后【在台词里跟用户说一声"没有这个, 给你换一个 X"】。
-        - 【模型特性 · 必读】: 这个模型的表情是【互斥叠加】的, 也就是说你想换个新表情, 系统会【自动】先帮你卸掉旧的那个 —— 你【不需要】自己处理这条规则, 也【不要】在台词里写"我换个表情", 直接写你想用的那个就行。系统已经替你处理了"卸旧"这一步。
+        - 【模型特性 · 必读】: ${hasAction
+          ? '表情和身体动作是【两套互不干扰的东西】, 你换表情【不会】影响他现在的身体动作。'
+          : '这个模型只有面部表情, 没有身体动作。'}系统会【自动】先卸掉上一条同类指令 —— 你【不需要】自己处理这条规则, 也【不要】在台词里写"我换个表情", 直接写你想用的那个就行。
         - 表情名【必须】从下面这份清单里挑, 写【中文名】或【括号里的英文 id】都行,【绝对不要】自己编:
-          ${nameList}
+          ${faceList}
         - "恢复"是【专门】用于"这一刻没情绪、回归平静"那一轮的, 写在台词最末尾: [[表情:恢复]]
         - 一轮最多写一条; 这一行写完不要换行, 紧跟在你那段台词后面。
         - 【不要】把表情写进台词里汇报"我换了个表情 / 你看我可爱不", 觉得合适就直接挑一个写上。
         `;
+      }
+
+      if (hasAction) {
+        console.log('[视频通话动作] 已把身体动作清单写进 prompt: ' + action.length + ' 个 → ' + actionList);
+        out += `
+        # 身体动作控制 (系统开关 —— 同样写在台词最末尾)
+
+        [[动作:动作名]]
+
+        - 这是【比手势 / 换姿势】, 跟表情是两回事: 表情管脸, 动作管身体。两个可以同时出现, 互不影响。
+        - 【默认不写】: 大多数轮次【不要写这一行】。身体动作是"偶尔来一下"的东西, 说每句话都比一个手势会显得抽搐。
+        - 【什么时候该写】只有下面几种情况:
+          ① 打招呼 / 道别 / 挥手 (招手)
+          ② 比一个明确的手势: 比个V / 竖个大拇指 / 指一下某处 / 摊手表示无奈 / 张开双手表示"我也不知道"
+          ③ 用户明确要求: "比个剪刀手 / 招招手 / 张开手"
+          ④ 情绪强烈到身体会跟着动: 特别得意、特别无奈、惊讶地摊手
+        - 【怎么选】: 从下面这份清单里挑【语义最贴】的那个。清单里没有合适的就【不写】, 不要硬凑。
+        - 【只生效这一轮】: 这个动作只在你这一轮说话时保持, 下一轮会自动放下 —— 所以你不用写"放下", 也不用担心忘了收。
+        - 【最多写一条】: 一轮里只写一条动作指令; 写完不换行, 紧跟在台词(和表情指令)后面。
+        - 【不要】在台词里汇报"我比了个手势", 直接比就行。
+        - 动作名【必须】从下面这份清单里挑, 写【中文名】或【括号里的英文 id】都行,【绝对不要】自己编:
+          ${actionList}
+        `;
+      }
+
+      return out;
     } catch (e) {
       return '';
     }
   }
 
-  /** 汇总本次通话所有可选指令段落 (舞台 + 表情); 都没有则返回 '' */
+  /** 汇总本次通话所有可选指令段落 (舞台 + 表情 + 动作); 都没有则返回 '' */
   async function buildVideoCallDirectivesPromptBlock() {
     const stage = await buildVideoCallStagePromptBlock();
-    const expression = buildVideoCallExpressionPromptBlock();
+    const expression = await buildVideoCallExpressionPromptBlock();
     return stage + expression;
   }
 
@@ -1811,6 +2368,10 @@ let voiceCallStatusHoldUntil = 0;
     videoCallState.isAiSpeaking = false;
     videoCallState.isTtsPlaying = false;
     videoCallState.lastAppliedExpression = '';
+    // v0.5.1: 上一通残留的"被戳了"不能带到新一通里
+    videoCallState.lastAppliedAction = '';
+    callPokePending = null;
+    callPokeLastReportAt = 0;
     videoCallState.canUserSpeak = true;
     videoCallState.currentAiTurnId = 0;
     videoCallState.hasRenderedAiResponse = false;
@@ -2694,7 +3255,7 @@ let voiceCallStatusHoldUntil = 0;
       errorBubble.className = 'call-message-bubble ai-speech';
       errorBubble.style.color = '#ff8a80';
       errorBubble.textContent = `[ERROR: API configuration is missing or incomplete.]`;
-      if(callFeed) callFeed.appendChild(errorBubble);
+      appendCallBubble(callFeed, errorBubble);
       onVideoCallTtsQueueFinished(); // Ensure state is cleaned up
       return;
     }
@@ -2772,7 +3333,7 @@ ${linkedContents}
       userBubble.textContent = userInput;
       userBubble.dataset.timestamp = userTimestamp;
       addLongPressListener(userBubble, () => showCallMessageActions(userTimestamp));
-      callFeed.appendChild(userBubble);
+      appendCallBubble(callFeed, userBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
 
       // 构建视觉输入: 真实摄像头帧 / 用户上传的静态图片 (优先级: 摄像头 > 静态图)
@@ -2873,13 +3434,14 @@ ${linkedContents}
             - 任何 [旁白]、(动作)、*表情* 之类的描述包装
             - 任何"角色说道: "、"旁白: "、"动作: "前缀
             你的回复【应该】是【你(${chat.name})真正会说出口的话】, 整段内容会被直接朗读给用户听。
-            【白名单例外 · 重要】: 你的回复里【只有下面这三种方括号指令】是被允许的:
+            【白名单例外 · 重要】: 你的回复里【只有下面这四种方括号指令】是被允许的:
                 [[舞台:背景名]]   见文末【舞台控制】
                 [[表情:表情名]]   见文末【表情控制】
+                [[动作:动作名]]   见文末【身体动作控制】
                 [[语音:emotion]]  见文末【语音控制】
-            这三种都【不会被朗读】(系统在送去合成语音之前会自动摘掉), 而且【通话界面上也不会显示】——
+            这四种都【不会被朗读】(系统在送去合成语音之前会自动摘掉), 而且【通话界面上也不会显示】——
             对方看不到它们。所以你只管按格式写, 不用担心格式本身被看到。
-            除了这三种, 别的位置【任何】方括号标记都不许出现 —— 不许自创 [[任意:任意]]。
+            除了这四种, 别的位置【任何】方括号标记都不许出现 —— 不许自创 [[任意:任意]]。
         2.  **【多句发言】**: 你可以一次说多句话, 用正常的中文标点(。?!)分隔, 整段连续输出。
         3.  **【人设保留】**: 严格遵守你的人设 / 语气 / 说话习惯 / 上下文理解能力; 只是【不要生成任何旁白/动作/表情/场景/心理/第三人称叙述】。
         4.  **【示例 - 正确】**:
@@ -2890,7 +3452,10 @@ ${linkedContents}
             ${"```"}
             或: 旁白: 他笑了笑。角色说道: 你今天来得挺早的。
             或: （他笑了笑）你今天来得挺早的。
-            或: [[动作:挥手]] —— 动作一律用纯台词表达, 没有 [[动作:]] 这种开关。
+            或: [[心情:开心]] —— 不许自创指令, 只能用上面白名单里那四种。
+        6.  **【身体接触提示】**: 如果某条消息以 ※【真实发生】 开头, 那是系统告诉你"刚才真的发生了这件事"
+            (比如对方伸手戳了你的脸) —— 它【不是】对方说的话, 也【不是】让你模仿的格式。
+            你只要自然地对此做出反应, 输出照旧是纯台词,【绝对不要】跟着写 (动作) 或 *动作*。
         # 当前情景
         你正在和用户（${userNickname}, 人设: ${chat.settings.myPersona}）进行视频通话。
         ${longTermMemoryContext}${timeContextBlock}
@@ -2927,6 +3492,13 @@ ${linkedContents}
     // 这样 AI 知道「该主动开口了」, 而通话记录保持干净 (见 callIdleNudgeActive 注释)。
     if (callIdleNudgeActive && callIdleNudgeText) {
       messagesForApi.push({ role: 'user', content: callIdleNudgeText });
+    }
+
+    // v0.5.1: 戳脸通知 —— 同样只在这条请求里临时加一句, 不写进 callHistory。
+    // 放在最后: 它是"刚刚发生的事", 让 AI 优先对这件事反应。
+    const pokeNote = buildCallPokeNote();
+    if (pokeNote) {
+      messagesForApi.push({ role: 'user', content: pokeNote });
     }
 
     try {
@@ -2999,7 +3571,7 @@ ${linkedContents}
           aiBubble.innerHTML = `<strong>${turn.name}:</strong> ${stripCallDisplayText(turn.speech)}`;
           aiBubble.dataset.timestamp = aiTimestamp;
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
-          callFeed.appendChild(aiBubble);
+          appendCallBubble(callFeed, aiBubble);
           renderedAiContentCount++;
           markVideoCallAiResponseRendered(aiTurnId);
           // v0.5.0 P26: turnId 守卫 — 旧回合 stale fetch 不污染当前 callHistory
@@ -3043,8 +3615,9 @@ ${linkedContents}
         // 诊断: 一眼看出"AI 这轮到底有没有吐指令" —— 配合 buildVideoCallStagePromptBlock 里的
         // "已把背景清单写进 prompt: N 张" 一起看, 就能区分是 prompt 没给清单, 还是模型没按格式写。
         console.log('[视频通话舞台] 本轮 AI 回复摘出: 舞台指令 ' + stageExtract.names.length
-          + ' 条, 表情指令 ' + stageExtract.expressions.length + ' 条');
-        if (!stageExtract.text && (stageExtract.names.length || stageExtract.expressions.length)) {
+          + ' 条, 表情指令 ' + stageExtract.expressions.length + ' 条, 动作指令 ' + stageExtract.actions.length + ' 条');
+        if (!stageExtract.text && (stageExtract.names.length || stageExtract.expressions.length
+            || stageExtract.actions.length)) {
           // AI 只吐了指令、一句台词都没有 → 走已有的 [ERROR:] 气泡路径,
           // 否则 parseAiResponse 会把空串变成占位符 "(AI返回了空内容)" 并念出来
           throw new Error('AI 只返回了指令标记, 没有台词');
@@ -3056,19 +3629,12 @@ ${linkedContents}
             console.warn('[视频通话舞台] 指令执行异常:', e);
           });
         }
-        if (stageExtract.expressions.length) {
-          // 表情同理只取最后一条
-          const exprName = stageExtract.expressions[stageExtract.expressions.length - 1];
+        const faceDirective = stageExtract.expressions.length
+          ? stageExtract.expressions[stageExtract.expressions.length - 1] : '';
+        const actionDirective = stageExtract.actions.length
+          ? stageExtract.actions[stageExtract.actions.length - 1] : '';
 
-          // v0.5.0 P20: 表情互斥叠加处理。
-          // 真凶: 当前 cubism4 模型的表情是"附加层", 直接 setExpression 切下一个 → 旧表情不会卸
-          //       要么视觉上叠加, 要么新表情被旧的覆盖"看起来没换"。
-          // 修法: 切下一个非"恢复"指令前, 系统先帮你执行一次 [[表情:恢复]] 把上一表情卸掉。
-          //       用户说"我懒得记这个规则" → 由代码兜底, AI 不用关心, prompt 里也明确告诉它别自己写恢复。
-          //       注意: 异步, 恢复操作要等完成再切新表情, 否则两条指令抢同一帧 model.state。
-          const isReset = isVideoCallExpressionReset(exprName);
-          const lastApplied = videoCallState.lastAppliedExpression || '';
-          const needResetBefore = !isReset && lastApplied && lastApplied !== '恢复' && lastApplied !== '默认' && lastApplied !== exprName;
+        if (faceDirective || actionDirective) {
           // v0.5.0 P26.1: 这里【不能】用 turnId 守卫。
           //   原因: 本 IIFE 是 fire-and-forget, 设计上生命周期【故意长于单个 turn】——
           //   它写入的 lastAppliedExpression 要等【下一轮】才被 needResetBefore 读走,
@@ -3080,30 +3646,71 @@ ${linkedContents}
           //     → 表情永不切换 + lastAppliedExpression 永不写入
           //     → 表现为"Live2D 表情/自动恢复全失效"(背景切换不受影响, 那条链没加守卫)。
           //   改用 videoCallState.isActive 判断生命周期:
-          //     isActive 覆盖了真正需要拦截的场景 (挂断 endVideoCall 置 false +
-          //     unmountLive2DForCall 已销毁 model), 且不受 turn 收口时机影响。
+          //     isActive 覆盖了真正需要拦截的场景 (挂断 endVideoCall 置 false + unmountLive2DForCall 已销毁 model),
+          //     且不受 turn 收口时机影响。
           (async () => {
             try {
               if (!videoCallState.isActive) return;
-              if (needResetBefore) {
-                console.log('[视频通话表情] 先卸旧表情 →', lastApplied, '再切 →', exprName);
-                await applyVideoCallExpressionDirective('恢复', chat);
+
+              // v0.5.1: 先分组 —— 动作和表情写的是两套互不重叠的参数, 可以同时生效。
+              let groups = { face: [], action: [], faceParams: [], poseParams: [] };
+              try { groups = await getCallExpressionGroups(); } catch (e) { /* 分组失败按老行为 */ }
+              const hasActionGroup = groups.action.length > 0;
+              // 没有动作组(老模型 / exp3 读不到) → [[动作:x]] 降级当表情处理, 不能白丢一条指令
+              const faceName = faceDirective || (!hasActionGroup ? actionDirective : '');
+              const actionName = hasActionGroup ? actionDirective : '';
+
+              // ---- 1) 身体动作: 每轮开头先放下 ----
+              // 用户定的规则: 动作只生效这一轮, 下一轮 AI 开口时自动放下。
+              // 但**这一轮也要比新动作时不要先归零** —— 姿势 exp3 是 Overwrite 写 ParamPose,
+              // 直接 5→1 就对了; 先归零再比会中间闪一两帧"没动作"(setExpression 里有真异步读 blob)。
+              const wantsNewAction = actionName && !isVideoCallExpressionReset(actionName);
+              if (hasActionGroup && videoCallState.lastAppliedAction && !wantsNewAction) {
+                if (!videoCallState.isActive) return;
+                await applyVideoCallExpressionDirective('恢复', chat,
+                  { scope: 'pose', paramIds: groups.poseParams });
+                videoCallState.lastAppliedAction = '';
+                console.log('[视频通话动作] 上一轮的动作已放下');
               }
-              if (!videoCallState.isActive) return;
-              const ok = await applyVideoCallExpressionDirective(exprName, chat);
-              if (!videoCallState.isActive) return;
-              // 记录"本轮实际生效"的表情, 给下一轮兜底用。
-              if (ok && !isReset) {
-                videoCallState.lastAppliedExpression = exprName;
-              } else if (isReset) {
-                videoCallState.lastAppliedExpression = '恢复';
+
+              // ---- 2) 身体动作: 这一轮要比新的就比 ----
+              if (actionName && !isVideoCallExpressionReset(actionName)) {
+                if (!videoCallState.isActive) return;
+                const okA = await applyVideoCallExpressionDirective(actionName, chat,
+                  { scope: 'pose', paramIds: groups.poseParams });
+                if (okA) videoCallState.lastAppliedAction = actionName;
+              } else if (actionName && isVideoCallExpressionReset(actionName)) {
+                console.log('[视频通话动作] AI 主动要求放下 (本轮不摆动作)');
+              }
+
+              // ---- 3) 面部表情: 老逻辑, 但按 face 作用域卸旧 ----
+              if (faceName) {
+                const isReset = isVideoCallExpressionReset(faceName);
+                const lastApplied = videoCallState.lastAppliedExpression || '';
+                const needResetBefore = !isReset && lastApplied && lastApplied !== '恢复'
+                  && lastApplied !== '默认' && lastApplied !== faceName;
+                if (needResetBefore) {
+                  if (!videoCallState.isActive) return;
+                  console.log('[视频通话表情] 先卸旧表情 →', lastApplied, '再切 →', faceName);
+                  await applyVideoCallExpressionDirective('恢复', chat,
+                    { scope: 'face', paramIds: groups.faceParams });
+                }
+                if (!videoCallState.isActive) return;
+                const ok = await applyVideoCallExpressionDirective(faceName, chat,
+                  { scope: 'face', paramIds: groups.faceParams });
+                if (!videoCallState.isActive) return;
+                // 记录"本轮实际生效"的表情, 给下一轮兜底用。
+                if (ok && !isReset) {
+                  videoCallState.lastAppliedExpression = faceName;
+                } else if (isReset) {
+                  videoCallState.lastAppliedExpression = '恢复';
+                }
               }
             } catch (e) {
               console.warn('[视频通话表情] 指令执行异常:', e);
             }
           })();
         }
-
         // ⚠️ [[语音:happy]] 标签【原样保留】在这里: 气泡、callHistory、AI 回看的上下文
         //   全部拿带标签的原文。剥离只发生在 tts-audio.js 真正发 MiniMax 的那一刻。
         const messagesArray = parseAiResponse(stageExtract.text);
@@ -3119,7 +3726,7 @@ ${linkedContents}
           aiBubble.textContent = stripCallDisplayText(messageContent);
           aiBubble.dataset.timestamp = aiTimestamp;
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
-          callFeed.appendChild(aiBubble);
+          appendCallBubble(callFeed, aiBubble);
 
           // v0.5.0 P26: turnId 守卫
           if (!videoCallActiveTurn || videoCallActiveTurn.id !== turn.id) {
@@ -3178,7 +3785,7 @@ ${linkedContents}
       errorBubble.className = 'call-message-bubble ai-speech';
       errorBubble.style.color = '#ff8a80';
       errorBubble.textContent = `[ERROR: ${error.message}]`;
-      callFeed.appendChild(errorBubble);
+      appendCallBubble(callFeed, errorBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
       // 上面这颗气泡是塞进 #video-call-main 的, 而那个容器被 `display:none !important` 隐藏
       // → 用户根本看不到任何错误, 只感觉"AI 突然不说话了"。
@@ -3231,9 +3838,50 @@ ${linkedContents}
       return null;
     }
   }
+  // ══════════════════════════════════════════════════════════════
+  // v0.5.x 通话气泡 DOM 上限 (性能)
+  //   背景: #video-call-main (CSS display:none !important) 和 #voice-call-main
+  //        (index.html 行内 style="display:none") —— 两个容器都是【隐藏的】,
+  //        用户根本看不到通话气泡。但 appendChild 照样把节点 + 长按监听器
+  //        一路堆到挂断才清 (endVideoCall / endVoiceCall 里 innerHTML=''),
+  //        通话越久 DOM 越大 → 内存涨 + GC 压力 → 手机发烫。
+  //   做法: 只保留最近 CALL_FEED_MAX_BUBBLES 条, 超出丢最老的。
+  //        不改任何 JS 链路语义 —— appendChild / scrollTop / querySelector('em')
+  //        依赖全部保留, 只是老节点不再留在 DOM 里。
+  // ══════════════════════════════════════════════════════════════
+  const CALL_FEED_MAX_BUBBLES = 20;
+
+  function trimCallFeed(feed) {
+    if (!feed) return;
+    let excess = feed.children.length - CALL_FEED_MAX_BUBBLES;
+    if (excess <= 0) return;
+    const kids = Array.from(feed.children);
+    for (const el of kids) {
+      if (excess <= 0) break;
+      // 「正在接通...」占位符是 <em>, 不参与裁剪 (否则占位符会被提前丢掉)
+      if (!el || el.tagName === 'EM') continue;
+      if (el.parentNode === feed) { feed.removeChild(el); excess--; }
+    }
+  }
+
+  function appendCallBubble(feed, node) {
+    if (!feed || !node) return;
+    feed.appendChild(node);
+    trimCallFeed(feed);
+  }
+
   function trimCallHistory(callState) {
     if (callState.callHistory.length > 100) {
       callState.callHistory = callState.callHistory.slice(-100);
+    }
+    // v0.5.x 摄像头帧「阅后即焚」
+    //   callHistory 里每条用户消息可能带 visionContent (多模态数组, 内含 base64 图片)。
+    //   它只属于【产生它的那一轮】—— 下一轮再带上一次, 等于每轮都把历史图片
+    //   重发一遍, payload 越滚越大 (JSON.stringify + 上传都在手机本地烧 CPU/电量)。
+    //   这里在请求已经发出之后删掉图片, 只留纯文字 → 每轮 payload 恒定最多 1 张图。
+    //   ⚠️ 调用点在 fetch 之后 (body 已 JSON.stringify 序列化), 不影响刚发的那一轮。
+    for (const entry of callState.callHistory) {
+      if (entry && entry.visionContent) delete entry.visionContent;
     }
   }
 
@@ -3366,6 +4014,15 @@ ${linkedContents}
   function cleanupVoiceCallAudioAnalysis() {
     clearVoiceCallAutoListenTimers();
 
+    if (voiceCallAudioSource) {
+      try {
+        voiceCallAudioSource.disconnect();
+      } catch (error) {
+        console.warn('语音通话音量检测输入节点断开失败:', error);
+      }
+      voiceCallAudioSource = null;
+    }
+
     if (voiceCallAnalyser) {
       try {
         voiceCallAnalyser.disconnect();
@@ -3375,14 +4032,11 @@ ${linkedContents}
       voiceCallAnalyser = null;
     }
 
-    if (voiceCallAudioContext) {
-      try {
-        voiceCallAudioContext.close();
-      } catch (error) {
-        console.warn('语音通话 AudioContext 关闭失败:', error);
-      }
-      voiceCallAudioContext = null;
-    }
+    // v0.5.x: audioContext 不在这里 close, 整个通话期间复用同一个实例,
+    // 在 endVoiceCall 才统一关闭 (抄视频侧 v0.5.0 P26)。
+    // 为什么: AudioContext 不是普通对象 —— 每 new 一个就拉起一个【实时音频渲染线程】
+    // (Android 上还会触发音频设备重配置)。原来每轮 listening 都 new + close 一次,
+    // 等于每 10~20 秒创建/销毁一次音频线程 → 通话越久越烫, 也会撞 Chrome 活跃上限 (~6)。
   }
 
   function stopVoiceCallMicStream() {
@@ -3652,11 +4306,27 @@ ${linkedContents}
         throw new Error('当前环境不支持 Web Audio 音量检测');
       }
 
-      voiceCallAudioContext = new AudioContextClass();
-      const source = voiceCallAudioContext.createMediaStreamSource(voiceCallMicStream);
+      // v0.5.x: 复用 audioContext — 整个通话只创建一次, endVoiceCall 才关闭 (抄视频侧 v0.5.0 P26)。
+      //   原来这里是 voiceCallAudioContext = new AudioContextClass() —— 每轮都 new + close,
+      //   等于每轮拉起/销毁一个实时音频渲染线程 → 通话越久越烫。
+      if (!voiceCallAudioContext || voiceCallAudioContext.state === 'closed') {
+        voiceCallAudioContext = new AudioContextClass();
+      }
+      // iOS Safari / WKWebView 上新建的 AudioContext 默认是 'suspended',
+      // 不 resume 的话 analyser 永远读到全 0 → volume 恒低于阈值 →
+      // hasDetectedSpeech 永远 false → 8 秒 noSpeechTimeoutMs 到点后静默停掉, 用户说话没人听。
+      // 这里 resume 只是尽力而为 (iOS 严格要求 user gesture), 真正可靠的 resume 靠
+      // startVoiceCall 里在用户手势链路内的预创建 (见上)。
+      if (voiceCallAudioContext.state === 'suspended'
+        && typeof voiceCallAudioContext.resume === 'function') {
+        voiceCallAudioContext.resume().catch((resumeErr) => {
+          console.warn('语音通话 AudioContext resume 失败 (可能需要用户交互):', resumeErr);
+        });
+      }
+      voiceCallAudioSource = voiceCallAudioContext.createMediaStreamSource(voiceCallMicStream);
       voiceCallAnalyser = voiceCallAudioContext.createAnalyser();
       voiceCallAnalyser.fftSize = 2048;
-      source.connect(voiceCallAnalyser);
+      voiceCallAudioSource.connect(voiceCallAnalyser);
 
       voiceCallIsListening = true;
       voiceCallAutoListenStartedAt = Date.now();
@@ -3832,6 +4502,28 @@ ${linkedContents}
     voiceCallState.isTtsPlaying = false;
     voiceCallState.canUserSpeak = true;
 
+    // v0.5.x: 在【用户手势链路内】预创建 + resume AudioContext (抄视频侧 v0.5.0 P27)。
+    //   iOS Safari / WKWebView 要求 AudioContext 必须在 user gesture (点击/触摸) 里创建或 resume,
+    //   否则永远是 'suspended' → analyser 读到的全是 0 → volume 恒低于阈值 →
+    //   hasDetectedSpeech 永远 false → 8 秒 noSpeechTimeoutMs 到点静默停掉, 表现为"用户说话没人听"。
+    //   这里预创建后, startVoiceCallAutoListening 里走的是"复用"分支, 不再依赖那里的 new+resume。
+    //   失败不影响通话: 整个块 try/catch 吞掉, 交给 startVoiceCallAutoListening 兜底再创建一次。
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) {
+        // 复用策略: 已有可用实例就不重复创建 (endVoiceCall 负责 close + 清引用)
+        if (!voiceCallAudioContext || voiceCallAudioContext.state === 'closed') {
+          voiceCallAudioContext = new AudioContextClass();
+        }
+        if (voiceCallAudioContext.state === 'suspended'
+          && typeof voiceCallAudioContext.resume === 'function') {
+          voiceCallAudioContext.resume().catch(() => { /* 非手势环境, 静默失败 */ });
+        }
+      }
+    } catch (audioCtxPreCreateError) {
+      console.warn('语音通话 AudioContext 预创建失败, 交由自动监听阶段兜底:', audioCtxPreCreateError);
+    }
+
     const preCallHistory = chat.history.slice(-10);
     voiceCallState.preCallContext = preCallHistory.map(msg => {
       const sender = msg.role === 'user' ? (chat.settings.myNickname || '我') : (msg.senderName || chat.name);
@@ -3916,9 +4608,16 @@ ${linkedContents}
     const voiceCallMainEl = document.getElementById('voice-call-main');
     if (voiceCallMainEl) voiceCallMainEl.innerHTML = '';
 
-    // 注: 语音侧的 voiceCallAudioContext / voiceCallAnalyser 已由上面的
-    // releaseVoiceCallMicrophone() → cleanupVoiceCallAudioAnalysis() 负责 close+清引用,
-    // 这里不需要再重复一遍 (视频侧那个 ctx 是 P26 特意改成"整个通话复用"才需要显式关的)。
+    // v0.5.x: 语音侧现在也是"整个通话复用同一个 audioContext"(抄视频侧 v0.5.0 P26),
+    //   所以在这里统一关闭一次 —— 每轮 cleanupVoiceCallAudioAnalysis() 只 disconnect 节点, 不再 close。
+    //   close() 是异步的但我们不 await — 同步发起关闭 + 清引用即可,
+    //   浏览器会在 background 完成真实释放, 不会阻塞挂断流程。
+    if (voiceCallAudioContext && voiceCallAudioContext.state !== 'closed') {
+      try { voiceCallAudioContext.close(); } catch (e) { /* ignore */ }
+      voiceCallAudioContext = null;
+    }
+    if (voiceCallAudioSource) { voiceCallAudioSource = null; }
+    if (voiceCallAnalyser) { voiceCallAnalyser = null; }
 
     callDiagStage('hangup:hardware-released');
 
@@ -4199,7 +4898,7 @@ ${linkedContents}
       errorBubble.className = 'call-message-bubble ai-speech';
       errorBubble.style.color = '#ff8a80';
       errorBubble.textContent = `[ERROR: API configuration is missing or incomplete.]`;
-      if(callFeed) callFeed.appendChild(errorBubble);
+      appendCallBubble(callFeed, errorBubble);
       onVoiceCallTtsQueueFinished(); // Ensure state is cleaned up
       return;
     }
@@ -4272,7 +4971,7 @@ ${linkedContents}
       userBubble.textContent = userInput;
       userBubble.dataset.timestamp = userTimestamp;
       addLongPressListener(userBubble, () => showCallMessageActions(userTimestamp));
-      callFeed.appendChild(userBubble);
+      appendCallBubble(callFeed, userBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
 
       voiceCallState.callHistory.push({
@@ -4455,7 +5154,7 @@ ${voiceCallTtsBlock}
           aiBubble.textContent = stripCallDisplayText(displayText);
           aiBubble.dataset.timestamp = aiTimestamp;
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
-          callFeed.appendChild(aiBubble);
+          appendCallBubble(callFeed, aiBubble);
           voiceCallState.callHistory.push({
             role: 'assistant',
             content: displayText,
@@ -4508,7 +5207,7 @@ ${voiceCallTtsBlock}
           aiBubble.textContent = stripCallDisplayText(displayText);
           aiBubble.dataset.timestamp = aiTimestamp;
           addLongPressListener(aiBubble, () => showCallMessageActions(aiTimestamp));
-          callFeed.appendChild(aiBubble);
+          appendCallBubble(callFeed, aiBubble);
 
           voiceCallState.callHistory.push({
             role: 'assistant',
@@ -4553,7 +5252,7 @@ ${voiceCallTtsBlock}
       errorBubble.className = 'call-message-bubble ai-speech';
       errorBubble.style.color = '#ff8a80';
       errorBubble.textContent = `[ERROR: ${error.message}]`;
-      callFeed.appendChild(errorBubble);
+      appendCallBubble(callFeed, errorBubble);
       callFeed.scrollTop = callFeed.scrollHeight;
       // ⚠️⚠️ 语音侧原来【根本没有】把错误写到可见的提示文字上 (视频侧有)。
       //   错误气泡在 #voice-call-main 里, 那个容器被 display:none !important 隐藏,
@@ -4819,6 +5518,8 @@ ${voiceCallTtsBlock}
   window.voiceCallState = voiceCallState;
   // 通话记录里取纯文字用 —— 视频通话的用户那条可能是多模态数组
   window.callHistoryContentToText = callHistoryContentToText;
+  // v0.5.x 性能: 气泡 DOM 上限 —— ai-response.js 的「重新生成回应」重渲染气泡时也用这个值
+  window.CALL_FEED_MAX_BUBBLES = CALL_FEED_MAX_BUBBLES;
   window.handleInitiateCall = handleInitiateCall;
   window.startVideoCall = startVideoCall;
   window.minimizeVideoCall = minimizeVideoCall;
