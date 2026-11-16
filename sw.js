@@ -1303,7 +1303,7 @@
 //   ⑤ endVoiceCall: 统一 close 一次 + 清引用。
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.86 → 0.0.87。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.125.0';
+const CACHE_VERSION = 'v0.2.126.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

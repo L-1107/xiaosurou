@@ -2828,18 +2828,14 @@
    - 父 #video-call-screen 的 flex column 布局
    ============================================================ */
 #video-call-screen .video-call-controls {
-    width: 380px;
-    max-width: 92%;
-    /* 居中: 父 #video-call-screen 是 absolute + flex/column + align-items:stretch,
-       单纯 align-self:center + margin:0 auto 在 puppeteer 实测里被拉成 left:0 + width:312 (x:0)
-       改用绝对定位 left:50% + transform 自我位移, 100% 居中且不依赖父布局 */
+    /* v0.5.x P28: 底部铺满 —— 宽度 100% 顶到屏幕两侧, 贴底, 不再居中留边。
+       P27.1 那版「上移 64px」被用户实机否掉了: 挪位置只是把「断腿」换成
+       「底下空一截没腿」, 观感更糟。现在改成整个底部被底板盖住。 */
+    width: 100%;
     position: absolute;
-    left: 50%;
-    /* v0.5.x P27.1: 整体上移 64px —— 底板往上顶, 多挡住半身皮套那截短腿。
-       ⚠️ 这个值必须跟 #video-call-controls-frame 的 bottom 完全一样:
-       两个盒子要重合, 按钮的百分比定位才是同一个坐标系。 */
-    bottom: 64px;
-    transform: translateX(-50%);
+    left: 0;
+    bottom: 0;
+    transform: none;
     margin: 0;
     /* v0.5.x P27: 换新素材 (奶黄底板 + 三个小动物按钮, 1774x887, 比例 2.0)
        ------------------------------------------------------------
@@ -2856,7 +2852,9 @@
          两边都是 width:380 + max-width:92% + aspect-ratio:2/1 + left:50%
          + translateX(-50%) + bottom:0 → 任何屏宽下两者完全重合,
          素材永远等比不拉伸, 按钮百分比定位也跟着一起缩放。 */
-    aspect-ratio: 2 / 1;
+    /* v0.5.x P28: 新素材 1536x1024 (比例 1.5), 中间是实心奶油色 253,244,222,
+       四周云朵+缎带包边。铺满后高度 = 屏宽/1.5 → 390 宽屏 = 260px (占屏高 30.8%) */
+    aspect-ratio: 3 / 2;
     height: auto;
     padding: 0;
     display: block;
@@ -2892,31 +2890,51 @@
            left 58/150/242 → 15.26% / 39.47% / 63.68%
            top 50/190 = 26.32% */
     position: absolute;
-    /* 热区 21% x 40% = 显示 79.8 x 76px, 略大于图案 → 保证图案每个像素都能点到,
-       同时相邻热区间隔仍有 8px 左右, 互不重叠。 */
-    width: 21%;
-    height: 40%;
-    top: 30%;
+    /* v0.5.x P28: 新素材里**没有画按钮**, 三个按钮图案是从旧合成图裁出来的独立
+       圆形 PNG, 用 background 贴在热区上。
+       显示直径 = 20% 容器宽 → 390 宽屏 = 78px。
+       为什么用 aspect-ratio:1/1 而不是 height:百分比:
+         容器比例从 2:1 变成 3:2 后, 20% 宽换算成高是 30%, 写死百分比
+         换屏宽就会变成椭圆。aspect-ratio 保证永远是正圆。 */
+    width: 20%;
+    aspect-ratio: 1 / 1;
+    height: auto;
+    /* v0.5.x P28.1: 圆心从「底部台面 80%」挪到「框内留白区正中 44%」——
+       贴在底边时框中间一大片奶油是空的, 头重脚轻; 放中间后视觉重心才平衡。
+       29% = 44% - 半径 15% */
+    top: 29%;
     /* border-radius 用 0: 圆角会让部分浏览器把命中区域裁成圆/椭圆,
-       云朵造型的四角就点不到了。按钮是透明的, 圆角没有视觉意义。 */
+       按钮外圈的星星装饰就点不到了。按钮图案本身是圆的, 圆角没有视觉意义。 */
     border-radius: 0;
     background: none;
+    /* 三个按钮各自的图案在下面按 id 单独指定 */
     background-image: none;
+    background-repeat: no-repeat;
+    background-position: center center;
+    background-size: 100% 100%;
     box-shadow: none;
     /* 按下反馈: 缩放时素材里的图案不会跟着缩 (它在背景图里),
        所以给按钮一个轻微的缩放, 至少让用户知道点到了 */
     transition: transform 0.12s ease;
 }
 
-/* 三个按钮的精确位置 — 对齐素材里的图案 (实测自 1774x887 素材) */
+/* 三个按钮的精确位置 — 对齐新素材底部的展示台
+   ------------------------------------------------------------
+   横向: 圆心 27% / 50% / 73% (宽 20% → left = 圆心 - 10%)
+         间距 23% = 390 屏上 89.7px, 按钮 78px → 间隙 11.7px 不拥挤
+   纵向: top 65% (圆心 80%, 落在底部展示台台面上)
+   图案: 各自一张圆形 PNG (从旧合成图裁出, 圆外透明) */
 #video-call-screen #hang-up-btn {
-    left: 16.5%;
+    left: 17%;
+    background-image: url('../assets/live2d-call/btn-hangup.png');
 }
 #video-call-screen #model-manage-btn {
     left: 40%;
+    background-image: url('../assets/live2d-call/btn-model.png');
 }
 #video-call-screen #regenerate-call-btn {
     left: 63%;
+    background-image: url('../assets/live2d-call/btn-camera.png');
 }
 
 /* v0.5.x P27: 视频通话「控制外框」— 奶黄底板 + 三个小动物按钮 (整张 PNG)
@@ -2934,23 +2952,18 @@
    不影响: 视频画面 / Live2D canvas / 摄像头 / 状态文字 / 任何其他 UI */
 #video-call-screen #video-call-controls-frame {
     position: absolute;
-    left: 50%;
-    /* v0.5.x P27.1: 整体上移 64px (跟 .video-call-controls 的 bottom 一样, 两盒子必须重合) */
-    bottom: 64px;
-    transform: translateX(-50%);
-    width: 380px;
-    /* max-width 跟 .video-call-controls 保持一致 → 窄屏时两者被同一个
-       92% 上限收窄, 中心仍然重合 */
-    max-width: 92%;
-    /* v0.5.x P27: 素材换成 1774x887 (比例 2.0), 380 / 2.0 = 190 → 等比不拉伸。
-       旧素材 2032x774 (比例 2.625) 强行拉成 380x220, 纵向被拉伸了 1.52 倍。
+    /* v0.5.x P28: 铺满 —— 跟 .video-call-controls 完全同一套盒子参数 (left:0 /
+       bottom:0 / width:100% / aspect-ratio 3:2), 两边必须逐项一致才能重合。 */
+    left: 0;
+    bottom: 0;
+    transform: none;
+    width: 100%;
+    /* v0.5.x P28: 素材换成 1536x1024 (比例 3:2) —— 中间实心奶油色, 四周云朵包边。
+       宽度 100% → 高度 = 屏宽/1.5, 390 宽屏 = 260px。
 
-       ⚠️ 用 aspect-ratio 而不是写死 height:190px:
-         max-width:92% 在窄屏上会把宽度收窄, 如果 height 写死 190,
-         素材就被压扁 (拉伸变形), 而且按钮的百分比 top 定位也跟着错。
-         aspect-ratio: 2/1 让高度跟随宽度自动等比缩放, 素材永远不变形,
-         按钮百分比定位也跟着素材一起缩放 → 任何屏宽都对齐。 */
-    aspect-ratio: 2 / 1;
+       ⚠️ 用 aspect-ratio 而不是写死 height:
+         写死像素换屏宽就压扁变形, 按钮的百分比定位也跟着错。 */
+    aspect-ratio: 3 / 2;
     height: auto;
     /* 花边素材本身不画在这里, 交给 ::after */
     background: none;
@@ -2983,12 +2996,32 @@
    每帧都要重新采样 + 14px 模糊, 在 iPhone 上是出了名的重。
    现在整层删除, 这个隐患自然消失 —— 没有 backdrop-filter 可以误开。 */
 
-/* 新素材 — 底板 + 三个按钮图案, 全部在一张图里, 一层搞定 */
+/* v0.5.x P28: 底部补色垫 —— 垫在素材下面, 把框底云朵弧形外的空隙遮住
+   ------------------------------------------------------------
+   新素材 (1536x1024) 的底边不是平直的: 实测 y=92% 还有 79% 宽的内容,
+   y=94% 只剩 51%, y=96% 只剩 3%, y>96% 全透明。
+   铺满屏幕底部时, 最下面那 ~4% (=10px) 的两个下角会漏出深色底, 看着像框没铺到底。
+   这里垫一条跟素材中心同色 (253,244,222) 的色块垫在 ::after 下面 (z-index 1),
+   云朵边缘的画在它上面 → 视觉上就是「框的底座一直铺到屏幕边」。
+   ⚠️ 只有靠下的那一条, 不要铺满整个盒子 —— 铺满会在框外多出一个奶油矩形。 */
+#video-call-screen #video-call-controls-frame::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 8%;
+    background: #fdf4de;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* v0.5.x P28: 底部框素材 (1536x1024, 真 PNG 带透明通道) */
 #video-call-screen #video-call-controls-frame::after {
     content: '';
     position: absolute;
     inset: 0;
-    background-image: url('../assets/live2d-call/视频通话正式页按钮框.png');
+    background-image: url('../assets/live2d-call/视频通话底部框.png');
     background-size: 100% 100%;
     background-repeat: no-repeat;
     background-position: center center;
