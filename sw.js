@@ -1342,7 +1342,17 @@
 //   index.html 的 ?v=：modules/init-crash-recovery.js 0.0.37 → 0.0.38。
 //   (init-crash-recovery.js 不在 URLS_TO_CACHE 清单里, 靠 ?v= 走 HTTP 缓存)
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.128.0';
+// v0.2.129.0 (2026-11-16): 聊天快捷功能按钮改造型 —— 图标下面带中文名。
+//   用户反馈"下方那一堆快捷按钮长得都很抽象, 靠图标猜不出功能, 对新手不友好"。
+//   根因实测: 21 个按钮被 flex 压到 **10px 宽**(容器 374px), 24px 的图标叠成一团;
+//     而且容器(css/video-voice-call.css:697)是「横滑 + 隐藏滚动条」, 手机上又没悬停看 title。
+//   ① 只改按钮自己: 54x50 圆角方块, 图标 22px + 下方 10px 中文名(name 由
+//      modules/init-features.js 注入 data-fn-label, CSS 用 ::after{content:attr()} 显示)。
+//   ② **容器一行没动**(用户明确要求: 后期美化会重排这排按钮, 不能改结构)。
+//      DOM 节点/id/顺序/applyButtonOrder 自定义排序 全部原样。
+//   index.html 的 ?v=：css/chat-ui.css 0.0.37 → 0.0.38、modules/init-features.js 0.0.46 → 0.0.47。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.129.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

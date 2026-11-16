@@ -326,29 +326,64 @@
                object-fit: contain;
            }
 
-           #chat-input-actions-top {
-               display: flex;
-               gap: 8px;
-               padding: 0 5px;
-           }
+           /* 2026-11-16: 快捷功能按钮 —— 只改「按钮自己的造型」。
+              容器 #chat-input-actions-top 一行都没动 (它由 css/video-voice-call.css:697
+              定义成一排可横向滑动、隐藏滚动条, 这里不去覆盖它)。
+              原来的问题: 按钮是 38px 圆形、只靠 title 提示, 21 个按钮在 374px 宽里
+              被 flex 压到 10px 宽 → 24px 图标叠成一坨, 手机又没有悬停, 只能靠猜。
+              现在: 「图标 + 中文名」的 54px 小方块 (名字由 modules/init-features.js
+              注入 data-fn-label)。DOM 节点/顺序/点击逻辑一律没动 ——
+              以后做美化要重排按钮, 把这一段整段替换即可。 */
 
            .chat-action-icon-btn {
-               font-size: 24px;
-               padding: 0;
-               width: 38px;
-               height: 38px;
-               line-height: 38px;
+               flex: 0 0 auto;
+               font-size: 22px;
+               padding: 7px 2px 5px;
+               width: 54px;
+               height: auto;
+               min-width: 0;
+               line-height: 1;
                text-align: center;
-               border-radius: 50%;
-               background-color: rgba(255, 255, 255, 0.5);
+               border-radius: 14px;
+               background-color: rgba(255, 255, 255, 0.55);
                color: var(--text-primary);
                backdrop-filter: blur(5px);
                -webkit-backdrop-filter: blur(5px);
                border: 1px solid rgba(0, 0, 0, 0.05);
                cursor: pointer;
                display: flex;
+               flex-direction: column;
+               gap: 3px;
                justify-content: center;
                align-items: center;
+               transition: transform 0.12s ease, background-color 0.2s ease;
+           }
+
+           .chat-action-icon-btn svg {
+               width: 22px;
+               height: 22px;
+               flex: none;
+           }
+
+           .chat-action-icon-btn:active {
+               transform: scale(0.94);
+           }
+
+           /* 图标下方的中文名（名称表在 modules/init-features.js） */
+           .chat-action-icon-btn::after {
+               content: attr(data-fn-label);
+               font-size: 10px;
+               font-weight: 400;
+               line-height: 1.1;
+               color: #6f6f74;
+               max-width: 100%;
+               white-space: nowrap;
+               overflow: hidden;
+               text-overflow: ellipsis;
+           }
+
+           #phone-screen.dark-mode .chat-action-icon-btn::after {
+               color: #a8a8ae;
            }
 
            /* 暂停调用按钮样式 */
