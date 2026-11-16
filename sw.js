@@ -1303,7 +1303,37 @@
 //   ⑤ endVoiceCall: 统一 close 一次 + 清引用。
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.86 → 0.0.87。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.126.0';
+// v0.2.126.0 (2026-11-16): 视频通话底部按钮框换云朵相框素材 + 铺满屏幕底部。
+//   用户给了新的透明 PNG 相框素材, 要求"铺满屏幕底部, 彻底遮住下面那截"。
+//   ① 素材正本 assets/live2d-call/视频通话底部框.png (1536x1024, 真 PNG 带 alpha,
+//      四角全透明), 原样使用未改像素。
+//   ② .video-call-controls 与 #video-call-controls-frame 一起从
+//      width:380px / max-width:92% / left:50% / bottom:64px / aspect-ratio:2/1
+//      改成 width:100% / left:0 / bottom:0 / transform:none / aspect-ratio:3/2
+//      —— 两个盒子必须同参数, 否则按钮热区与素材错位。
+//   ③ 三个按钮图案从旧合成图裁成独立圆形 PNG (btn-hangup / btn-model / btn-camera),
+//      .control-btn 改百分比定位 (20% 宽 + aspect-ratio:1/1, top:29%),
+//      left 17%/40%/63% → 水平间隙 11.7px。
+//   ④ 素材底边不是平直 (y>96% 全透明) → 加 ::before 奶油色补色垫 (bottom:0, height:8%),
+//      否则最底一行会漏出深色背景。
+//   index.html 的 ?v=：css/video-voice-call.css 0.0.52 → 0.0.53。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.127.0 (2026-11-16): 视频通话表情重新自动回默认 (只在"下一次 AI 说话前"恢复)。
+//   用户反馈"以前一轮对话结束会清掉上一句选的表情, 现在选了就再也不恢复"。
+//   查 git 确认不是这次改岔的: P22 (9cc98b8) 做过每轮强制回默认,
+//   e5cac19 (v0.5.0 P24) 按当时"要真人感、让 AI 自己判断情绪"的要求整段删除,
+//   只剩一段注释占位 —— 之后 AI 几乎不会主动写 [[表情:恢复]], 体感就是表情卡死在脸上。
+//   当时删它的另一条理由(「恢复执行层是空操作」)已不成立: P24 起恢复改走
+//   canvas._live2dInitialParams 参数快照还原, P28 的 resetParametersByScope 也已就位。
+//   ① 恢复时机 = 下一轮 AI 开始回应之前 (triggerAiInCallActionInner 内, 取 AI 配置之前),
+//      与老设计一致 —— 不是 TTS 播完那一刻, 也不是每说一句就清零。
+//   ② 只还原 face 组参数 (scope:'face' + getCallExpressionGroups().faceParams),
+//      不碰 pose 组 —— 动作/手势每轮有它自己的放下逻辑, 不能被连带卸掉。
+//   ③ 只有真的还原成功 (okBase) 才清空 lastAppliedExpression;
+//      失败 (模型还没挂载等) 保留记录下轮再试, 避免一次失败=永久卡住。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.88 → 0.0.89。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.127.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
