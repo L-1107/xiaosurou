@@ -1333,7 +1333,16 @@
 //      失败 (模型还没挂载等) 保留记录下轮再试, 避免一次失败=永久卡住。
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.88 → 0.0.89。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.127.0';
+// v0.2.128.0 (2026-11-16): 取消闪退后的「正常启动提示」弹窗。
+//   用户反馈"每次闪退以后都会弹出来一个丑丑的提示框", 不要了。
+//   ① init-crash-recovery.js: showCustomAlert/alert 那段长文案弹窗删掉, 改为 console.log。
+//      崩溃检测、心跳、快照、通话诊断记录(localStorage mavis-call-diag-v1) 全部不动 ——
+//      只是不再打扰用户; 需要复盘时开控制台仍能看到同一份文字。
+//   ② 数据安全提示不再打扰, 但"上次异常退出"依旧会 console.warn。
+//   index.html 的 ?v=：modules/init-crash-recovery.js 0.0.37 → 0.0.38。
+//   (init-crash-recovery.js 不在 URLS_TO_CACHE 清单里, 靠 ?v= 走 HTTP 缓存)
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.128.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
