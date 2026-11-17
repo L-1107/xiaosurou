@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="css/image-nai.css?v=0.0.36">
   <link rel="stylesheet" href="css/memory.css?v=0.0.36">
   <link rel="stylesheet" href="css/music-player.css?v=0.0.37">
-  <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.53">
+  <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.54">
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.68">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
@@ -4605,11 +4605,13 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
 
       <!-- 视频通话"启用音频"按钮 (按钮 DOM 已在 body 顶层, 见 </body> 前) -->
 
-      <!-- v0.5.x P28: 视频通话控制按钮「外框」— 底部铺满的云朵相框 (整张透明 PNG)
-           (assets/live2d-call/视频通话底部框.png, 1536x1024, 比例 3:2)
-           宽度 100% 贴屏幕两侧 + 贴底 → 整个屏幕下方被挡住, 不会露"断腿"
-           这张素材里**没有画按钮**, 三个按钮图案是独立圆形 PNG
-           (btn-hangup / btn-model / btn-camera), 由 .control-btn 的 background 贴上
+      <!-- v0.5.x P29.3: 视频通话控制按钮「外框」— 黄色奶黄底板相框 (裁边满宽版)
+           (assets/live2d-call/视频通话正式页按钮框-满宽.png, 1540x786, 比例 1.9593)
+           从 视频通话正式页按钮框.png (1774x887) 裁掉左右透明留白 + 上下空边得到,
+           这样内容能顶到屏幕左右边 (原图直接铺满会留 20px 一条深色缝)
+           满宽贴底: 宽 100% + aspect-ratio 1540/786 → iPhone11(414) = 414x211.3
+           三个小动物按钮 (猫/兔/鸡) 画在素材里 → HTML 按钮退化成透明点击热区,
+           百分比定位 (left 10.39%/38.25%/66.17%, top 22.27%, 宽 24.22%) 跟着素材缩放
            独立装饰层: pointer-events:none, 不会拦截按钮点击
            位置 / 尺寸见 css/video-voice-call.css
            #video-call-screen #video-call-controls-frame -->
