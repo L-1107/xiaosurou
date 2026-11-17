@@ -70,7 +70,6 @@
     }
     if (screenId === 'wallpaper-screen') window.renderWallpaperScreenProxy();
     if (screenId === 'world-book-screen') window.renderWorldBookScreenProxy();
-    if (screenId === 'x-social-screen') window.renderXSocialScreenProxy();
     if (screenId === 'hot-news-screen' && typeof window.renderHotNewsScreen === 'function') {
       window.renderHotNewsScreen();
     }

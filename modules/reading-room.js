@@ -62,7 +62,8 @@
     snippet: ''
   };
 
-  function currentChatObject() {
+  function currentChatObject(override) {
+    if (override) return override;
     try {
       if (typeof state === 'undefined' || !state || !state.activeChatId) return null;
       return (state.chats && state.chats[state.activeChatId]) || null;
@@ -225,8 +226,8 @@
     };
   }
 
-  function currentChatPayload() {
-    var c = currentChatObject();
+  function currentChatPayload(override) {
+    var c = currentChatObject(override);
     if (!c) return null;
     return {
       id: c.id,
@@ -244,7 +245,7 @@
   }
 
   function sendInit() {
-    var payload = currentChatPayload();
+    var payload = currentChatPayload(_overrideChat);
     if (!payload || !frame) return;
     try {
       frame.contentWindow.postMessage({ type: 'reading:init', chat: payload }, '*');
@@ -345,6 +346,9 @@
     stopWatch();
     // ⚠️ 以前这里是 "if (!frame) return;" —— 于是 body 上的 class 永远摘不掉,
     //   宿主页面一直是 fixed, 整页点不动。现在即使没有 frame 也把状态清干净。
+    // 🔴 桌面「图书馆」那条兜底上下文必须跟着退出一起清 —— 否则下次从聊天里进来
+    //   还会用上一个"最近聊过"的角色当读书对象。
+    _overrideChat = null;
     if (!frame) {
       if (document.body) document.body.classList.remove('reading-room-active');
       session.active = false;
@@ -1049,7 +1053,7 @@
   // ============================================================
   function open() {
     if (frame) { closeSandbox('再点一次退出'); return; }
-    if (!currentChatObject()) {
+    if (!currentChatObject(_overrideChat)) {
       logWarn('没有当前聊天, 不开读书屋');
       return;
     }
@@ -1069,6 +1073,54 @@
     frame.addEventListener('load', function () { sendInit(); pushViewport(); });
     startWatch();
     log('读书屋已打开');
+  }
+
+  // ============================================================
+  // v0.1.5: 桌面第二页「图书馆」入口
+  //
+  // 从桌面点进来时通常【没有当前聊天】—— 回聊天列表时 init-event-bindingsA.js
+  // 会把 state.activeChatId 置空, 而 open()/currentChatPayload() 都要求有 chat。
+  // 兜底: 有当前聊天就直接用; 没有就拿"最近聊过的那条"当读书对象。
+  // ⚠️ 只传给 open(), 不去改 state.activeChatId —— 桌面不该被某个聊天污染;
+  //    退出读书屋时 closeSandbox 会把它清掉 (_overrideChat = null)。
+  // ============================================================
+  var _overrideChat = null;
+
+  function pickLatestChat() {
+    var chats = (typeof state !== 'undefined' && state && state.chats) ? state.chats : null;
+    if (!chats) return null;
+    var best = null;
+    var bestTs = -1;
+    Object.keys(chats).forEach(function (k) {
+      var c = chats[k];
+      if (!c || !c.id) return;
+      var ts = Number(c.lastMessageTimestamp || c.updatedAt || 0) || 0;
+      if (ts > bestTs) { bestTs = ts; best = c; }
+    });
+    if (!best) {
+      // 一条都没有时间戳 (老数据) → 至少给一条, 别因为字段缺失就开不了
+      Object.keys(chats).forEach(function (k) {
+        if (!best && chats[k] && chats[k].id) best = chats[k];
+      });
+    }
+    return best;
+  }
+
+  function openFromHome() {
+    if (frame) { closeSandbox('再点一次退出'); return; }
+    if (!currentChatObject()) {
+      var fallback = pickLatestChat();
+      if (!fallback) {
+        if (typeof global.showToast === 'function') {
+          global.showToast('还没有聊天对象, 书架先空着吧');
+        }
+        logWarn('桌面「图书馆」: 一条聊天都没有, 不开读书屋');
+        return;
+      }
+      _overrideChat = fallback;
+      log('桌面「图书馆」: 用最近聊过的「' + (fallback.name || fallback.id) + '」当读书对象');
+    }
+    open();
   }
 
   function bindEntry() {
@@ -1177,12 +1229,14 @@
   global.notifyAiOfPageTurn = notifyAiOfPageTurn;
   global.readingSession = session;
   global.openReadingRoom = open;
+  global.openReadingRoomFromHome = openFromHome;
   global.closeReadingRoom = function () { closeSandbox(); };
   global.addGreenRiverToShelf = addGreenRiverToShelf;
   global.removeGreenRiverFromShelf = removeGreenRiverFromShelf;
   global.resetBtnToAddState = resetBtnToAddState;
   global.ReadingRoom = {
     open: open,
+    openFromHome: openFromHome,
     close: function () { closeSandbox(); },
     isOpen: function () { return !!frame; },
     session: session,

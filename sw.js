@@ -1376,7 +1376,39 @@
 //   ⑥ 上一轮误加的绿色花环素材 (视频通话按钮框-花环.png) 已从仓库删掉, 没用过别找它。
 //   index.html 的 ?v=：css/video-voice-call.css 0.0.53 → 0.0.54。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.130.0';
+// v0.2.131.0 (2026-11-17): 桌面第二页的 X 应用删掉, 换成「图书馆」→ 一起读书。
+//   用户: 「主聊天屏幕第二页有个X, 帮我把这个X相关的代码删了, 这个按钮换成图书馆,
+//          然后把共读的热点链接上, 点这个按钮就进入一起读书」
+//   ① X 其实是死入口: 那个小部件 onclick="showScreen('x-social-screen')",
+//      可是 index.html 里【根本没有 id="x-social-screen" 这个屏】, 点了什么都不会发生。
+//      删掉的东西 (全仓库已无 x-social / icon-img-x / homeAppX 残留):
+//        · index.html 页2 的 X 小部件 (onclick + img#icon-img-x + data-lang-key="homeAppX")
+//        · modules/translations.js 两处 homeAppX ('X')
+//        · modules/chat-list.js 里 "if (screenId === 'x-social-screen') renderXSocialScreenProxy()"
+//        · modules/qzone.js 里的 renderXSocialScreen 空壳 + 两个 window 代理
+//      说明: init-db-schema.js / reading-storage.js 里提到 "XSocialDB" 只是注释里的举例,
+//            不是代码, 没动。
+//   ② 新按钮: 同一个位置 (页2 右侧 app-subgrid) 换成「图书馆」
+//      图标 = 书本 SVG, img#icon-img-library 留空 (跟其它小部件一样可由主题换图),
+//      data-lang-key="homeAppLibrary" (中文 图书馆 / 英文 Library),
+//      onclick="openReadingRoomFromHome()"
+//   ③ 共读热点接上: modules/reading-room.js 新增 openFromHome()
+//      · 有当前聊天 → 直接 open(), 跟聊天里那颗「一起读书」完全同一条路
+//      · 没有当前聊天 (回聊天列表时 state.activeChatId 会被置空) →
+//        拿 lastMessageTimestamp 最新的那条聊天当读书对象, 只作 override 传给 open(),
+//        【不改 state.activeChatId】(桌面不该被某个聊天污染);
+//        一条聊天都没有 → showToast 提示, 不硬开。
+//      · closeSandbox 里把 override 清掉, 免得下次从聊天进来还用上一个角色。
+//      · currentChatObject / currentChatPayload / sendInit / open 四个函数加了 override 参数。
+//      实测 (无头 Edge 414x896, file:// 真实 index.html):
+//        图书馆 label/图标/onclick 都在, 老 X 的 img 与 lang-key 都不存在, pageerror 0;
+//        没有聊天时点 → 不创建 iframe, 不抛错;
+//        有聊天时点 → #reading-sandbox-frame 出现 (src=reading-sandbox/index.html?v=0.1.1),
+//        ReadingRoom.isOpen() = true; 关掉后 iframe 移除, isOpen 变 false。
+//   index.html 的 ?v=：modules/translations.js 0.0.36→0.0.37、modules/chat-list.js 0.0.36→0.0.37、
+//                    modules/qzone.js 0.0.36→0.0.37、modules/reading-room.js 0.1.4→0.1.5。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.131.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
