@@ -1408,7 +1408,27 @@
 //   index.html 的 ?v=：modules/translations.js 0.0.36→0.0.37、modules/chat-list.js 0.0.36→0.0.37、
 //                    modules/qzone.js 0.0.36→0.0.37、modules/reading-room.js 0.1.4→0.1.5。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.131.0';
+// v0.2.132.0 (2026-11-17): 外观设置里给「图书馆」补图标槽位, 老库残留的 X 槽清掉。
+//   用户: 「推送后才发现, 图书馆的美化图标在外观设置里没有槽位, 外观设置里还是X,
+//          所以换不了图标, 你帮我给图书馆在外观设置里弄个上传美化图标的坑位, 把X的删了」
+//   根因: 外观设置的图标槽位不是固定清单, 而是遍历 state.globalSettings.appIcons 的 key ——
+//        老 DB 里 appIcons 还留着 "x" (v0.2.131 只是把桌面那个 X 小部件换掉了, 没动图标字典),
+//        而新键 "library" 从来没进过老库 → 结果就是 X 槽还在、图书馆没坑位。
+//   ① modules/utils.js 的 DEFAULT_APP_ICONS: 把 'x': '' 换成 'library': ''。
+//   ② modules/appearance-theme.js 的 appLabels: 'x': 'X' 换成 'library': '图书馆'
+//      (槽位标签就是这个表给的, 不改的话新槽会显示成 "Cphone")。
+//   ③ modules/init-and-state.js: appIcons 与默认值合并之后做一次归一 ——
+//      delete appIcons.x; 缺 library 就补一个空值。每次启动都做, 所以老库一开就干净;
+//      用户之后随便改个设置就会把清洗结果一起写进 DB。
+//   实测 (无头 Edge, 真 IndexedDB): 先往库里塞一份"老库"(appIcons.x 带一张已上传的图,
+//      没有 library), 重载后 state.globalSettings.appIcons → hasX=false / hasLibrary=true;
+//      DOM 上 #icon-img-library 在、#icon-img-x 没了; 真跑 renderIconSettings() 渲染出 24 个槽,
+//      顺序里 library 正好落在原来 x 的位置, 且不含 x; pageerror 0。
+//   index.html 的 ?v=：modules/utils.js 0.0.82→0.0.83、
+//                    modules/appearance-theme.js 0.0.87→0.0.88、
+//                    modules/init-and-state.js 0.0.84→0.0.85。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.132.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

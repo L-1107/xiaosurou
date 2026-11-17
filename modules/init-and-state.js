@@ -241,6 +241,17 @@ document.addEventListener('DOMContentLoaded', () => {
       ...defaultGlobalSettings.appIcons,
       ...(state.globalSettings.appIcons || {})
     };
+    // v0.2.132: 桌面页2 的 X 应用已删, 图标槽位换成「图书馆」。
+    //   ⚠️ 老 DB 里 appIcons.x 还在 (合并后 X 槽位会继续出现在外观设置里, 且换不了图标 ——
+    //      用户实测报的就是这个), 而 library 这个 key 老库里没有。
+    //   所以载入时清一次: 删 x, 缺 library 就补一个空值槽。
+    //   不写库也行 —— 每次启动都会做同一个归一; 用户之后一改设置就会连清洗结果一起存进 DB。
+    if (state.globalSettings.appIcons && typeof state.globalSettings.appIcons === 'object') {
+      delete state.globalSettings.appIcons['x'];
+      if (!('library' in state.globalSettings.appIcons)) {
+        state.globalSettings.appIcons['library'] = '';
+      }
+    }
     state.globalSettings.cphoneAppIcons = {
       ...defaultGlobalSettings.cphoneAppIcons,
       ...(state.globalSettings.cphoneAppIcons || {})

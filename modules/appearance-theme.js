@@ -296,7 +296,8 @@
       'tutorial': '教程',
       'werewolf': '狼人杀',
 
-      'x': 'X',
+      // v0.2.132: X 应用已删, 槽位换成「图书馆」
+      'library': '图书馆',
       'alipay': '支付宝',
       'auction': '黑市拍卖',
       'green-river': '绿江',
