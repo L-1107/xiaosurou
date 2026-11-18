@@ -1,57 +1,14 @@
 // ============================================================
 // init-pin-city.js
-// PIN 激活逻辑、城市搜索、更新检查
+// PIN 激活逻辑、更新检查
 // 从 init-and-state.js 拆分
+//
+// 🔴 2026-11-19: 原来的「城市搜索」那一段 (searchCityGeo + 两个搜索按钮)
+//    连同「实时天气同步」一起删掉了 —— 位置信息现在走高德那条线。
+//    ⚠️ 本文件剩下的部分 (PIN 激活 / 手动总结弹窗 / 暂停调用 / SW 更新检查) 都还在用。
 // ============================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-
-  async function searchCityGeo(cityName) {
-    try {
-      const response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=zh&format=json`);
-      const data = await response.json();
-      if (data.results && data.results.length > 0) {
-        return data.results[0];
-      }
-      return null;
-    } catch (e) {
-      console.error("城市搜索失败:", e);
-      return null;
-    }
-  }
-
-  document.getElementById('user-city-search-btn').addEventListener('click', async () => {
-    const query = document.getElementById('user-real-city-search').value.trim();
-    if (!query) return alert("请输入真实城市拼音或英文名称");
-
-    const result = await searchCityGeo(query);
-    if (result) {
-      document.getElementById('user-city-lat').value = result.latitude;
-      document.getElementById('user-city-lon').value = result.longitude;
-      document.getElementById('user-city-result').textContent = `已选中: ${result.name}, ${result.country} (${result.latitude}, ${result.longitude})`;
-      document.getElementById('user-city-result').style.color = 'green';
-      // 可以在 dataset 暂存真实城市名
-      document.getElementById('user-real-city-search').dataset.realName = result.name;
-    } else {
-      alert("未找到该城市，请尝试使用拼音或英文 (如 Shanghai)。");
-    }
-  });
-
-  document.getElementById('char-city-search-btn').addEventListener('click', async () => {
-    const query = document.getElementById('char-real-city-search').value.trim();
-    if (!query) return alert("请输入真实城市拼音或英文名称");
-
-    const result = await searchCityGeo(query);
-    if (result) {
-      document.getElementById('char-city-lat').value = result.latitude;
-      document.getElementById('char-city-lon').value = result.longitude;
-      document.getElementById('char-city-result').textContent = `已选中: ${result.name}, ${result.country} (${result.latitude}, ${result.longitude})`;
-      document.getElementById('char-city-result').style.color = 'green';
-      document.getElementById('char-real-city-search').dataset.realName = result.name;
-    } else {
-      alert("未找到该城市，请尝试使用拼音或英文 (如 New York)。");
-    }
-  });
 
   // 手动总结弹窗事件监听器
   document.getElementById('manual-summary-btn').addEventListener('click', () => window.openManualSummaryModal());

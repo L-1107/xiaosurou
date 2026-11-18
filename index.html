@@ -15,9 +15,9 @@
   <link rel="stylesheet" href="css/music-player.css?v=0.0.37">
   <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.54">
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
-  <link rel="stylesheet" href="css/main-ui.css?v=0.0.68">
+  <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.38">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.39">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="extra.css?v=0.0.82">
   <link rel="stylesheet" href="css/api-settings-skyblue.css?v=0.0.36">
   <link rel="stylesheet" href="css/wallpaper-screen-skyblue.css?v=0.0.36">
-  <link rel="stylesheet" href="css/chat-settings-skyblue.css?v=0.0.36">
+  <link rel="stylesheet" href="css/chat-settings-skyblue.css?v=0.0.37">
   <link rel="stylesheet" href="css/online-app-skyblue.css?v=0.0.98">
   <!-- chat-list-skyblue.css 暂留空，引入被注释避免重复加载空文件 -->
   <link rel="stylesheet" href="css/long-term-memory-skyblue.css?v=0.0.36">
@@ -126,7 +126,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="lib/pixi.min.js"></script>
   <!-- pixi-live2d-display 0.4.0 UMD prebuilt (window.PIXI.live2d.Live2DModel) -->
   <script src="lib/pixi-live2d-display.cubism4.min.js"></script>
-  <script src="prompt-manager.js?v=0.0.37" defer></script>
+  <script src="prompt-manager.js?v=0.0.38" defer></script>
   <script src="online-chat-manager.js?v=0.0.49" defer></script>
   <script src="online-chat-integration.js?v=0.0.36" defer></script>
   <script src="sticker-vision.js?v=0.0.37" defer></script>
@@ -152,14 +152,12 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/chat-interface.js?v=0.0.37" defer></script>
   <script src="modules/chat-input.js?v=0.0.36" defer></script>
   <!-- 第四层：AI 核心 -->
-  <script src="modules/ai-response.js?v=0.0.58" defer></script>
-  <script src="modules/ai-group.js?v=0.0.41" defer></script>
+  <script src="modules/ai-response.js?v=0.0.59" defer></script>
+  <script src="modules/ai-group.js?v=0.0.42" defer></script>
   <!-- 第五层：功能模块 -->
   <script src="modules/music-player.js?v=0.0.46" defer></script>
-  <script src="modules/ai-music.js?v=0.0.80" defer></script>
-  <script src="js/music-voice-sample.js?v=0.0.79" defer></script>
-  <script src="js/ai-songs-store.js?v=0.0.79" defer></script>
-  <script src="js/role-voice-sample-ui.js?v=0.0.80" defer></script>
+  <script src="modules/ai-music.js?v=0.0.81" defer></script>
+  <script src="js/ai-songs-store.js?v=0.0.80" defer></script>
   <script src="js/netease-music.js?v=0.0.41" defer></script>
   <script src="js/netease-music-app.js?v=0.0.44" defer></script>
   <!-- 【新增 0.0.43】「今日私选」AI 每日荐歌引擎（画像→候选→验可播→LLM策展→缓存→反馈） -->
@@ -175,7 +173,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
   <script src="modules/nai-imagen.js?v=0.0.36" defer></script>
   <script src="modules/backup-import-export.js?v=0.0.40" defer></script>
-  <script src="modules/settings-presets.js?v=0.0.90" defer></script>
+  <script src="modules/settings-presets.js?v=0.0.91" defer></script>
   <script src="modules/chat-settings-presets.js?v=0.0.36" defer></script>
   <script src="modules/shopping.js?v=0.0.36" defer></script>
   <script src="modules/rendering-rules.js?v=0.0.36" defer></script>
@@ -191,7 +189,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/werewolf.js?v=0.0.37" defer></script>
   <!-- 读书屋 (2026-11-01): 存储层 + 宿主桥接。阅读室本体在 reading-sandbox/ 沙盒里。 -->
   <script src="modules/reading-storage.js?v=0.1.3" defer></script>
-  <script src="modules/reading-room.js?v=0.1.5" defer></script>
+  <script src="modules/reading-room.js?v=0.1.6" defer></script>
 
   <!-- 第七层：其余功能 -->
   <script src="api-config.js?v=0.0.36" defer></script>
@@ -215,7 +213,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- Gemini 3.8 Live 纯协议层 (无 DOM)。Cinema Room 与已删除的旧观影共用这一份。必须在 init-features.js 之前加载。 -->
   <script src="modules/live-client.js?v=0.6.0" defer></script>
   <script src="modules/notification-battery.js?v=0.0.49" defer></script>
-  <script src="modules/background-activity.js?v=0.0.50" defer></script>
+  <script src="modules/background-activity.js?v=0.0.51" defer></script>
   <script src="modules/proactive-wake.js?v=0.2.16" defer></script>      
   <script src="modules/in-app-proactive-patrol.js?v=0.2.18" defer></script>
   <script src="modules/proactive-wake-ui.js?v=0.2.28" defer></script>
@@ -248,10 +246,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 崩溃恢复（依赖 data-protection） -->
   <script src="modules/init-crash-recovery.js?v=0.0.38" defer></script>
   <!-- PIN/城市（依赖 DOM） -->
-  <script src="modules/init-pin-city.js?v=0.0.36" defer></script>
+  <script src="modules/init-pin-city.js?v=0.0.37" defer></script>
   <!-- 事件绑定和功能（依赖 state, db） -->
-  <script src="modules/init-event-bindingsA.js?v=0.0.49" defer></script>
-  <script src="modules/init-event-bindingsB.js?v=0.0.42" defer></script>
+  <script src="modules/init-event-bindingsA.js?v=0.0.50" defer></script>
+  <script src="modules/init-event-bindingsB.js?v=0.0.43" defer></script>
   <script src="modules/init-features.js?v=0.0.47" defer></script>
   <!-- Cinema Room (v0.1.0, 2026-10-04 第一阶段): 家庭影院模块。
        旧「一起看电影」已于 2026-10-07 整体删除(代码+入口), 只保留本模块。
@@ -270,7 +268,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
        陪聊改走【主聊天的主 API】: 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆,
        性格跟外面聊天一致。Live 只负责看画面 + 写剧情记忆。
        必须在 cinema-live.js 之后加载 —— 它要用 CinemaLive 暴露的气泡渲染和剧情记忆。 -->
-  <script src="modules/cinema-chat.js?v=0.2.5" defer></script>
+  <script src="modules/cinema-chat.js?v=0.2.6" defer></script>
   <!-- 宠物屋 (Cove 灵宠屋前端移植版, 2026-10-23)
        纯前端: 数据存本机 IndexedDB (独立库 PetNestDB), 不需要后端。
        规则与素材移植自 https://github.com/moonlin1213/cove-pet-nest (MIT)
@@ -330,7 +328,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 情侣空间（从内联 script 拆分） -->
   <script src="couple-space.js?v=0.0.39"></script>
   <script src="force-update.js?v=0.0.36" defer></script>
-  <script src="modules/floating-ball.js?v=0.0.39" defer></script>
+  <script src="modules/floating-ball.js?v=0.0.40" defer></script>
   
   <!-- 后台保活音频播放器样式（保持上传弹窗的玻璃面板/装饰条样式） -->
   <link rel="stylesheet" href="css/keep-alive-player.css?v=0.0.41">
@@ -2344,13 +2342,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <div class="settings-item">
                     <label>音乐模型</label>
                     <div class="settings-right">
+                        <!-- 🔴 2026-11-19: Cover 那组删掉 (专属音色样本 + Cover 模式一起下线了) -->
                         <select id="music-model-select" class="settings-select">
-                            <optgroup label="Cover（角色专属音色，默认推荐）">
-                                <option value="music-cover" selected>music-cover（推荐）</option>
-                                <option value="music-cover-free">music-cover-free</option>
-                            </optgroup>
-                            <optgroup label="普通生成（无角色音色，会用随机声）">
-                                <option value="music-3.0">music-3.0</option>
+                            <optgroup label="普通生成">
+                                <option value="music-3.0" selected>music-3.0</option>
                                 <option value="music-2.6">music-2.6</option>
                                 <option value="music-2.6-free">music-2.6-free</option>
                                 <option value="music-2.5+">music-2.5+</option>
@@ -2359,15 +2354,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                         </select>
                     </div>
                 </div>
-                <div class="settings-item" style="margin-top: 6px;">
-                    <label style="font-size: 13px; color: var(--text-secondary, #666);">角色有音色样本时自动用 Cover</label>
-                    <div class="settings-right">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="auto-cover-when-has-sample-switch">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                </div>
+                <!-- 🔴 2026-11-19: 「角色有音色样本时自动用 Cover」开关删掉 -->
             </div>
         </div>
 
@@ -3111,24 +3098,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 </div>
             </div>
 
-            <!-- 无声智能保活 (移植自社区版，2026-07-18) -->
-            <div class="settings-item" style="margin-top: 12px; border-top: 1px dashed rgba(255, 182, 193, 0.4); padding-top: 12px;">
-                <div>
-                    <label>启用无声智能保活</label>
-                    <div class="settings-desc">零音频方案：WakeLock + Web Worker 心跳 + JIT 预热。适合 PWA / iOS WebKit（不占音频通道）</div>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="smart-keep-alive-switch">
-                    <span class="slider"></span>
-                </label>
-            </div>
-
-            <div class="settings-item" id="smart-keep-alive-status" style="display:none;">
-                <label>无声保活状态</label>
-                <div class="settings-right">
-                    <span id="smart-keep-alive-status-text" style="color: #4CAF50;">运行中（无声）</span>
-                </div>
-            </div>
+            <!-- 🔴 2026-11-19 「无声智能保活」的 UI 整个删掉 (代码见 modules/background-activity.js) -->
         </div>
         <div class="settings-desc">
             循环播放你配置的音频保持后台活跃。默认音频 URL 已移除（如需使用请上传本地文件或填入 URL）。
@@ -5495,52 +5465,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             </div>
         </div>
 
-<!-- 天气设置 (仅单聊显示) - UI 优化版 -->
-<div class="settings-section" id="weather-settings-section" style="display: none;">
-    <!-- 开关行 -->
-    <div class="settings-item">
-        <label>启用实时天气同步</label>
-        <label class="toggle-switch">
-            <input type="checkbox" id="enable-weather-switch">
-            <span class="slider"></span>
-        </label>
-    </div>
-    
-    <!-- 详情配置区域 (由JS控制显示/隐藏) -->
-    <div id="weather-config-container" style="display: none;">
-        
-        <!-- 我的位置 -->
-        <div class="settings-item-block">
-            <label style="font-weight: 500;">我的位置 (User)</label>
-            <div class="weather-input-group">
-                <input type="text" id="user-virtual-city" placeholder="虚拟名 (如: 龙城)" class="weather-input">
-                <input type="text" id="user-real-city-search" placeholder="真实城市 (拼音/英文)" class="weather-input">
-                <button id="user-city-search-btn" class="settings-mini-btn" style="margin-left: 0;">搜索</button>
-            </div>
-            <!-- 隐藏域 -->
-            <input type="hidden" id="user-city-lat">
-            <input type="hidden" id="user-city-lon">
-            <!-- 结果展示 -->
-            <div id="user-city-result" class="weather-result-text">未设置映射</div>
-        </div>
-
-        <!-- 对方位置 -->
-        <div class="settings-item-block" style="border-bottom: none;">
-            <label style="font-weight: 500;">对方位置 (Char)</label>
-            <div class="weather-input-group">
-                <input type="text" id="char-virtual-city" placeholder="虚拟名 (如: 哥谭)" class="weather-input">
-                <input type="text" id="char-real-city-search" placeholder="真实城市 (拼音/英文)" class="weather-input">
-                <button id="char-city-search-btn" class="settings-mini-btn" style="margin-left: 0;">搜索</button>
-            </div>
-            <!-- 隐藏域 -->
-            <input type="hidden" id="char-city-lat">
-            <input type="hidden" id="char-city-lon">
-            <!-- 结果展示 -->
-            <div id="char-city-result" class="weather-result-text">未设置映射</div>
-        </div>
-
-    </div>
-</div>
+<!-- 🔴 2026-11-19 「实时天气同步」整个删掉 (用户: 有高德了, 不需要了)
+     代码见 modules/ai-response.js / modules/ai-group.js / modules/init-pin-city.js -->
 
         <!-- 视频通话优化设置 (P3-2: 已删除, 功能迁移到 #live2d-call-prep-screen 的"我的画面"卡片) -->
 
@@ -5679,13 +5605,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                  <span style="margin-left: 5px; color: var(--text-secondary); font-size: 12px;">x</span>
                </div>
             </div>
- <div class="settings-item" id="role-voice-sample-group">
-    <div style="flex: 1; padding-right: 10px;">
-        <label style="margin-bottom: 2px;">🎤 专属音色样本（AI 唱歌 Cover 用）</label>
-        <div class="settings-desc">上传 5-60 秒的角色声音样本，AI 唱歌时可用 Cover 模式模仿此音色</div>
-    </div>
-</div>
-<div id="role-voice-sample-section"></div>
+ <!-- 🔴 2026-11-19 「专属音色样本（AI 唱歌 Cover 用）」整个删掉
+     代码见 modules/ai-music.js (js/music-voice-sample.js / js/role-voice-sample-ui.js 两个文件已删除) -->
  <div class="settings-item" id="synth-music-group">
     <div>
         <label>启用乐谱合成</label>

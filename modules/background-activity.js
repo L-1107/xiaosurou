@@ -600,7 +600,7 @@ ${linkedContents}
         userProfileContext: `- 用户的QZone昵称是 "${userName}"。`,
         nameHistoryContext: chat.nameHistory?.length ? `\n- **你的曾用名**: [${chat.nameHistory.join(', ')}]。` : '',
         timePerceptionContext: chat.settings?.enableTimePerception ? `- **当前时间**: ${currentTime} (${timeOfDayGreeting})` : '',
-        weatherContext: typeof getWeatherContextForPrompt === 'function' ? await getWeatherContextForPrompt(chat) : '',
+        weatherContext: '',   // 2026-11-19: 实时天气同步已删 (见 ai-response.js)
         timeContext: '',
         musicContextStr: '按当前聊天音乐状态处理。',
         readingContextStr: '按当前聊天阅读状态处理。',
@@ -1745,148 +1745,27 @@ ${tasksString}
     await saveKeepAliveConfig();
   }
 
-  // ========== 无声智能保活 (移植自社区版，2026-07-18) ==========
-  // 原理三件套：
-  //   1. WakeLock API：阻止系统锁屏 (Android Chrome 支持，iOS Safari 不支持)
-  //   2. Web Worker 心跳：每 5s 一次，骗过浏览器的"主线程空闲就节流后台 tab"判断
-  //   3. visibilitychange + JIT 预热：iOS WebKit 从后台回来时强制 JIT 重新编译热点
-  // 相比音频保活的优点：真·零音频（不占音频通道、不被系统识别）、资源占用低
-  let smartKeepAliveEnabled = false;
-  let smartKeepAliveWorker = null;
-  let smartKeepAliveWakeLock = null;
-
-  function getSmartKeepAliveConfig() {
-    if (!state.globalSettings.smartKeepAlive) {
-      state.globalSettings.smartKeepAlive = { enabled: false };
-    }
-    return state.globalSettings.smartKeepAlive;
-  }
-
-  async function saveSmartKeepAliveConfig() {
-    if (typeof persistGlobalSettings === 'function') {
-      try { await persistGlobalSettings(); } catch (e) { console.warn('[SmartKeepAlive] persistGlobalSettings 失败:', e); }
-    }
-  }
-
-  function updateSmartKeepAliveStatus(text) {
-    const el = document.getElementById('smart-keep-alive-status-text');
-    if (el) el.textContent = text;
-  }
-
-  // 启动无声智能保活
-  async function startSmartKeepAlive() {
-    if (smartKeepAliveEnabled) return;
-    console.log('[SmartKeepAlive] 启动无声智能保活...');
-    smartKeepAliveEnabled = true;
-
-    // 1. Android WakeLock 策略
-    if ('wakeLock' in navigator) {
-      try {
-        smartKeepAliveWakeLock = await navigator.wakeLock.request('screen');
-        console.log('[SmartKeepAlive] WakeLock (屏幕唤醒锁) 获取成功');
-        smartKeepAliveWakeLock.addEventListener('release', () => {
-          console.log('[SmartKeepAlive] WakeLock 被释放，尝试在下次可见时重新获取');
-        });
-      } catch (err) {
-        console.warn('[SmartKeepAlive] WakeLock 获取失败:', err);
-      }
-    }
-
-    // 2. Web Worker 心跳策略 (防止 JS 挂起)
-    if (!smartKeepAliveWorker) {
-      const workerCode = `
-        let intervalId;
-        self.addEventListener('message', function(e) {
-          if (e.data === 'start') {
-            intervalId = setInterval(() => { self.postMessage('tick'); }, 5000);
-          } else if (e.data === 'stop') {
-            clearInterval(intervalId);
-          }
-        });
-      `;
-      try {
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
-        smartKeepAliveWorker = new Worker(URL.createObjectURL(blob));
-        smartKeepAliveWorker.onmessage = (e) => {
-          if (e.data === 'tick' && smartKeepAliveEnabled) {
-            // 主线程只做极轻量判断，不抢执行权
-            if (Math.random() < 0.01) console.log('[SmartKeepAlive] Web Worker 心跳...');
-          }
-        };
-        smartKeepAliveWorker.postMessage('start');
-      } catch (e) {
-        console.warn('[SmartKeepAlive] 创建 Worker 失败:', e);
-        smartKeepAliveWorker = null;
-      }
-    }
-
-    // 3. 监听生命周期事件 (iOS 恢复策略)
-    document.addEventListener('visibilitychange', handleSmartVisibilityChange);
-    window.addEventListener('pagehide', handleSmartPageHide);
-    window.addEventListener('resume', handleSmartResume);
-
-    updateSmartKeepAliveStatus('运行中（无声）');
-    console.log('[SmartKeepAlive] ✅ 无声智能保活已启动');
-  }
-
-  // 停止无声智能保活
-  function stopSmartKeepAlive() {
-    if (!smartKeepAliveEnabled) return;
-    console.log('[SmartKeepAlive] 停止无声智能保活...');
-    smartKeepAliveEnabled = false;
-
-    if (smartKeepAliveWakeLock !== null) {
-      try {
-        smartKeepAliveWakeLock.release().then(() => { smartKeepAliveWakeLock = null; });
-      } catch (e) {
-        smartKeepAliveWakeLock = null;
-      }
-    }
-
-    if (smartKeepAliveWorker) {
-      try {
-        smartKeepAliveWorker.postMessage('stop');
-        smartKeepAliveWorker.terminate();
-      } catch (e) {}
-      smartKeepAliveWorker = null;
-    }
-
-    document.removeEventListener('visibilitychange', handleSmartVisibilityChange);
-    window.removeEventListener('pagehide', handleSmartPageHide);
-    window.removeEventListener('resume', handleSmartResume);
-
-    updateSmartKeepAliveStatus('未启用');
-    console.log('[SmartKeepAlive] ✅ 无声智能保活已停止');
-  }
-
-  // 页面可见性变化：重新申请 WakeLock + JIT 预热
-  async function handleSmartVisibilityChange() {
-    if (document.visibilityState === 'visible' && smartKeepAliveEnabled) {
-      console.log('[SmartKeepAlive] 🔄 页面恢复可见，执行 JIT 预热与 WakeLock 恢复');
-      if ('wakeLock' in navigator && smartKeepAliveWakeLock === null) {
-        try {
-          smartKeepAliveWakeLock = await navigator.wakeLock.request('screen');
-          console.log('[SmartKeepAlive] 重新获取 WakeLock 成功');
-        } catch (err) {
-          console.warn('[SmartKeepAlive] 重新获取 WakeLock 失败:', err);
-        }
-      }
-      // JIT 预热：iOS WebKit 冻结恢复后强制 JIT 重编
-      for (let i = 0; i < 1000; i++) { Math.sqrt(i); }
-    }
-  }
-
-  function handleSmartPageHide() {
-    if (smartKeepAliveEnabled) {
-      console.log('[SmartKeepAlive] ❄️ 页面即将冻结/隐藏');
-    }
-  }
-
-  function handleSmartResume() {
-    if (smartKeepAliveEnabled) {
-      console.log('[SmartKeepAlive] 🚀 PWA resume 事件触发');
-    }
-  }
+  // ============================================================================
+  // 🔴 2026-11-19 「无声智能保活」整个删掉 (代码 + UI)
+  //
+  // 【为什么删】
+  //   用户: 「那个无声智能保活本来也不起作用, 帮我把代码和UI一起删了」
+  //
+  //   这套东西三件套 (移植自社区版, 2026-07-18):
+  //     1. WakeLock API       —— 阻止系统锁屏 (Android Chrome 支持, iOS Safari 不支持)
+  //     2. Web Worker 心跳    —— 每 5s 一次, 骗过浏览器"主线程空闲就节流后台 tab"
+  //     3. visibilitychange + JIT 预热 —— iOS 从后台回来时强制 JIT 重编译热点
+  //   实测不起作用的原因:
+  //     · iOS Safari 压根没有 navigator.wakeLock → 第 1 件直接空转;
+  //     · iOS PWA 挂后台照样冻结 JS, 一个 5s 心跳 Worker 骗不过 WebKit 的冻结;
+  //     · 真正"防冻结"的是音频保活那套 (keep-alive-player), 不是这个。
+  //   而它自己【很费电】: Worker 每 5s 醒一次 + 页面回来时 1000 次 Math.sqrt 预热,
+  //   还是宿主里最费电的一项之一 (见 modules/reading-room.js 的宿主静默注释)。
+  //   → 留着没用、还在烧电, 整个删掉。
+  //
+  // ⚠️ 删的是【无声】这套。音频保活 (keep-alive-player / background-keep-alive-switch)
+  //    是另一回事, 还在用, 没动。
+  // ============================================================================
 
   function bindBackgroundKeepAliveEvents() {
     const keepAliveSwitch = document.getElementById('background-keep-alive-switch');
@@ -1900,8 +1779,6 @@ ${tasksString}
     const audioTest = document.getElementById('keep-alive-audio-test');
     const audioClear = document.getElementById('keep-alive-audio-clear');
     const audioBtnContainer = document.getElementById('keep-alive-audio-btn-container');
-    const smartKeepAliveSwitch = document.getElementById('smart-keep-alive-switch');
-    const smartStatusDiv = document.getElementById('smart-keep-alive-status');
 
     if (keepAliveSwitch && keepAliveSwitch.dataset.keepAliveBound !== 'true') {
       keepAliveSwitch.dataset.keepAliveBound = 'true';
@@ -1978,25 +1855,6 @@ ${tasksString}
         if (e.target === audioModal) audioModal.style.display = 'none';
       });
     }
-
-    if (smartKeepAliveSwitch && smartKeepAliveSwitch.dataset.smartKeepAliveBound !== 'true') {
-      smartKeepAliveSwitch.dataset.smartKeepAliveBound = 'true';
-      smartKeepAliveSwitch.addEventListener('change', async (e) => {
-        const config = getSmartKeepAliveConfig();
-        config.enabled = !!e.target.checked;
-        if (smartStatusDiv) smartStatusDiv.style.display = config.enabled ? 'flex' : 'none';
-        await saveSmartKeepAliveConfig();
-        try {
-          if (config.enabled) {
-            await startSmartKeepAlive();
-          } else {
-            stopSmartKeepAlive();
-          }
-        } catch (e) {
-          console.warn('[SmartKeepAlive] 切换失败:', e);
-        }
-      });
-    }
   }
 
   async function loadBackgroundKeepAliveSettings() {
@@ -2033,18 +1891,6 @@ ${tasksString}
       }
     }
     bindBackgroundKeepAliveEvents();
-
-    // 加载无声智能保活设置（独立于音频保活，可单独启用）
-    const smartConfig = getSmartKeepAliveConfig();
-    const smartKeepAliveSwitch = document.getElementById('smart-keep-alive-switch');
-    const smartStatusDiv = document.getElementById('smart-keep-alive-status');
-    if (smartKeepAliveSwitch) {
-      smartKeepAliveSwitch.checked = smartConfig.enabled || false;
-      if (smartStatusDiv) smartStatusDiv.style.display = smartConfig.enabled ? 'flex' : 'none';
-      if (smartConfig.enabled) {
-        try { await startSmartKeepAlive(); } catch (e) { console.warn('[SmartKeepAlive] 启动失败:', e); }
-      }
-    }
   }
   // ========== 后台保活结束 ==========
 
@@ -2127,7 +1973,6 @@ ${tasksString}
         chatId: chat.id,
         prompt: defaultPrompt,
         lyrics: '',
-        useVoiceSample: true,
         instrumental: false,
         onProgress: onProgress
       });
@@ -2138,7 +1983,7 @@ ${tasksString}
       if (typeof window.persistAiSongBlob === 'function') {
         await window.persistAiSongBlob(songId, {
           chatId: chat.id, blob, title: songTitle, prompt: defaultPrompt,
-          lyrics: '', instrumental: false, useVoiceSample: true, createdAt: Date.now()
+          lyrics: '', instrumental: false, createdAt: Date.now()
         });
       }
       if (window.MusicPlayer && typeof window.MusicPlayer.addAiSongActionMessage === 'function') {
@@ -2271,7 +2116,7 @@ ${tasksString}
   // 宿主除了画面那些动画, 还有这几个【一直跑着的定时器】:
   //   · 后台活动模拟   (每 60 秒, 可能发 AI 调用)
   //   · AI 提醒扫描    (每 30 秒)
-  //   · 无声智能保活   (Web Worker 心跳 + 屏幕 WakeLock —— 最费电的一个)
+  //   (无声智能保活 2026-11-19 已整个删掉 —— 见上面那段)
   // 影院开着的时候它们一个都用不上 → 一起停, 退出影院再原样恢复。
   //
   // 【恢复原则】只恢复【进影院之前就在跑】的那些,
@@ -2283,12 +2128,10 @@ ${tasksString}
     if (hostTaskPauseState) return;
     hostTaskPauseState = {
       simulation: !!simulationIntervalId,
-      reminder: !!aiReminderSchedulerIntervalId,
-      keepAlive: !!smartKeepAliveEnabled
+      reminder: !!aiReminderSchedulerIntervalId
     };
     try { stopBackgroundSimulation(); } catch (e) { /* noop */ }
     try { stopAIReminderScheduler(); } catch (e) { /* noop */ }
-    try { stopSmartKeepAlive(); } catch (e) { /* noop */ }
   }
 
   function resumeHostBackgroundTasks() {
@@ -2300,14 +2143,6 @@ ${tasksString}
     }
     if (was.reminder) {
       try { startAIReminderScheduler(); } catch (e) { /* noop */ }
-    }
-    if (was.keepAlive) {
-      try {
-        // startSmartKeepAlive 是 async —— 别让它的 reject 变成没人接的异常
-        Promise.resolve(startSmartKeepAlive()).catch(function (e) {
-          console.warn('[SmartKeepAlive] 恢复失败:', e);
-        });
-      } catch (e) { /* noop */ }
     }
   }
 
@@ -2325,9 +2160,6 @@ ${tasksString}
   window.simulateBackgroundActivity = simulateBackgroundActivity;
   window.startBackgroundSimulation = startBackgroundSimulation;
   window.stopBackgroundSimulation = stopBackgroundSimulation;
-  // 无声智能保活 (移植自社区版 background-activity.js, 2026-07-18)
-  window.startSmartKeepAlive = startSmartKeepAlive;
-  window.stopSmartKeepAlive = stopSmartKeepAlive;
   // 🔴 2026-11-05: 宿主静默 (影院 iframe 打开时用, 见下面 pauseHostBackgroundTasks)
   window.pauseHostBackgroundTasks = pauseHostBackgroundTasks;
   window.resumeHostBackgroundTasks = resumeHostBackgroundTasks;

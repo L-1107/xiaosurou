@@ -82,7 +82,6 @@ window.initEventBindingsB = function(state, db) {
               actionCooldownMinutes: chat.settings.actionCooldownMinutes,
               enableTodoList: chat.settings.enableTodoList,
               isOfflineMode: chat.settings.isOfflineMode,
-              weather: chat.settings.weather ? JSON.parse(JSON.stringify(chat.settings.weather)) : null,
               enableSynthMusic: chat.settings.enableSynthMusic,
               enableNarratorMode: chat.settings.enableNarratorMode,
               showSeconds: chat.settings.showSeconds,
@@ -223,7 +222,6 @@ window.initEventBindingsB = function(state, db) {
         chat.settings.actionCooldownMinutes = savedSettings.actionCooldownMinutes;
         chat.settings.enableTodoList = savedSettings.enableTodoList;
         chat.settings.isOfflineMode = savedSettings.isOfflineMode;
-        chat.settings.weather = savedSettings.weather ? JSON.parse(JSON.stringify(savedSettings.weather)) : null;
         chat.settings.enableSynthMusic = savedSettings.enableSynthMusic;
         chat.settings.enableNarratorMode = savedSettings.enableNarratorMode;
         chat.settings.showSeconds = savedSettings.showSeconds;

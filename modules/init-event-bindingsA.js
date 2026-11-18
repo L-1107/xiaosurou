@@ -2315,11 +2315,7 @@ window.initEventBindingsA = async function(state, db) {
       if (musicModelSelect) {
         state.globalSettings.musicModel = musicModelSelect.value;
       }
-      // 【2026-07-23 新增】"角色有音色样本时自动用 Cover" 开关
-      const autoCoverSwitch = document.getElementById('auto-cover-when-has-sample-switch');
-      if (autoCoverSwitch) {
-        state.globalSettings.autoCoverWhenHasSample = autoCoverSwitch.checked;
-      }
+      // 🔴 2026-11-19: 「角色有音色样本时自动用 Cover」开关的保存逻辑删掉
 
       await db.globalSettings.put(state.globalSettings);
       
@@ -3437,50 +3433,8 @@ window.initEventBindingsA = async function(state, db) {
       const chat = state.chats[state.activeChatId];
       const isGroup = chat.isGroup;
 
-      const weatherSection = document.getElementById('weather-settings-section');
-      if (isGroup) {
-        weatherSection.style.display = 'none';
-      } else {
-        weatherSection.style.display = 'block';
+      // 🔴 2026-11-19 「实时天气同步」删掉 (原来的天气区块显隐 + 配置回显在这段)
 
-        // 读取配置
-        const wSettings = chat.settings.weather || {};
-
-        const weatherSwitch = document.getElementById('enable-weather-switch');
-        const weatherConfigContainer = document.getElementById('weather-config-container');
-
-        weatherSwitch.checked = wSettings.enabled || false;
-        weatherConfigContainer.style.display = wSettings.enabled ? 'block' : 'none';
-
-        // 绑定开关显示隐藏
-        weatherSwitch.onclick = (e) => {
-          weatherConfigContainer.style.display = e.target.checked ? 'block' : 'none';
-        };
-
-        // 回显 User 数据
-        document.getElementById('user-virtual-city').value = wSettings.userVirtualCity || '';
-        document.getElementById('user-city-lat').value = wSettings.userLat || '';
-        document.getElementById('user-city-lon').value = wSettings.userLon || '';
-        if (wSettings.userRealCity) {
-          document.getElementById('user-city-result').textContent = `已映射: ${wSettings.userRealCity} (${wSettings.userLat}, ${wSettings.userLon})`;
-          document.getElementById('user-city-result').style.color = 'green';
-        } else {
-          document.getElementById('user-city-result').textContent = '未设置映射';
-          document.getElementById('user-city-result').style.color = '#007bff';
-        }
-
-        // 回显 Char 数据
-        document.getElementById('char-virtual-city').value = wSettings.charVirtualCity || '';
-        document.getElementById('char-city-lat').value = wSettings.charLat || '';
-        document.getElementById('char-city-lon').value = wSettings.charLon || '';
-        if (wSettings.charRealCity) {
-          document.getElementById('char-city-result').textContent = `已映射: ${wSettings.charRealCity} (${wSettings.charLat}, ${wSettings.charLon})`;
-          document.getElementById('char-city-result').style.color = 'green';
-        } else {
-          document.getElementById('char-city-result').textContent = '未设置映射';
-          document.getElementById('char-city-result').style.color = '#007bff';
-        }
-      }
       const switchGreetingGroup = document.getElementById('switch-greeting-group');
       if (!isGroup && chat.settings.alternateGreetings && chat.settings.alternateGreetings.length > 0) {
         switchGreetingGroup.style.display = 'block';
@@ -3514,19 +3468,7 @@ window.initEventBindingsA = async function(state, db) {
       document.getElementById('assign-group-section').style.display = isGroup ? 'none' : 'block';
       document.getElementById('ai-original-name-group').style.display = isGroup ? 'none' : 'block';
       document.getElementById('ai-voice-id-group').style.display = isGroup ? 'none' : 'block';
-      const roleVoiceSampleGroup = document.getElementById('role-voice-sample-group');
-      if (roleVoiceSampleGroup) {
-        roleVoiceSampleGroup.style.display = isGroup ? 'none' : 'block';
-      }
-      if (!isGroup && window.RoleVoiceSampleUI && state.activeChatId) {
-        const voiceSampleContainer = document.getElementById('role-voice-sample-section');
-        if (voiceSampleContainer) {
-          window.RoleVoiceSampleUI.openForChat(state.activeChatId, voiceSampleContainer);
-        }
-      } else if (isGroup) {
-        const voiceSampleContainer = document.getElementById('role-voice-sample-section');
-        if (voiceSampleContainer) voiceSampleContainer.innerHTML = '';
-      }
+      // 🔴 2026-11-19: 专属音色样本区块删掉 (原 role-voice-sample-group / role-voice-sample-section 那段)
       document.getElementById('inject-thought-group').style.display = isGroup ? 'none' : 'block';
       document.getElementById('todo-list-setting-group').style.display = isGroup ? 'none' : 'flex';
       document.getElementById('offline-mode-group').style.display = isGroup ? 'none' : 'block';
@@ -3619,61 +3561,7 @@ window.initEventBindingsA = async function(state, db) {
 
         document.getElementById('single-char-background-activity-group').style.display = 'block';
         document.getElementById('enable-todo-list-switch').checked = chat.settings.enableTodoList || false;
-        // --- 修复天气设置回显逻辑 ---
-        const weatherSection = document.getElementById('weather-settings-section');
-        weatherSection.style.display = 'block';
-
-        // 读取当前角色的配置
-        const wSettings = chat.settings.weather || {};
-
-        const weatherSwitch = document.getElementById('enable-weather-switch');
-        const weatherConfigContainer = document.getElementById('weather-config-container');
-
-        weatherSwitch.checked = wSettings.enabled || false;
-        weatherConfigContainer.style.display = wSettings.enabled ? 'block' : 'none';
-
-        // 绑定开关显示隐藏 (防止事件重复绑定，先移除再添加，或者依赖 HTML onclick 逻辑)
-        weatherSwitch.onclick = (e) => {
-          weatherConfigContainer.style.display = e.target.checked ? 'block' : 'none';
-        };
-
-        // 1. 回显 User 数据
-        document.getElementById('user-virtual-city').value = wSettings.userVirtualCity || '';
-
-        // 【关键修复】: 显式设置搜索框的值为已保存的城市名，如果没有则清空
-        const userRealCityInput = document.getElementById('user-real-city-search');
-        userRealCityInput.value = wSettings.userRealCity || '';
-        userRealCityInput.dataset.realName = wSettings.userRealCity || ''; // 同步 dataset
-
-        document.getElementById('user-city-lat').value = wSettings.userLat || '';
-        document.getElementById('user-city-lon').value = wSettings.userLon || '';
-
-        if (wSettings.userRealCity) {
-          document.getElementById('user-city-result').textContent = `已映射: ${wSettings.userRealCity} (${wSettings.userLat}, ${wSettings.userLon})`;
-          document.getElementById('user-city-result').style.color = 'green';
-        } else {
-          document.getElementById('user-city-result').textContent = '未设置映射';
-          document.getElementById('user-city-result').style.color = '#007bff';
-        }
-
-        // 2. 回显 Char 数据
-        document.getElementById('char-virtual-city').value = wSettings.charVirtualCity || '';
-
-        // 【关键修复】: 显式设置搜索框的值为已保存的城市名，如果没有则清空
-        const charRealCityInput = document.getElementById('char-real-city-search');
-        charRealCityInput.value = wSettings.charRealCity || '';
-        charRealCityInput.dataset.realName = wSettings.charRealCity || ''; // 同步 dataset
-
-        document.getElementById('char-city-lat').value = wSettings.charLat || '';
-        document.getElementById('char-city-lon').value = wSettings.charLon || '';
-
-        if (wSettings.charRealCity) {
-          document.getElementById('char-city-result').textContent = `已映射: ${wSettings.charRealCity} (${wSettings.charLat}, ${wSettings.charLon})`;
-          document.getElementById('char-city-result').style.color = 'green';
-        } else {
-          document.getElementById('char-city-result').textContent = '未设置映射';
-          document.getElementById('char-city-result').style.color = '#007bff';
-        }
+        // 🔴 2026-11-19 「实时天气同步」删掉 (原来的天气区块显隐 + 配置回显在这一段)
         document.getElementById('char-background-activity-switch').checked = chat.settings.enableBackgroundActivity;
         const charProactiveSwitch = document.getElementById('char-proactive-enabled-switch');
         if (charProactiveSwitch) {
@@ -4263,21 +4151,7 @@ window.initEventBindingsA = async function(state, db) {
         chat.settings.enableTodoList = document.getElementById('enable-todo-list-switch').checked;
         const newOfflineModeState = document.getElementById('offline-mode-toggle').checked;
         chat.settings.isOfflineMode = newOfflineModeState;
-        const weatherEnabled = document.getElementById('enable-weather-switch').checked;
-        const weatherSettings = {
-          enabled: weatherEnabled,
-          userVirtualCity: document.getElementById('user-virtual-city').value.trim(),
-          userRealCity: document.getElementById('user-real-city-search').dataset.realName || chat.settings.weather?.userRealCity || '',
-          userLat: parseFloat(document.getElementById('user-city-lat').value) || null,
-          userLon: parseFloat(document.getElementById('user-city-lon').value) || null,
-
-          charVirtualCity: document.getElementById('char-virtual-city').value.trim(),
-          charRealCity: document.getElementById('char-real-city-search').dataset.realName || chat.settings.weather?.charRealCity || '',
-          charLat: parseFloat(document.getElementById('char-city-lat').value) || null,
-          charLon: parseFloat(document.getElementById('char-city-lon').value) || null
-        };
-
-        chat.settings.weather = weatherSettings;
+        // 🔴 2026-11-19 「实时天气同步」删掉 (原来在这里存 chat.settings.weather)
 
 
 

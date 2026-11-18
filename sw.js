@@ -1445,7 +1445,85 @@
 //   ⚠️ 挂载时拍的参数基线快照可能含驱动写的值 → 已确认快照读的是帧末基线值, 不受影响。
 //   index.html 的 ?v=：modules/live2d-loader.js 0.3.9 → 0.4.0。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.133.0';
+// v0.2.134.0 (2026-11-19): 读书屋「宿主静默」—— 开读书屋时把宿主停下来, 别在 iframe 底下烧电。
+//   用户: 「项目共读功能在打开长篇二十四史的时候, 部署在vercel的网站不怎么发烫, 轻微发烫,
+//          部署在netlify的那是眼看着手机温度直线上升, 比视频通话、放电影还烫得快」
+//   根因: 读书屋自己的数据路径是干净的 (一页一条, 常驻内存只有当前页 600 字),
+//          烫的【不是】它 —— 是【宿主在 iframe 底下全速跑】。
+//          iframe 是 position:fixed + inset:0 + z-index:2147483647, 盖住整屏,
+//          宿主一个像素都看不见, 却还在烧:
+//            · 宿主 CSS 里 58 条 infinite 动画 (visibility:hidden 只是看不见, 动画照跑)
+//            · .header 上的 backdrop-filter: blur(10px) (iOS 每次重绘都重采样背后)
+//            · 后台活动模拟 (每 60 秒, 可能发 AI 调用) + AI 提醒扫描 (每 30 秒)
+//            · 桌宠的换帧定时器 + 呼吸动画
+//          影院 2026-11-05 已经踩过同一个坑并修好 (pauseHostTimers + cinema-room.css
+//          的「宿主静默」段), 读书屋一直没跟上 → 这就是"读书屋比电影烫"的差别。
+//   ① modules/reading-room.js: 加 pauseHostTimers()/resumeHostTimers(),
+//      open() 里停, closeSandbox() 两个出口都恢复 (少恢复一次宿主的
+//      后台活动就永远醒不过来)。
+//   ② css/main-ui.css: 「读书屋宿主静默」段 —— body.reading-room-active 底下
+//      #phone-screen / #pn-desktop-pet / #floating-ball display:none !important,
+//      底下所有元素 animation-play-state: paused !important。
+//      ⚠️ 两半缺一不可: 只停 JS 定时器, CSS 动画照样烧; 只藏 CSS, 定时器照样跑。
+//   ③ 「无声智能保活」整个删掉 (代码 + UI)。
+//      用户: 「那个无声智能保活本来也不起作用, 帮我把代码和UI一起删了」
+//      删的理由 (modules/background-activity.js + index.html):
+//        · iOS Safari 没有 navigator.wakeLock → 第 1 件直接空转;
+//        · iOS PWA 挂后台照样冻结 JS, 一个 5s 心跳 Worker 骗不过 WebKit 的冻结;
+//        · 真能防冻结的是音频保活那套 (keep-alive-player), 不是这个;
+//        · 而它自己很费电 (Worker 每 5s 醒一次 + 回来时 1000 次 Math.sqrt 预热)。
+//      → modules/background-activity.js: startSmartKeepAlive / stopSmartKeepAlive /
+//        getSmartKeepAliveConfig / saveSmartKeepAliveConfig / updateSmartKeepAliveStatus /
+//        handleSmartVisibilityChange / handleSmartPageHide / handleSmartResume 全删,
+//        开关绑定、设置读取、pause/resume 里的 keepAlive 分支、window 导出全删;
+//        index.html: 「启用无声智能保活」开关 + 「无声保活状态」两块 UI 全删。
+//        ⚠️ 删的是【无声】那套。音频保活 (background-keep-alive-switch / keep-alive-player)
+//           是另一回事, 还在用, 没动。
+//   ④ 「实时天气同步」整个删掉 (代码 + UI)。用户: 「有高德了, 不需要了」
+//      → index.html: #weather-settings-section 整块 (开关 + 我的位置/对方位置配置) 删;
+//        modules/ai-response.js: getWeatherDescription / fetchWeather /
+//          getWeatherContextForPrompt 三个函数 + ${weatherContext} 占位符替换删;
+//        modules/ai-group.js: 两处 getWeatherContextForPrompt 调用 + 模板里的 ${weatherContext} 删;
+//        modules/background-activity.js / prompt-manager.js / modules/settings-presets.js /
+//          modules/cinema-chat.js: 模板变量 {{weatherContext}} 删;
+//        modules/init-event-bindingsA.js: 天气区块显隐 + 配置回显 + 保存三段删;
+//        modules/init-event-bindingsB.js: weather 设置的存取删;
+//        modules/init-pin-city.js: searchCityGeo + 两个城市搜索按钮删
+//          (⚠️ 这个文件还管 PIN 激活 / 手动总结弹窗 / SW 更新检查, 只删城市搜索那一段);
+//        css/chat-settings-skyblue.css + css/features-1.css: 天气样式段删。
+//        ⚠️ 没动 TA手机日记里的手写「天气」输入框 (myphone-diary-weather-input), 那是另一个东西。
+//   ⑤ 「专属音色样本 / AI 唱歌 Cover」整个删掉 (代码 + UI)。
+//      用户: 「Minimax 不让用 API 调用生成歌曲了, 所以那些个上传专属音色样本,
+//             AI 唱歌 cover 用那一项也不需要了」
+//      → js/music-voice-sample.js / js/role-voice-sample-ui.js 两个文件删除;
+//        index.html: 「🎤 专属音色样本（AI 唱歌 Cover 用）」+ #role-voice-sample-section +
+//          「角色有音色样本时自动用 Cover」开关删, 音乐模型下拉框的 Cover 那组删 (默认改 music-3.0);
+//        modules/ai-music.js: generateCover / MUSIC_COVER_PREPROCESS_URL / getVoiceSampleBlob /
+//          blobToBase64 / useVoiceSample / autoCoverWhenHasSample 切模型逻辑删;
+//        modules/ai-response.js / modules/ai-group.js / modules/background-activity.js:
+//          request_song 的 useVoiceSample 参数与工具说明删;
+//        modules/init-event-bindingsA.js: 自动 Cover 开关的保存 + 音色样本区块渲染删;
+//        modules/settings-presets.js: 音乐模型默认值 (music-cover → music-3.0) + 开关回显删;
+//        js/ai-songs-store.js / modules/floating-ball.js: isCover 字段一律 false。
+//        ⚠️ 普通生成模式 (music-3.0) 保留 —— 用户只点名删「专属音色样本 / Cover」这一项。
+//           但普通模式走的也是同一个 minimaxi music_generation 端点, 若那边真封了普通模式也会失效。
+//   index.html 的 ?v=：modules/reading-room.js 0.1.5→0.1.6、css/main-ui.css 0.0.68→0.0.69、
+//                    modules/background-activity.js 0.0.50→0.0.51、
+//                    css/features-1.css 0.0.38→0.0.39、
+//                    css/chat-settings-skyblue.css 0.0.36→0.0.37、
+//                    prompt-manager.js 0.0.37→0.0.38、
+//                    modules/ai-response.js 0.0.58→0.0.59、
+//                    modules/ai-group.js 0.0.41→0.0.42、
+//                    modules/ai-music.js 0.0.80→0.0.81、
+//                    js/ai-songs-store.js 0.0.79→0.0.80、
+//                    modules/settings-presets.js 0.0.90→0.0.91、
+//                    modules/init-pin-city.js 0.0.36→0.0.37、
+//                    modules/init-event-bindingsA.js 0.0.49→0.0.50、
+//                    modules/init-event-bindingsB.js 0.0.42→0.0.43、
+//                    modules/cinema-chat.js 0.2.5→0.2.6、
+//                    modules/floating-ball.js 0.0.39→0.0.40。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.134.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1456,8 +1534,9 @@ const URLS_TO_CACHE = [
   './modules/runtime-diagnostics.js',
   // v0.1.28 新增：AI 唱歌�? 个新模块�?
   './modules/ai-music.js',
-  './js/music-voice-sample.js',
-  './js/role-voice-sample-ui.js',
+  // 🔴 2026-11-19: './js/music-voice-sample.js' 和 './js/role-voice-sample-ui.js'
+  //   随「专属音色样本 / Cover 模式」一起删掉了 (那两个文件已不存在) —— 预缓存里必须同步删,
+  //   否则 install 期去拉这两个文件会 404 (allSettled 会跳过, 但白白发两次请求)。
   // v0.1.29 新增：AI 原创�?IndexedDB 持久化层
   './js/ai-songs-store.js',
   './js/netease-music.js',
@@ -1607,9 +1686,7 @@ self.addEventListener('fetch', event => {
      url.includes('/modules/runtime-diagnostics.js') ||
      // v0.1.28 新增：AI 唱歌模块
      url.includes('/modules/ai-music.js') ||
-     url.includes('/js/music-voice-sample.js') ||
-     url.includes('/js/role-voice-sample-ui.js') ||
-     // v0.1.29 新增：AI 原创曲存储层
+       // v0.1.29 新增：AI 原创曲存储层
      url.includes('/js/ai-songs-store.js') ||
      // v0.2.53.0 新增: 「今日私选」引擎 + 样式
      url.includes('/js/music-daily-discovery.js') ||

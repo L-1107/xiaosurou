@@ -542,39 +542,8 @@
     margin-top: 2px !important;
 }
 
-/* ---------- 26. 天气设置（weather-input-group） ---------- */
-#chat-settings-screen .weather-input-group {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 8px !important;
-    margin-top: 8px !important;
-    align-items: center !important;
-}
-#chat-settings-screen .weather-input {
-    flex: 1 !important;
-    min-width: 120px !important;
-    background-color: #DCEAF5 !important;
-    border: 1px solid #B5CFE0 !important;
-    color: #34495E !important;
-    border-radius: 8px !important;
-    padding: 8px 12px !important;
-    font-size: 13px !important;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04) !important;
-    outline: none !important;
-}
-#chat-settings-screen .weather-input:focus {
-    border-color: #5DADE2 !important;
-}
-#chat-settings-screen .weather-result-text {
-    color: #4A6A8F !important;
-    font-size: 12px !important;
-    margin-top: 6px !important;
-    padding: 6px 10px !important;
-    background-color: #EEF5FB !important;
-    border: 1px solid #C7DCEB !important;
-    border-radius: 6px !important;
-    display: inline-block !important;
-}
+/* ---------- 26. 天气设置（weather-input-group） ----------
+   🔴 2026-11-19: 「实时天气同步」删掉, 这段样式跟着删 (下面 27 号是记忆库/API历史那批) */
 
 /* ---------- 27. 表单按钮（form-button：记忆库/API历史/消息导航区域用） ---------- */
 #chat-settings-screen .form-button {

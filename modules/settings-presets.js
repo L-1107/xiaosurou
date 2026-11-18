@@ -199,7 +199,6 @@
 
 # 【Part 2: 当前情景 (Context)】
 {{timePerceptionContext}}
-{{weatherContext}}
 {{timeContext}}
 - **情景感知**:
     - **音乐**: {{musicContextStr}}
@@ -1410,16 +1409,11 @@
       musicApiKeyInput.value = state.globalSettings.musicApiKey || '';
     }
     if (musicModelSelect) {
-      // 【2026-07-21 改】默认用 cover 模式（角色专属音色）—— 用户原话："我们需要的是角色唱歌不是别人唱歌"
-      musicModelSelect.value = state.globalSettings.musicModel || 'music-cover';
+      // 🔴 2026-11-19: Cover 模式删掉, 默认改成 music-3.0
+      //    (老库里存的 musicModel 可能是 music-cover, 那边代码会自动兜回 music-3.0)
+      musicModelSelect.value = state.globalSettings.musicModel || 'music-3.0';
     }
-    // 【2026-07-23 新增】"角色有音色样本时自动用 Cover" 开关——默认 true 保持角色专属音色
-    // 用户可关掉后用普通模型（更便宜，但失去角色专属音色）
-    const autoCoverSwitch = document.getElementById('auto-cover-when-has-sample-switch');
-    if (autoCoverSwitch) {
-      // 未设置时默认 true（保持向后兼容）
-      autoCoverSwitch.checked = state.globalSettings.autoCoverWhenHasSample !== false;
-    }
+    // 🔴 2026-11-19: 「角色有音色样本时自动用 Cover」开关的读取逻辑删掉
     const musicApiKeyToggle = document.getElementById('music-api-key-toggle');
     if (musicApiKeyToggle && musicApiKeyInput) {
       musicApiKeyToggle.addEventListener('click', function() {

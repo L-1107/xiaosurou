@@ -481,7 +481,6 @@ ${(() => {
       if (summary7Days) multiLayeredSummaryContext += summary7Days;
     }
     const stickerContext = getStickerContextForPrompt(chat);
-    const weatherContext = await getWeatherContextForPrompt(chat);
     const wallet = await db.userWallet.get('main');
     const kinshipCard = wallet?.kinshipCards?.find(c => c.chatId === chat.id);
     let kinshipContext = "";
@@ -540,7 +539,6 @@ ${viewMyPhonePromptHint}
 ${chat.settings.enableTimePerception ? `
 # 【情景感知】
 - **时间**: 感知到当前是${currentTime} (${timeOfDayGreeting})}。
-${weatherContext}
 - **对话状态**: ${timeContextText}
 ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必须】将本次行动的重点放在使用 'text' 指令给用户发消息，主动开启一个新的、有趣的话题来重新建立联系。绝对不要只是点赞或评论动态，那会显得你很冷漠！` : ''}` : ''}
         
@@ -1053,7 +1051,6 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
               break;
             }
             const songLyrics = typeof action.lyrics === 'string' ? action.lyrics : '';
-            const useVoiceSample = action.useVoiceSample !== false;
             const instrumental = action.instrumental === true;
             const songTitle = String(action.title || action.name || 'AI 原创').trim() || 'AI 原创';
             const onProgress = ({ text }) => {
@@ -1064,7 +1061,6 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
                 chatId: chatId,
                 prompt: songPrompt,
                 lyrics: songLyrics,
-                useVoiceSample: useVoiceSample,
                 instrumental: instrumental,
                 onProgress: onProgress
               });
@@ -1076,7 +1072,7 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
               const persistResult = typeof window.persistAiSongBlob === 'function'
                 ? await window.persistAiSongBlob(songId, {
                     chatId: chatId, blob, title: songTitle, prompt: songPrompt,
-                    lyrics: songLyrics, instrumental, useVoiceSample, createdAt: Date.now()
+                    lyrics: songLyrics, instrumental, createdAt: Date.now()
                   })
                 : false;
               if (!persistResult) {
@@ -1090,7 +1086,7 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
               let addedIndex = -1;
               if (window.MusicPlayer && typeof window.MusicPlayer.addAiSongToPlaylist === 'function') {
                 const addResult = await window.MusicPlayer.addAiSongToPlaylist(blob, {
-                  songId, title: songTitle, isCover: useVoiceSample,
+                  songId, title: songTitle, isCover: false,
                   chatId: chatId, createdAt: Date.now(),
                   lyrics: songLyrics  // 【2026-07-23 修】caller 漏传 lyrics
                 });
@@ -1323,9 +1319,8 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
       if (summary7Days) multiLayeredSummaryContext += summary7Days;
     }
 
-    // 9. 表情包 + 天气
+    // 9. 表情包 (2026-11-19: 天气那段已删, 见 ai-response.js)
     const stickerContext = getStickerContextForPrompt(chat);
-    const weatherContext = await getWeatherContextForPrompt(chat);
 
     // 10. 亲属卡
     const wallet = await db.userWallet.get('main');
@@ -1343,7 +1338,6 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
 
 ${chat.settings.enableTimePerception ? `# 【情景感知】
 - **当前时间**: ${currentTime} (${timeOfDayGreeting})
-${weatherContext}
 - **对话状态**: ${silenceHint}
 
 ` : ''}# 【对话节奏铁律】
@@ -1377,7 +1371,7 @@ ${stickerContext}
       proxyUrl, apiKey, model,
       userNickname, currentTime, timeOfDayGreeting, silenceHint,
       worldBookContent, longTermMemoryContext, multiLayeredSummaryContext, linkedMemoryContext,
-      stickerContext, weatherContext, kinshipContext,
+      stickerContext, kinshipContext,
       minutesSinceUser
     };
   }

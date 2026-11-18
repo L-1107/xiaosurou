@@ -45,7 +45,6 @@ class PromptManager {
 
 # 【Part 2: 当前情景 (Context)】
 \${chat.settings.enableTimePerception ? \`- **当前时间**: \${currentTime} (\${timeOfDayGreeting})\` : ''}
-\${weatherContext}
 \${timeContext}
 - **情景感知**:
     - **音乐**: \${musicContext ? '你们正在一起听歌，' + musicContext : '你们没有在听歌。'}

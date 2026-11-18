@@ -5555,3 +5555,38 @@
                 
             }
 
+
+/* --------------------------------------------------------------------------
+   🔴 2026-11-19 读书屋宿主静默 (照抄影院 2026-11-05 那套)
+
+   【为什么】用户实测: 开长篇《二十四史》时, 读书屋比视频通话、放电影还烫得快。
+     读书屋自己的数据路径是干净的 (一页一条, 常驻内存只有当前页),
+     烫的不是它 —— 是【宿主在 iframe 底下全速跑】。
+     iframe 是 position:fixed + inset:0 + z-index:2147483647, 盖住整屏,
+     宿主一个像素都看不见, 却还在烧:
+       · 58 条 infinite 动画 (video-voice-call / pet-nest / features-* 全在跑)
+         —— visibility:hidden 只是看不见, 动画照跑不误;
+       · .header 上的 backdrop-filter: blur(10px) —— iOS 每次重绘都重采样背后;
+       · 桌宠的呼吸动画 + 悬浮球。
+     JS 那一半见 modules/reading-room.js 的 pauseHostTimers()
+     (停后台活动模拟 / AI提醒扫描 / 无声保活 / 桌宠换帧定时器)。
+     ⚠️ 两半缺一不可: 只停 JS 定时器, CSS 动画照样烧; 只藏 CSS, 定时器照样跑。
+
+   ⚠️ 沙盒页 (reading-sandbox/index.html) 里也有 body.reading-room-active
+     (那边是"房间开着"的意思), 但沙盒里根本没有 #phone-screen /
+     #pn-desktop-pet / #floating-ball —— 这几条规则在那边自动落空, 两边互不干扰。
+   -------------------------------------------------------------------------- */
+body.reading-room-active #phone-screen,
+body.reading-room-active #pn-desktop-pet,
+body.reading-room-active #pn-desktop-pet-bubble,
+body.reading-room-active #pn-desktop-pet-menu,
+body.reading-room-active #floating-ball {
+  display: none !important;
+}
+
+/* 兜底: 万一还有没藏起来的动画元素, 一律冻结 (不藏的元素也会继续烧) */
+body.reading-room-active #phone-screen *,
+body.reading-room-active #pn-desktop-pet *,
+body.reading-room-active #floating-ball * {
+  animation-play-state: paused !important;
+}
