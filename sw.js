@@ -1428,7 +1428,24 @@
 //                    modules/appearance-theme.js 0.0.87→0.0.88、
 //                    modules/init-and-state.js 0.0.84→0.0.85。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.132.0';
+// v0.2.133.0 (2026-11-18): 视频通话里兽耳自己扇动 (一上一下), 不再靠模型物理。
+//   用户: 「耳朵要能自己一上一下地摆」(兽耳四层已落地, 但摆在 330 里纹丝不动)
+//   根因: 模型耳朵的物理接的是 ParamBreath / ParamMouthOpenY, 这两个参数在 moc3 里范围是
+//        0~1 和 0~0.64, 默认值不在中点; Cubism 物理归一化围绕默认值算, 值 0 被当成满幅负输入
+//        → ParamEarSway 被永久钉在 −1.000 (−30°) 纹丝不动 (实测 12 秒)。
+//        (模型侧已删掉这两个输入, physics.scale 6/7 → 1.2, 已随模型包更新)
+//   但光修模型还不够: 330 里 pixi 自己的呼吸幅度只有 0.007、头部微动 ±0.1°, 推不动耳朵。
+//   → 改成在 live2d-loader.js 里直接驱动: 在 beforeModelUpdate 里写 ParamEarSway,
+//     曲线 (1−cos)/2 × 1.0, 周期 2.2 秒, 峰值 1.0 = 30°, 只往下压不回弹过头;
+//     白毛 ParamEarFluffSway 按 ×1.15 跟随。
+//   时机是关键: beforeModelUpdate 在 coreModel.update() 之前, 此时写入才进几何;
+//     在 ticker 里直写会被每帧末尾的 loadParameters() 抹成基线。
+//   实测 (无头 Edge + 真实模型包 + 真实 live2d-loader.js): 9 帧内耳朵区域每帧 3000+ 像素在变,
+//     差分纵向覆盖 102~579 (含耳尖到胸), 左右对称; 无 pageerror。
+//   ⚠️ 挂载时拍的参数基线快照可能含驱动写的值 → 已确认快照读的是帧末基线值, 不受影响。
+//   index.html 的 ?v=：modules/live2d-loader.js 0.3.9 → 0.4.0。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.133.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
