@@ -62,7 +62,8 @@
     snippet: ''
   };
 
-  function currentChatObject() {
+  function currentChatObject(override) {
+    if (override) return override;
     try {
       if (typeof state === 'undefined' || !state || !state.activeChatId) return null;
       return (state.chats && state.chats[state.activeChatId]) || null;
@@ -225,8 +226,8 @@
     };
   }
 
-  function currentChatPayload() {
-    var c = currentChatObject();
+  function currentChatPayload(override) {
+    var c = currentChatObject(override);
     if (!c) return null;
     return {
       id: c.id,
@@ -244,7 +245,7 @@
   }
 
   function sendInit() {
-    var payload = currentChatPayload();
+    var payload = currentChatPayload(_overrideChat);
     if (!payload || !frame) return;
     try {
       frame.contentWindow.postMessage({ type: 'reading:init', chat: payload }, '*');
@@ -341,13 +342,64 @@
     watchTimer = null;
   }
 
+  // ============================================================
+  // 🔴 2026-11-19 宿主静默 (照抄影院 2026-11-05 那套)
+  //
+  // 【为什么】用户实测: 读书屋开长篇(《二十四史》)比视频通话、放电影还烫得快。
+  //
+  //   读书屋自己的数据路径是干净的 (一页一条, 常驻只有当前页),
+  //   所以烫的不是它 —— 是【宿主在 iframe 底下全速跑】。
+  //   iframe 是 position:fixed + inset:0 + z-index 2147483647, 盖住整屏,
+  //   宿主一个像素都看不见, 却还在烧:
+  //     · 宿主 CSS 里 58 条 infinite 动画 (video-voice-call / pet-nest /
+  //       main-ui / features-* 全在跑) —— visibility:hidden 只是看不见, 动画照跑
+  //     · .header 上的 backdrop-filter: blur(10px) —— iOS 每次重绘都重采样背后
+  //     · 后台活动模拟 (每 60 秒, 可能发 AI 调用)
+  //     · AI 提醒扫描 (每 30 秒)
+  //     · 无声智能保活 —— 2026-11-19 已整个删掉 (见 background-activity.js)
+  //     · 桌宠的换帧定时器
+  //   影院开着的时候这些一个都用不上 → 打开就静默, 退出再醒。
+  //
+  //   CSS 那一半在 css/main-ui.css 的「读书屋宿主静默」段
+  //   (body.reading-room-active 底下 display:none + animation-play-state:paused)。
+  //   两半缺一不可: 只停 JS 定时器, CSS 动画照样烧; 只藏 CSS, 定时器照样跑。
+  //
+  // 【恢复原则】只恢复【进读书屋之前就在跑】的那些 —— 由 background-activity.js
+  //   自己记 (hostTaskPauseState), 不给用户凭空多开一个后台活动。
+  // ============================================================
+  function pauseHostTimers() {
+    try {
+      if (typeof global.pauseHostBackgroundTasks === 'function') global.pauseHostBackgroundTasks();
+    } catch (e) { /* noop */ }
+    try {
+      var pn = global.PetNest;
+      if (pn && typeof pn.pauseDesktopPet === 'function') pn.pauseDesktopPet();
+    } catch (e) { /* noop */ }
+  }
+
+  function resumeHostTimers() {
+    try {
+      if (typeof global.resumeHostBackgroundTasks === 'function') global.resumeHostBackgroundTasks();
+    } catch (e) { /* noop */ }
+    try {
+      var pn = global.PetNest;
+      if (pn && typeof pn.resumeDesktopPet === 'function') pn.resumeDesktopPet();
+    } catch (e) { /* noop */ }
+  }
+
   function closeSandbox(reason) {
     stopWatch();
     // ⚠️ 以前这里是 "if (!frame) return;" —— 于是 body 上的 class 永远摘不掉,
     //   宿主页面一直是 fixed, 整页点不动。现在即使没有 frame 也把状态清干净。
+    // 🔴 桌面「图书馆」那条兜底上下文必须跟着退出一起清 —— 否则下次从聊天里进来
+    //   还会用上一个"最近聊过"的角色当读书对象。
+    _overrideChat = null;
     if (!frame) {
       if (document.body) document.body.classList.remove('reading-room-active');
       session.active = false;
+      // ⚠️ 两个出口都要恢复 —— 少恢复一次, 用户的后台活动就永远醒不过来
+      //   (影院那边踩过: 只在有 frame 的出口恢复, 另一个出口就把宿主播死了)
+      resumeHostTimers();
       return;
     }
     try { frame.remove(); } catch (e) { /* noop */ }
@@ -356,6 +408,7 @@
     if (document.body) document.body.classList.remove('reading-room-active');
     session.active = false;
     session.snippet = '';
+    resumeHostTimers();
     log('已退出读书屋' + (reason ? ' (' + reason + ')' : ''));
   }
 
@@ -1049,11 +1102,12 @@
   // ============================================================
   function open() {
     if (frame) { closeSandbox('再点一次退出'); return; }
-    if (!currentChatObject()) {
+    if (!currentChatObject(_overrideChat)) {
       logWarn('没有当前聊天, 不开读书屋');
       return;
     }
     if (document.body) document.body.classList.add('reading-room-active');
+    pauseHostTimers();   // 2026-11-19: 宿主静默 (CSS 那头见 main-ui.css 的「读书屋宿主静默」段)
     bindViewportRelay();
 
     frame = document.createElement('iframe');
@@ -1069,6 +1123,54 @@
     frame.addEventListener('load', function () { sendInit(); pushViewport(); });
     startWatch();
     log('读书屋已打开');
+  }
+
+  // ============================================================
+  // v0.1.5: 桌面第二页「图书馆」入口
+  //
+  // 从桌面点进来时通常【没有当前聊天】—— 回聊天列表时 init-event-bindingsA.js
+  // 会把 state.activeChatId 置空, 而 open()/currentChatPayload() 都要求有 chat。
+  // 兜底: 有当前聊天就直接用; 没有就拿"最近聊过的那条"当读书对象。
+  // ⚠️ 只传给 open(), 不去改 state.activeChatId —— 桌面不该被某个聊天污染;
+  //    退出读书屋时 closeSandbox 会把它清掉 (_overrideChat = null)。
+  // ============================================================
+  var _overrideChat = null;
+
+  function pickLatestChat() {
+    var chats = (typeof state !== 'undefined' && state && state.chats) ? state.chats : null;
+    if (!chats) return null;
+    var best = null;
+    var bestTs = -1;
+    Object.keys(chats).forEach(function (k) {
+      var c = chats[k];
+      if (!c || !c.id) return;
+      var ts = Number(c.lastMessageTimestamp || c.updatedAt || 0) || 0;
+      if (ts > bestTs) { bestTs = ts; best = c; }
+    });
+    if (!best) {
+      // 一条都没有时间戳 (老数据) → 至少给一条, 别因为字段缺失就开不了
+      Object.keys(chats).forEach(function (k) {
+        if (!best && chats[k] && chats[k].id) best = chats[k];
+      });
+    }
+    return best;
+  }
+
+  function openFromHome() {
+    if (frame) { closeSandbox('再点一次退出'); return; }
+    if (!currentChatObject()) {
+      var fallback = pickLatestChat();
+      if (!fallback) {
+        if (typeof global.showToast === 'function') {
+          global.showToast('还没有聊天对象, 书架先空着吧');
+        }
+        logWarn('桌面「图书馆」: 一条聊天都没有, 不开读书屋');
+        return;
+      }
+      _overrideChat = fallback;
+      log('桌面「图书馆」: 用最近聊过的「' + (fallback.name || fallback.id) + '」当读书对象');
+    }
+    open();
   }
 
   function bindEntry() {
@@ -1177,12 +1279,14 @@
   global.notifyAiOfPageTurn = notifyAiOfPageTurn;
   global.readingSession = session;
   global.openReadingRoom = open;
+  global.openReadingRoomFromHome = openFromHome;
   global.closeReadingRoom = function () { closeSandbox(); };
   global.addGreenRiverToShelf = addGreenRiverToShelf;
   global.removeGreenRiverFromShelf = removeGreenRiverFromShelf;
   global.resetBtnToAddState = resetBtnToAddState;
   global.ReadingRoom = {
     open: open,
+    openFromHome: openFromHome,
     close: function () { closeSandbox(); },
     isOpen: function () { return !!frame; },
     session: session,

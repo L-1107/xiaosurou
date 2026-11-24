@@ -36,13 +36,6 @@
 
   let repostTargetId = null;
 
-  // ========== 来源：script.js 第 5151~5155 行 ==========
-  function renderXSocialScreen() {
-    console.log("渲染X社交页面");
-  }
-  window.renderXSocialScreenProxy = renderXSocialScreen;
-  window.renderXSocialScreen = renderXSocialScreen;
-
   // ========== 来源：script.js 第 5156~5165 行 ==========
 
   function renderQzoneScreen() {

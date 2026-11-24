@@ -1303,7 +1303,227 @@
 //   ⑤ endVoiceCall: 统一 close 一次 + 清引用。
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.86 → 0.0.87。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.125.0';
+// v0.2.126.0 (2026-11-16): 视频通话底部按钮框换云朵相框素材 + 铺满屏幕底部。
+//   用户给了新的透明 PNG 相框素材, 要求"铺满屏幕底部, 彻底遮住下面那截"。
+//   ① 素材正本 assets/live2d-call/视频通话底部框.png (1536x1024, 真 PNG 带 alpha,
+//      四角全透明), 原样使用未改像素。
+//   ② .video-call-controls 与 #video-call-controls-frame 一起从
+//      width:380px / max-width:92% / left:50% / bottom:64px / aspect-ratio:2/1
+//      改成 width:100% / left:0 / bottom:0 / transform:none / aspect-ratio:3/2
+//      —— 两个盒子必须同参数, 否则按钮热区与素材错位。
+//   ③ 三个按钮图案从旧合成图裁成独立圆形 PNG (btn-hangup / btn-model / btn-camera),
+//      .control-btn 改百分比定位 (20% 宽 + aspect-ratio:1/1, top:29%),
+//      left 17%/40%/63% → 水平间隙 11.7px。
+//   ④ 素材底边不是平直 (y>96% 全透明) → 加 ::before 奶油色补色垫 (bottom:0, height:8%),
+//      否则最底一行会漏出深色背景。
+//   index.html 的 ?v=：css/video-voice-call.css 0.0.52 → 0.0.53。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.127.0 (2026-11-16): 视频通话表情重新自动回默认 (只在"下一次 AI 说话前"恢复)。
+//   用户反馈"以前一轮对话结束会清掉上一句选的表情, 现在选了就再也不恢复"。
+//   查 git 确认不是这次改岔的: P22 (9cc98b8) 做过每轮强制回默认,
+//   e5cac19 (v0.5.0 P24) 按当时"要真人感、让 AI 自己判断情绪"的要求整段删除,
+//   只剩一段注释占位 —— 之后 AI 几乎不会主动写 [[表情:恢复]], 体感就是表情卡死在脸上。
+//   当时删它的另一条理由(「恢复执行层是空操作」)已不成立: P24 起恢复改走
+//   canvas._live2dInitialParams 参数快照还原, P28 的 resetParametersByScope 也已就位。
+//   ① 恢复时机 = 下一轮 AI 开始回应之前 (triggerAiInCallActionInner 内, 取 AI 配置之前),
+//      与老设计一致 —— 不是 TTS 播完那一刻, 也不是每说一句就清零。
+//   ② 只还原 face 组参数 (scope:'face' + getCallExpressionGroups().faceParams),
+//      不碰 pose 组 —— 动作/手势每轮有它自己的放下逻辑, 不能被连带卸掉。
+//   ③ 只有真的还原成功 (okBase) 才清空 lastAppliedExpression;
+//      失败 (模型还没挂载等) 保留记录下轮再试, 避免一次失败=永久卡住。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.88 → 0.0.89。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.128.0 (2026-11-16): 取消闪退后的「正常启动提示」弹窗。
+//   用户反馈"每次闪退以后都会弹出来一个丑丑的提示框", 不要了。
+//   ① init-crash-recovery.js: showCustomAlert/alert 那段长文案弹窗删掉, 改为 console.log。
+//      崩溃检测、心跳、快照、通话诊断记录(localStorage mavis-call-diag-v1) 全部不动 ——
+//      只是不再打扰用户; 需要复盘时开控制台仍能看到同一份文字。
+//   ② 数据安全提示不再打扰, 但"上次异常退出"依旧会 console.warn。
+//   index.html 的 ?v=：modules/init-crash-recovery.js 0.0.37 → 0.0.38。
+//   (init-crash-recovery.js 不在 URLS_TO_CACHE 清单里, 靠 ?v= 走 HTTP 缓存)
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.129.0 (2026-11-16): 聊天快捷功能按钮改造型 —— 图标下面带中文名。
+//   用户反馈"下方那一堆快捷按钮长得都很抽象, 靠图标猜不出功能, 对新手不友好"。
+//   根因实测: 21 个按钮被 flex 压到 **10px 宽**(容器 374px), 24px 的图标叠成一团;
+//     而且容器(css/video-voice-call.css:697)是「横滑 + 隐藏滚动条」, 手机上又没悬停看 title。
+//   ① 只改按钮自己: 54x50 圆角方块, 图标 22px + 下方 10px 中文名(name 由
+//      modules/init-features.js 注入 data-fn-label, CSS 用 ::after{content:attr()} 显示)。
+//   ② **容器一行没动**(用户明确要求: 后期美化会重排这排按钮, 不能改结构)。
+//      DOM 节点/id/顺序/applyButtonOrder 自定义排序 全部原样。
+//   index.html 的 ?v=：css/chat-ui.css 0.0.37 → 0.0.38、modules/init-features.js 0.0.46 → 0.0.47。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.130.0 (2026-11-17): 视频通话底部按钮框 = 黄色奶黄底板相框 (P27 那版) + 满宽贴底。
+//   用户: 「还是不好看 ... 是那个黄色的啊」—— 先要的是最早那版相框, 我先误取成
+//   更早的绿色花环素材 (d242135^), 用户当场纠正不是绿色是「那个黄色的」。
+//   正解 = P27 那版不透明奶黄底板 (视频通话正式页按钮框.png, 1774x887, 比例正好 2.0,
+//   三个小动物按钮画在素材里)。那一版之后被 P28 云朵相框顶掉, 现在换回来并放大铺底。
+//   ① 素材裁边: 原图 1774x887 左右各有 4%~6% 透明留白 + 蕾丝尖角, 直接铺满屏幕
+//      会在左右各留一条约 20px 的深色缝 (用户实机反馈「框两边还有缝」)。
+//      新素材 视频通话正式页按钮框-满宽.png = 裁 x=111..1650 / y=58..843 → 1540x786
+//      (比例 1.9593), 内容顶到 x=0/100%, 两边一条缝都没有;
+//      代价是最外侧那几处蕾丝尖角被屏幕边缘切掉 (只裁掉 0..45 art px 的尖端)。
+//   ② 盒子: width:100% + aspect-ratio 1540/786 (裁后原生比例, 不拉伸)
+//      → iPhone11 (414 宽) = 414x211.3; 390 宽 = 390x199.1。
+//      P27 当时 380 + max-width:92% 在 390 屏上实际只有 358.8x179.4。
+//   ③ 按钮退回【透明点击热区】: 图案在素材里, HTML 只留百分比热区
+//      宽 24.22% (素材里按钮直径 373 art px)、left 10.39%/38.25%/66.17%、top 22.27%。
+//      实测 iPhone11 三个热区 100.27x100.27, 圆心 elementFromPoint 全部命中按钮自己;
+//      390 / 360 宽屏同样 OK, 无 pageerror。
+//   ④ 底边: 裁后实体铺到 95%, 下面只剩一排点状花边 → ::before 垫素材同色奶油
+//      (#fcf1cb = 252,241,203, bottom:0 / height:5% / 左右 0) 让底板铺到屏幕底边。
+//      实测最底一行 x=0..413 全是 252,241,203 (无漏底)。
+//   ⑤ #video-call-status-text bottom 294 → 200 (iPhone11 框高 211.3)。
+//   ⑥ 上一轮误加的绿色花环素材 (视频通话按钮框-花环.png) 已从仓库删掉, 没用过别找它。
+//   index.html 的 ?v=：css/video-voice-call.css 0.0.53 → 0.0.54。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.131.0 (2026-11-17): 桌面第二页的 X 应用删掉, 换成「图书馆」→ 一起读书。
+//   用户: 「主聊天屏幕第二页有个X, 帮我把这个X相关的代码删了, 这个按钮换成图书馆,
+//          然后把共读的热点链接上, 点这个按钮就进入一起读书」
+//   ① X 其实是死入口: 那个小部件 onclick="showScreen('x-social-screen')",
+//      可是 index.html 里【根本没有 id="x-social-screen" 这个屏】, 点了什么都不会发生。
+//      删掉的东西 (全仓库已无 x-social / icon-img-x / homeAppX 残留):
+//        · index.html 页2 的 X 小部件 (onclick + img#icon-img-x + data-lang-key="homeAppX")
+//        · modules/translations.js 两处 homeAppX ('X')
+//        · modules/chat-list.js 里 "if (screenId === 'x-social-screen') renderXSocialScreenProxy()"
+//        · modules/qzone.js 里的 renderXSocialScreen 空壳 + 两个 window 代理
+//      说明: init-db-schema.js / reading-storage.js 里提到 "XSocialDB" 只是注释里的举例,
+//            不是代码, 没动。
+//   ② 新按钮: 同一个位置 (页2 右侧 app-subgrid) 换成「图书馆」
+//      图标 = 书本 SVG, img#icon-img-library 留空 (跟其它小部件一样可由主题换图),
+//      data-lang-key="homeAppLibrary" (中文 图书馆 / 英文 Library),
+//      onclick="openReadingRoomFromHome()"
+//   ③ 共读热点接上: modules/reading-room.js 新增 openFromHome()
+//      · 有当前聊天 → 直接 open(), 跟聊天里那颗「一起读书」完全同一条路
+//      · 没有当前聊天 (回聊天列表时 state.activeChatId 会被置空) →
+//        拿 lastMessageTimestamp 最新的那条聊天当读书对象, 只作 override 传给 open(),
+//        【不改 state.activeChatId】(桌面不该被某个聊天污染);
+//        一条聊天都没有 → showToast 提示, 不硬开。
+//      · closeSandbox 里把 override 清掉, 免得下次从聊天进来还用上一个角色。
+//      · currentChatObject / currentChatPayload / sendInit / open 四个函数加了 override 参数。
+//      实测 (无头 Edge 414x896, file:// 真实 index.html):
+//        图书馆 label/图标/onclick 都在, 老 X 的 img 与 lang-key 都不存在, pageerror 0;
+//        没有聊天时点 → 不创建 iframe, 不抛错;
+//        有聊天时点 → #reading-sandbox-frame 出现 (src=reading-sandbox/index.html?v=0.1.1),
+//        ReadingRoom.isOpen() = true; 关掉后 iframe 移除, isOpen 变 false。
+//   index.html 的 ?v=：modules/translations.js 0.0.36→0.0.37、modules/chat-list.js 0.0.36→0.0.37、
+//                    modules/qzone.js 0.0.36→0.0.37、modules/reading-room.js 0.1.4→0.1.5。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.132.0 (2026-11-17): 外观设置里给「图书馆」补图标槽位, 老库残留的 X 槽清掉。
+//   用户: 「推送后才发现, 图书馆的美化图标在外观设置里没有槽位, 外观设置里还是X,
+//          所以换不了图标, 你帮我给图书馆在外观设置里弄个上传美化图标的坑位, 把X的删了」
+//   根因: 外观设置的图标槽位不是固定清单, 而是遍历 state.globalSettings.appIcons 的 key ——
+//        老 DB 里 appIcons 还留着 "x" (v0.2.131 只是把桌面那个 X 小部件换掉了, 没动图标字典),
+//        而新键 "library" 从来没进过老库 → 结果就是 X 槽还在、图书馆没坑位。
+//   ① modules/utils.js 的 DEFAULT_APP_ICONS: 把 'x': '' 换成 'library': ''。
+//   ② modules/appearance-theme.js 的 appLabels: 'x': 'X' 换成 'library': '图书馆'
+//      (槽位标签就是这个表给的, 不改的话新槽会显示成 "Cphone")。
+//   ③ modules/init-and-state.js: appIcons 与默认值合并之后做一次归一 ——
+//      delete appIcons.x; 缺 library 就补一个空值。每次启动都做, 所以老库一开就干净;
+//      用户之后随便改个设置就会把清洗结果一起写进 DB。
+//   实测 (无头 Edge, 真 IndexedDB): 先往库里塞一份"老库"(appIcons.x 带一张已上传的图,
+//      没有 library), 重载后 state.globalSettings.appIcons → hasX=false / hasLibrary=true;
+//      DOM 上 #icon-img-library 在、#icon-img-x 没了; 真跑 renderIconSettings() 渲染出 24 个槽,
+//      顺序里 library 正好落在原来 x 的位置, 且不含 x; pageerror 0。
+//   index.html 的 ?v=：modules/utils.js 0.0.82→0.0.83、
+//                    modules/appearance-theme.js 0.0.87→0.0.88、
+//                    modules/init-and-state.js 0.0.84→0.0.85。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.133.0 (2026-11-18): 视频通话里兽耳自己扇动 (一上一下), 不再靠模型物理。
+//   用户: 「耳朵要能自己一上一下地摆」(兽耳四层已落地, 但摆在 330 里纹丝不动)
+//   根因: 模型耳朵的物理接的是 ParamBreath / ParamMouthOpenY, 这两个参数在 moc3 里范围是
+//        0~1 和 0~0.64, 默认值不在中点; Cubism 物理归一化围绕默认值算, 值 0 被当成满幅负输入
+//        → ParamEarSway 被永久钉在 −1.000 (−30°) 纹丝不动 (实测 12 秒)。
+//        (模型侧已删掉这两个输入, physics.scale 6/7 → 1.2, 已随模型包更新)
+//   但光修模型还不够: 330 里 pixi 自己的呼吸幅度只有 0.007、头部微动 ±0.1°, 推不动耳朵。
+//   → 改成在 live2d-loader.js 里直接驱动: 在 beforeModelUpdate 里写 ParamEarSway,
+//     曲线 (1−cos)/2 × 1.0, 周期 2.2 秒, 峰值 1.0 = 30°, 只往下压不回弹过头;
+//     白毛 ParamEarFluffSway 按 ×1.15 跟随。
+//   时机是关键: beforeModelUpdate 在 coreModel.update() 之前, 此时写入才进几何;
+//     在 ticker 里直写会被每帧末尾的 loadParameters() 抹成基线。
+//   实测 (无头 Edge + 真实模型包 + 真实 live2d-loader.js): 9 帧内耳朵区域每帧 3000+ 像素在变,
+//     差分纵向覆盖 102~579 (含耳尖到胸), 左右对称; 无 pageerror。
+//   ⚠️ 挂载时拍的参数基线快照可能含驱动写的值 → 已确认快照读的是帧末基线值, 不受影响。
+//   index.html 的 ?v=：modules/live2d-loader.js 0.3.9 → 0.4.0。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.134.0 (2026-11-19): 读书屋「宿主静默」—— 开读书屋时把宿主停下来, 别在 iframe 底下烧电。
+//   用户: 「项目共读功能在打开长篇二十四史的时候, 部署在vercel的网站不怎么发烫, 轻微发烫,
+//          部署在netlify的那是眼看着手机温度直线上升, 比视频通话、放电影还烫得快」
+//   根因: 读书屋自己的数据路径是干净的 (一页一条, 常驻内存只有当前页 600 字),
+//          烫的【不是】它 —— 是【宿主在 iframe 底下全速跑】。
+//          iframe 是 position:fixed + inset:0 + z-index:2147483647, 盖住整屏,
+//          宿主一个像素都看不见, 却还在烧:
+//            · 宿主 CSS 里 58 条 infinite 动画 (visibility:hidden 只是看不见, 动画照跑)
+//            · .header 上的 backdrop-filter: blur(10px) (iOS 每次重绘都重采样背后)
+//            · 后台活动模拟 (每 60 秒, 可能发 AI 调用) + AI 提醒扫描 (每 30 秒)
+//            · 桌宠的换帧定时器 + 呼吸动画
+//          影院 2026-11-05 已经踩过同一个坑并修好 (pauseHostTimers + cinema-room.css
+//          的「宿主静默」段), 读书屋一直没跟上 → 这就是"读书屋比电影烫"的差别。
+//   ① modules/reading-room.js: 加 pauseHostTimers()/resumeHostTimers(),
+//      open() 里停, closeSandbox() 两个出口都恢复 (少恢复一次宿主的
+//      后台活动就永远醒不过来)。
+//   ② css/main-ui.css: 「读书屋宿主静默」段 —— body.reading-room-active 底下
+//      #phone-screen / #pn-desktop-pet / #floating-ball display:none !important,
+//      底下所有元素 animation-play-state: paused !important。
+//      ⚠️ 两半缺一不可: 只停 JS 定时器, CSS 动画照样烧; 只藏 CSS, 定时器照样跑。
+//   ③ 「无声智能保活」整个删掉 (代码 + UI)。
+//      用户: 「那个无声智能保活本来也不起作用, 帮我把代码和UI一起删了」
+//      删的理由 (modules/background-activity.js + index.html):
+//        · iOS Safari 没有 navigator.wakeLock → 第 1 件直接空转;
+//        · iOS PWA 挂后台照样冻结 JS, 一个 5s 心跳 Worker 骗不过 WebKit 的冻结;
+//        · 真能防冻结的是音频保活那套 (keep-alive-player), 不是这个;
+//        · 而它自己很费电 (Worker 每 5s 醒一次 + 回来时 1000 次 Math.sqrt 预热)。
+//      → modules/background-activity.js: startSmartKeepAlive / stopSmartKeepAlive /
+//        getSmartKeepAliveConfig / saveSmartKeepAliveConfig / updateSmartKeepAliveStatus /
+//        handleSmartVisibilityChange / handleSmartPageHide / handleSmartResume 全删,
+//        开关绑定、设置读取、pause/resume 里的 keepAlive 分支、window 导出全删;
+//        index.html: 「启用无声智能保活」开关 + 「无声保活状态」两块 UI 全删。
+//        ⚠️ 删的是【无声】那套。音频保活 (background-keep-alive-switch / keep-alive-player)
+//           是另一回事, 还在用, 没动。
+//   ④ 「实时天气同步」整个删掉 (代码 + UI)。用户: 「有高德了, 不需要了」
+//      → index.html: #weather-settings-section 整块 (开关 + 我的位置/对方位置配置) 删;
+//        modules/ai-response.js: getWeatherDescription / fetchWeather /
+//          getWeatherContextForPrompt 三个函数 + ${weatherContext} 占位符替换删;
+//        modules/ai-group.js: 两处 getWeatherContextForPrompt 调用 + 模板里的 ${weatherContext} 删;
+//        modules/background-activity.js / prompt-manager.js / modules/settings-presets.js /
+//          modules/cinema-chat.js: 模板变量 {{weatherContext}} 删;
+//        modules/init-event-bindingsA.js: 天气区块显隐 + 配置回显 + 保存三段删;
+//        modules/init-event-bindingsB.js: weather 设置的存取删;
+//        modules/init-pin-city.js: searchCityGeo + 两个城市搜索按钮删
+//          (⚠️ 这个文件还管 PIN 激活 / 手动总结弹窗 / SW 更新检查, 只删城市搜索那一段);
+//        css/chat-settings-skyblue.css + css/features-1.css: 天气样式段删。
+//        ⚠️ 没动 TA手机日记里的手写「天气」输入框 (myphone-diary-weather-input), 那是另一个东西。
+//   ⑤ 「专属音色样本 / AI 唱歌 Cover」整个删掉 (代码 + UI)。
+//      用户: 「Minimax 不让用 API 调用生成歌曲了, 所以那些个上传专属音色样本,
+//             AI 唱歌 cover 用那一项也不需要了」
+//      → js/music-voice-sample.js / js/role-voice-sample-ui.js 两个文件删除;
+//        index.html: 「🎤 专属音色样本（AI 唱歌 Cover 用）」+ #role-voice-sample-section +
+//          「角色有音色样本时自动用 Cover」开关删, 音乐模型下拉框的 Cover 那组删 (默认改 music-3.0);
+//        modules/ai-music.js: generateCover / MUSIC_COVER_PREPROCESS_URL / getVoiceSampleBlob /
+//          blobToBase64 / useVoiceSample / autoCoverWhenHasSample 切模型逻辑删;
+//        modules/ai-response.js / modules/ai-group.js / modules/background-activity.js:
+//          request_song 的 useVoiceSample 参数与工具说明删;
+//        modules/init-event-bindingsA.js: 自动 Cover 开关的保存 + 音色样本区块渲染删;
+//        modules/settings-presets.js: 音乐模型默认值 (music-cover → music-3.0) + 开关回显删;
+//        js/ai-songs-store.js / modules/floating-ball.js: isCover 字段一律 false。
+//        ⚠️ 普通生成模式 (music-3.0) 保留 —— 用户只点名删「专属音色样本 / Cover」这一项。
+//           但普通模式走的也是同一个 minimaxi music_generation 端点, 若那边真封了普通模式也会失效。
+//   index.html 的 ?v=：modules/reading-room.js 0.1.5→0.1.6、css/main-ui.css 0.0.68→0.0.69、
+//                    modules/background-activity.js 0.0.50→0.0.51、
+//                    css/features-1.css 0.0.38→0.0.39、
+//                    css/chat-settings-skyblue.css 0.0.36→0.0.37、
+//                    prompt-manager.js 0.0.37→0.0.38、
+//                    modules/ai-response.js 0.0.58→0.0.59、
+//                    modules/ai-group.js 0.0.41→0.0.42、
+//                    modules/ai-music.js 0.0.80→0.0.81、
+//                    js/ai-songs-store.js 0.0.79→0.0.80、
+//                    modules/settings-presets.js 0.0.90→0.0.91、
+//                    modules/init-pin-city.js 0.0.36→0.0.37、
+//                    modules/init-event-bindingsA.js 0.0.49→0.0.50、
+//                    modules/init-event-bindingsB.js 0.0.42→0.0.43、
+//                    modules/cinema-chat.js 0.2.5→0.2.6、
+//                    modules/floating-ball.js 0.0.39→0.0.40。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.134.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1314,8 +1534,9 @@ const URLS_TO_CACHE = [
   './modules/runtime-diagnostics.js',
   // v0.1.28 新增：AI 唱歌�? 个新模块�?
   './modules/ai-music.js',
-  './js/music-voice-sample.js',
-  './js/role-voice-sample-ui.js',
+  // 🔴 2026-11-19: './js/music-voice-sample.js' 和 './js/role-voice-sample-ui.js'
+  //   随「专属音色样本 / Cover 模式」一起删掉了 (那两个文件已不存在) —— 预缓存里必须同步删,
+  //   否则 install 期去拉这两个文件会 404 (allSettled 会跳过, 但白白发两次请求)。
   // v0.1.29 新增：AI 原创�?IndexedDB 持久化层
   './js/ai-songs-store.js',
   './js/netease-music.js',
@@ -1465,9 +1686,7 @@ self.addEventListener('fetch', event => {
      url.includes('/modules/runtime-diagnostics.js') ||
      // v0.1.28 新增：AI 唱歌模块
      url.includes('/modules/ai-music.js') ||
-     url.includes('/js/music-voice-sample.js') ||
-     url.includes('/js/role-voice-sample-ui.js') ||
-     // v0.1.29 新增：AI 原创曲存储层
+       // v0.1.29 新增：AI 原创曲存储层
      url.includes('/js/ai-songs-store.js') ||
      // v0.2.53.0 新增: 「今日私选」引擎 + 样式
      url.includes('/js/music-daily-discovery.js') ||

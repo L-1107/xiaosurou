@@ -1163,7 +1163,7 @@
           const rec = await window.AiSongsStore.getSong(songId);
           if (!rec) { if (typeof showToast === 'function') showToast('歌曲不存在, 请刷新列表'); return; }
           const r = await window.MusicPlayer.addAiSongToPlaylist(rec.blob, {
-            songId: rec.songId, title: rec.title, isCover: rec.useVoiceSample,
+            songId: rec.songId, title: rec.title, isCover: false,
             chatId: rec.chatId, createdAt: rec.createdAt, lyrics: rec.lyrics
           });
           await window.MusicPlayer.playSong(r.index, true);

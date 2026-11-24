@@ -706,41 +706,10 @@ ${interjectionList}
     return `- **你的生日**: ${birthdayStr}\n- **你的当前年龄**: ${age}岁\n`;
   }
 
-  // WMO天气代码转中文描述
-  function getWeatherDescription(code) {
-    const codes = {
-      0: "晴朗 (Clear sky)",
-      1: "大部晴朗 (Mainly clear)", 2: "多云 (Partly cloudy)", 3: "阴天 (Overcast)",
-      45: "有雾 (Fog)", 48: "结霜雾 (Depositing rime fog)",
-      51: "轻微毛毛雨 (Drizzle: Light)", 53: "中度毛毛雨 (Drizzle: Moderate)", 55: "大毛毛雨 (Drizzle: Dense)",
-      61: "小雨 (Rain: Slight)", 63: "中雨 (Rain: Moderate)", 65: "大雨 (Rain: Heavy)",
-      71: "小雪 (Snow fall: Slight)", 73: "中雪 (Snow fall: Moderate)", 75: "大雪 (Snow fall: Heavy)",
-      80: "阵雨 (Rain showers)", 81: "中度阵雨", 82: "暴雨",
-      95: "雷雨 (Thunderstorm)", 96: "雷雨伴有冰雹", 99: "重度雷雨伴有冰雹"
-    };
-    return codes[code] || "未知天气";
-  }
-
-  // 根据经纬度获取实时天气
-  async function fetchWeather(lat, lon) {
-    if (!lat || !lon) return null;
-    try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day,wind_speed_10m&timezone=auto`;
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.current) {
-        const c = data.current;
-        const desc = getWeatherDescription(c.weather_code);
-        const dayState = c.is_day ? "白天" : "夜晚";
-        return `气温 ${c.temperature_2m}°C, 湿度 ${c.relative_humidity_2m}%, ${desc}, ${dayState}, 风速 ${c.wind_speed_10m}km/h`;
-      }
-      return null;
-    } catch (e) {
-      console.error("获取天气失败:", e);
-      return null;
-    }
-  }
+  // 🔴 2026-11-19 「实时天气同步」删掉 (用户: 有高德了, 不需要了)
+  //   原来的 getWeatherDescription / fetchWeather / getWeatherContextForPrompt
+  //   (open-meteo 拉实时天气 → 塞进提示词) 三个函数连同 UI 一起移除。
+  //   位置信息现在由高德那条线提供, 天气不再往提示词里塞。
 
   function readBooleanFromLocalStorage(keys) {
     for (const key of keys) {
@@ -1024,39 +993,8 @@ ${interjectionList}
     return ['ai_image', 'naiimag', 'googleimag', 'openaiimag'].includes(msgData.type);
   }
 
-  // 获取天气上下文信息，用于AI prompt
-  async function getWeatherContextForPrompt(chat) {
-    const wSettings = chat.settings.weather || {};
-    if (!wSettings.enabled) return "";
-
-    let context = "\n# 【实时环境与天气同步】\n";
-    let hasData = false;
-
-    // 获取用户天气
-    if (wSettings.userLat && wSettings.userLon) {
-      const userWeather = await fetchWeather(wSettings.userLat, wSettings.userLon);
-      if (userWeather) {
-        const locationName = wSettings.userVirtualCity || "所在地";
-        context += `- 用户(${chat.settings.myNickname || '我'})当前在【${locationName}】: ${userWeather}。\n`;
-        hasData = true;
-      }
-    }
-
-    // 获取角色天气
-    if (wSettings.charLat && wSettings.charLon) {
-      const charWeather = await fetchWeather(wSettings.charLat, wSettings.charLon);
-      if (charWeather) {
-        const locationName = wSettings.charVirtualCity || "所在地";
-        context += `- 你(${chat.name})当前在【${locationName}】: ${charWeather}。\n`;
-        hasData = true;
-      }
-    }
-
-    if (!hasData) return "";
-
-    context += "请根据上述天气和时间状态（如是否下雨、是白天还是夜晚）来调整你的描写氛围、角色的行动（如撑伞、避暑、添衣）以及对话内容。";
-    return context;
-  }
+  // 🔴 2026-11-19 「实时天气同步」删掉 —— getWeatherContextForPrompt 整个移除。
+  //   位置信息现在由高德那条线提供, 天气不再往提示词里塞。
 
   function toGeminiRequestData(model, apiKey, systemInstruction, messagesForDecision) {
     const apiTemperature = state.globalSettings.apiTemperature || 0.8;
@@ -1375,7 +1313,6 @@ ${interjectionList}
     p = p.replace(/\$\{nameHistoryContext\}/g, '{{nameHistoryContext}}');
     
     p = p.replace(/\$\{chat\.settings\.enableTimePerception[^\n]*\}/g, '{{timePerceptionContext}}');
-    p = p.replace(/\$\{weatherContext\}/g, '{{weatherContext}}');
     p = p.replace(/\$\{timeContext\}/g, '{{timeContext}}');
     p = p.replace(/\$\{musicContext\s*\?[^\n]*\}/g, '{{musicContextStr}}');
     p = p.replace(/\$\{readingContext\s*\?[^\n]*\}/g, '{{readingContextStr}}');
@@ -3077,15 +3014,13 @@ ${linkedContents}
            - 你觉得对话氛围合适，主动推荐（如"这首我很喜欢，给你放一首类似的"）
            - playlist 为空时用它
         注意：add_song_to_playlist 会**自动播放 + 自动启动一起听**（不需要再发 change_music）。
-        3. **request_song** - 主动给用户唱一首歌（默认走 Cover 模式——用你的专属音色；角色没上传音色样本时自动降级到普通模式）
-           { "type": "request_song", "title": "歌名", "prompt": "风格描述", "lyrics": "[Verse]...\\n[Chorus]...", "useVoiceSample": true, "instrumental": false }
+        3. **request_song** - 主动给用户唱一首歌
+           { "type": "request_song", "title": "歌名", "prompt": "风格描述", "lyrics": "[Verse]...\\n[Chorus]...", "instrumental": false }
            - title: 你给这首歌起的名字（必填，会显示在聊天流）
            - prompt: 风格/情绪/场景描述（如 "温柔民谣，吉他伴奏，温暖治愈"，必填）
            - lyrics: 完整歌词（带 [Verse]/[Chorus]/[Bridge] 等结构标签）。传 "" 或省略 → AI 自动写词
-           - useVoiceSample: 是否用你的专属音色样本（Cover 模式，default true；系统会自动检测是否上传了样本——如果上传了就用 Cover 模式唱你的声音，没上传就降级到普通模式）
            - instrumental: 是否纯音乐（default false）
            适用场景：用户说"给我唱首歌" / "唱一首关于X的歌" / 你觉得氛围合适主动唱一首
-        ⚠️ 重要：你唱的歌默认是**你自己的声音**（Cover 模式）。**几乎所有情况下 useVoiceSample 留 true 即可**。除非用户明确要求"用别的声音唱"（极罕见），才传 false。
         注意：request_song 只在单聊可用，调用会自动播放 + 推一条 "AI 为你唱了《XX》" 的消息到聊天流。
         `;
       // 把工具说明附加到 musicContext（如果 musicContext 是空的，工具说明仍然会被附加）
@@ -4265,8 +4200,7 @@ ${enabledEntries}
       - 尝试生成 15 个左右的音符。
     - 当你想表达强烈情感时，请积极使用此功能。 `;
           }
-          const weatherContext = !chat.isGroup ? await getWeatherContextForPrompt(chat) : "";
-          let narratorInstruction = '';
+          const narratorInstruction = '';
           if (chat.settings.enableNarratorMode) {
             narratorInstruction = `
 # 【旁白模式开启 (必须执行)】
@@ -4699,7 +4633,6 @@ ${getActiveThoughtsPrompt()}
             'userProfileContext': userProfileContext,
             'nameHistoryContext': nameHistoryContext,
             'timePerceptionContext': chat.settings.enableTimePerception ? `- **当前时间**: ${currentTime} (${timeOfDayGreeting})` : '',
-            'weatherContext': weatherContext,
             'timeContext': timeContext,
             'musicContextStr': (typeof musicState.isActive === 'boolean' && musicState.isActive) ? '你们正在一起听歌，' + musicContext : '你们没在听歌，但你有两个音乐工具：change_music（切已有歌）和 add_song_to_playlist（全网易搜歌+自动播放）。\n' + musicContext,
             'readingContextStr': readingContext ? '你们正在一起读书。' + readingContext : '你们没有在读书。',
@@ -6950,7 +6883,6 @@ ${getActiveThoughtsPrompt()}
                 continue;
               }
               const songLyrics = typeof msgData.lyrics === 'string' ? msgData.lyrics : '';
-              const useVoiceSample = msgData.useVoiceSample !== false; // 默认 true
               const instrumental = msgData.instrumental === true;
               const songTitle = String(msgData.title || msgData.name || 'AI 原创').trim() || 'AI 原创';
               const onProgress = ({ text }) => {
@@ -6960,7 +6892,6 @@ ${getActiveThoughtsPrompt()}
                 chatId: chatId,
                 prompt: songPrompt,
                 lyrics: songLyrics,
-                useVoiceSample: useVoiceSample,
                 instrumental: instrumental,
                 onProgress: onProgress
               });
@@ -6977,7 +6908,6 @@ ${getActiveThoughtsPrompt()}
                 prompt: songPrompt,
                 lyrics: songLyrics,
                 instrumental: instrumental,
-                useVoiceSample: useVoiceSample,
                 createdAt: Date.now()
               });
               if (!persistResult) {
@@ -7001,7 +6931,7 @@ ${getActiveThoughtsPrompt()}
                 const addResult = await window.MusicPlayer.addAiSongToPlaylist(blob, {
                   songId: songId,
                   title: songTitle,
-                  isCover: useVoiceSample,
+                  isCover: false,   // 2026-11-19: Cover 模式删掉了, 一律 false
                   chatId: chatId,
                   createdAt: Date.now(),
                   lyrics: songLyrics  // 【2026-07-23 修】caller 漏传 lyrics，buildLrcFromLyrics 拿不到词 → 播放器 lrcContent 一直是空
@@ -8480,7 +8410,6 @@ ${linkedContents}
         'userProfileContext': userProfileContext,
         'nameHistoryContext': nameHistoryContext,
         'timePerceptionContext': chat.settings.enableTimePerception ? `- **当前时间**: ${currentTime} (${timeOfDayGreeting})` : '',
-        'weatherContext': '', // 推进时省略天气
         'timeContext': '',
         'musicContextStr': (typeof musicState.isActive === 'boolean' && musicState.isActive) ? '你们正在一起听歌，' + musicContext : '你们没在听歌，但你有两个音乐工具：change_music（切已有歌）和 add_song_to_playlist（全网易搜歌+自动播放）。\n' + musicContext,
         'readingContextStr': '你们没有在读书。',

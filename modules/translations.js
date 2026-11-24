@@ -54,7 +54,7 @@ const translations = {
     homeAppPreset: '预设',
     homeAppTutorial: '教程',
     homeAppWerewolf: '狼人杀',
-    homeAppX: 'X',
+    homeAppLibrary: '图书馆',
     homeAppCharGenerator: '角色生成',
 
     // --- 聊天列表页 ---
@@ -287,7 +287,7 @@ const translations = {
     homeAppPreset: 'Presets',
     homeAppTutorial: 'Tutorial',
     homeAppWerewolf: 'Werewolf',
-    homeAppX: 'X',
+    homeAppLibrary: 'Library',
     homeAppCharGenerator: 'Character Generator',
 
     // --- Chat List Screen ---

@@ -44,7 +44,8 @@
   }
 
   // 存一首 AI 原创 / 翻唱
-  // metadata 字段：{ chatId, blob, title, prompt, lyrics, instrumental, useVoiceSample, createdAt }
+  // metadata 字段：{ chatId, blob, title, prompt, lyrics, instrumental, createdAt }
+  //   (2026-11-19: useVoiceSample 字段随 Cover 模式一起没了)
   async function persistSong(songId, metadata) {
     if (!songId || !metadata) {
       console.error('[AiSongsStore] persistSong: missing songId or metadata', { songId, hasMetadata: !!metadata });
@@ -164,7 +165,7 @@
             title: r.title,
             createdAt: r.createdAt,
             size: r.blob ? r.blob.size : 0,
-            isCover: !!r.useVoiceSample
+            isCover: false   // 2026-11-19: Cover 模式删掉了, 一律 false
           }));
           list.sort((a, b) => b.createdAt - a.createdAt);
           resolve(list);
@@ -193,7 +194,7 @@
             chatId: r.chatId,
             createdAt: r.createdAt,
             size: r.blob ? r.blob.size : 0,
-            isCover: !!r.useVoiceSample,
+            isCover: false,   // 2026-11-19: Cover 模式删掉了, 一律 false
             hasLyrics: !!r.lyrics,
             lyrics: r.lyrics || '',
             blob: r.blob

@@ -98,6 +98,39 @@
 
       app.stage.addChild(model);
 
+      // ── 兽耳扇动 (2026-11-18) ────────────────────────────────────────────
+      // 让 ParamEarSway 自己一上一下地摆 (耳朵从立着的角度往下压再回来)。
+      // 为什么不靠物理: 模型耳朵的物理原本接 ParamBreath / ParamMouthOpenY, 但这两个参数在
+      // moc3 里是 0~1 和 0~0.64, 默认值不在中点; Cubism 物理归一化是围绕默认值算的, 值 0 会
+      // 被当成满幅负输入 -> 耳朵被永久压到底 (-30度) 且不动。那两个输入已从模型侧删掉。
+      // 而 330 里 pixi 自己的呼吸幅度只有 0.007、头部微动 ±0.1度, 推不动耳朵, 所以改成这里驱动。
+      // 时机: beforeModelUpdate 在 coreModel.update() 之前触发, 此时写入才会进几何;
+      //       若在 ticker 里直接写 coreModel, 会被每帧末尾的 loadParameters() 抹掉。
+      try {
+        const im = model.internalModel;
+        const cm = im && im.coreModel;
+        if (cm && typeof im.on === 'function' && typeof cm.getParameterIndex === 'function') {
+          const earIdx = cm.getParameterIndex('ParamEarSway');
+          const fluffIdx = cm.getParameterIndex('ParamEarFluffSway');
+          if (earIdx >= 0 || fluffIdx >= 0) {
+            const earT0 = performance.now();
+            const EAR_PERIOD_MS = 2200;   // 一个来回 2.2 秒
+            const EAR_MAX = 1.0;          // 峰值 1.0 × deg30 = 30 度，只往下压、不往上抬
+            im.on('beforeModelUpdate', () => {
+              const phase = ((performance.now() - earT0) / EAR_PERIOD_MS) * Math.PI * 2;
+              // 0 -> EAR_MAX -> 0：从立着的角度往下压再回位，不做对称的上下摆
+              const v = (1 - Math.cos(phase)) * 0.5 * EAR_MAX;
+              try {
+                if (earIdx >= 0) cm.setParameterValueByIndex(earIdx, v);
+                if (fluffIdx >= 0) cm.setParameterValueByIndex(fluffIdx, v * 1.15);
+              } catch (e) { /* 参数不存在就算了 */ }
+            });
+          }
+        }
+      } catch (earErr) {
+        console.warn('[Live2D] 兽耳扇动挂载跳过:', earErr && earErr.message);
+      }
+
       // v0.1.4 行为: 等几帧让 internal model 完成 setup
       let frameWait = 0;
       for (let fi = 0; fi < 5; fi++) {

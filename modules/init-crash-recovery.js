@@ -116,13 +116,9 @@ document.addEventListener('DOMContentLoaded', () => {
         /* 诊断记录损坏不该影响恢复提示本身 */
       }
       
-      // 显示恢复提示（使用原有的 showCustomAlert）
-      if (typeof showCustomAlert === 'function') {
-        await showCustomAlert('正常启动提示', recoveryInfo);
-      } else {
-        // 如果 showCustomAlert 还未定义，使用 alert
-        alert('正常启动提示\n\n' + recoveryInfo);
-      }
+      // 2026-11-16: 按用户要求取消弹窗 —— 闪退后自动弹「正常启动提示」太吵。
+      // 恢复信息只写控制台，需要排查时打开控制台即可看到；数据检测/恢复逻辑不变。
+      console.log('[崩溃恢复] 正常启动提示\n' + recoveryInfo);
       
       console.log('[崩溃恢复] 恢复信息:', {
         unsavedLogs: unsavedLogs.length,

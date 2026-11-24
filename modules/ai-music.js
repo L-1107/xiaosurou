@@ -1,17 +1,25 @@
 // ============================================================
-// ai-music.js — AI 唱歌（音乐生成 + 翻唱 Cover 模式）
-// 功能：调用 MiniMax music_generation API，支持
-//       1) 普通模式（prompt + lyrics → 新歌）
-//       2) Cover 翻唱模式（参考音频 + 新风格/新歌词 → 同嗓音新歌）
+// ai-music.js — AI 唱歌（普通生成模式）
+// 功能：调用 MiniMax music_generation API（prompt + lyrics → 新歌）
 //       端点完全固化（不依赖用户填的 baseURL）
-// 来源：基于 MiniMax 官方 CLI (github.com/MiniMax-AI/cli) 的 music cover/generate 实现
+//
+// 🔴 2026-11-19 「Cover 翻唱模式」整个删掉
+//   用户: 「Minimax 不让用 API 调用生成歌曲了, 所以那些个上传专属音色样本,
+//          AI 唱歌 cover 用那一项也不需要了」
+//   删掉的部分:
+//     · Cover 模式 (generateCover) + music_cover_preprocess 端点
+//     · 专属音色样本读取 (getVoiceSampleBlob) + Blob→base64
+//     · useVoiceSample 参数 / autoCoverWhenHasSample 自动切模型逻辑
+//     · 配套的两个文件 (js/music-voice-sample.js / js/role-voice-sample-ui.js)
+//   ⚠️ 普通生成模式保留 —— 用户只点名要删「专属音色样本 / Cover」这一项。
+//      但普通模式走的也是同一个 minimaxi music_generation 端点, 如果那边真封了,
+//      普通模式也会一起失效 (这事要不要一起删, 问过用户再动)。
 // ============================================================
 
 (function () {
   // ---------- 端点常量（完全固化，参照 mmx CLI endpoints.ts） ----------
   // 国内区 minimaxi.com；国际区是 minimax.io，按需切换下面这一行
   const MUSIC_API_URL = 'https://api.minimaxi.com/v1/music_generation';
-  const MUSIC_COVER_PREPROCESS_URL = 'https://api.minimaxi.com/v1/music_cover_preprocess';
 
   // ---------- 全局状态 Proxy（沿用 music-player.js 的延迟加载模式） ----------
   const state = new Proxy({}, {
@@ -26,28 +34,6 @@
     if (musicKey && String(musicKey).trim()) return String(musicKey).trim();
     const fallback = state.globalSettings?.apiKey;
     return fallback ? String(fallback).trim() : '';
-  }
-
-  // ---------- 参考音频（从 IndexedDB 取该角色的专属音色样本） ----------
-  async function getVoiceSampleBlob(chatId) {
-    if (!chatId) return null;
-    const sample = await window.MusicVoiceSample?.getVoiceSample?.(chatId);
-    if (!sample || !sample.blob) return null;
-    return sample.blob;
-  }
-
-  // ---------- Blob → base64 字符串（不带头部的 data:） ----------
-  function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result || '';
-        const idx = String(result).indexOf(',');
-        resolve(idx >= 0 ? String(result).slice(idx + 1) : String(result));
-      };
-      reader.onerror = () => reject(new Error('Blob → base64 失败'));
-      reader.readAsDataURL(blob);
-    });
   }
 
   // ---------- hex 字符串 → Uint8Array（音乐 API 返回的 audio 字段是 hex） ----------
@@ -105,54 +91,6 @@
     return await res.json();
   }
 
-  // ---------- Cover 模式（两步调用：preprocess → 主生成） ----------
-  async function generateCover({ apiKey, model, prompt, lyrics, audioBase64, onProgress }) {
-    let coverFeatureId = null;
-    const finalLyrics = lyrics;  // 【2026-07-23 修】不再用 server 返回的 formatted_lyrics 覆盖——
-                                   // preprocess 返回的 formatted_lyrics 是 server 从参考音频 ASR 出来的歌词，
-                                   // 覆盖会把用户给的新词替换成参考音频里的旧词，导致 Cover 唱的还是上传内容
-    let usedPreprocess = false;
-
-    // 步骤 1：如果用户给了歌词，先跑 preprocess 提取声音特征（拿 cover_feature_id）
-    if (lyrics && String(lyrics).trim()) {
-      usedPreprocess = true;
-      onProgress && onProgress({ stage: 'preprocess', text: '正在提取音频特征...' });
-      const preprocessRes = await postJson(MUSIC_COVER_PREPROCESS_URL, apiKey, {
-        model: 'music-cover',
-        audio_base64: audioBase64
-      });
-      if (preprocessRes.base_resp && preprocessRes.base_resp.status_code !== 0) {
-        throw new Error('Cover 预处理失败: ' + (preprocessRes.base_resp.status_msg || '未知错误'));
-      }
-      coverFeatureId = preprocessRes.cover_feature_id;
-      // 故意不读 preprocessRes.formatted_lyrics——见上面注释
-    }
-
-    // 步骤 2：调主端点
-    onProgress && onProgress({ stage: 'generate', text: '正在生成翻唱...' });
-    const mainBody = {
-      model: model,
-      prompt: prompt,
-      lyrics: finalLyrics,
-      audio_setting: {
-        format: 'mp3',
-        sample_rate: 44100,
-        bitrate: 256000
-      },
-      output_format: 'hex'
-    };
-    if (usedPreprocess) {
-      // 已经 preprocess 过的：用 feature_id，不再传 audio_base64
-      mainBody.cover_feature_id = coverFeatureId;
-    } else {
-      // 没歌词的：直接传 audio_base64，让 server 自己 ASR 提取
-      mainBody.audio_base64 = audioBase64;
-    }
-
-    const res = await postJson(MUSIC_API_URL, apiKey, mainBody);
-    return extractAudioBlob(res);
-  }
-
   // ---------- 普通模式（无参考音频，纯 prompt+lyrics 生成） ----------
   async function generateNormal({ apiKey, model, prompt, lyrics, instrumental, onProgress }) {
     onProgress && onProgress({ stage: 'generate', text: '正在生成音乐...' });
@@ -176,19 +114,15 @@
 
   // ---------- 主入口 ----------
   // 参数：
-  //   chatId: 聊天 ID（用于取专属音色样本）
   //   prompt: 风格描述（必填）
   //   lyrics: 歌词（带 [Verse] 等结构标签，可选；不传 = 纯音乐 instrumental 模式 或 AI 自动写词）
-  //   useVoiceSample: 是否使用该角色的专属音色样本（默认 true）
   //   model: 强制指定模型（默认从设置读）
   //   instrumental: 是否纯音乐（默认 false）
   //   onProgress({stage, text}): 进度回调
   // 返回：{ blob, audioUrl?, duration? } 或 throw
   async function generateSong(opts) {
-    const chatId = opts?.chatId;
     const prompt = opts?.prompt;
     let lyrics = opts?.lyrics;
-    const useVoiceSample = opts?.useVoiceSample !== false;
     const explicitModel = opts?.model;
     const instrumental = !!opts?.instrumental;
     const onProgress = opts?.onProgress;
@@ -209,58 +143,29 @@
       throw new Error('prompt 必填');
     }
 
-    // 3. 决定 model —— 【2026-07-21 改】默认 music-cover
+    // 3. 决定 model —— 【2026-11-19 改】默认 music-3.0
+    //    (原来默认 music-cover, Cover 模式删掉后没有 cover 模型可选了)
     const settingsModel = state.globalSettings?.musicModel;
-    let model = explicitModel || settingsModel || 'music-cover';
-
-    // 4. 取参考音频（只要 useVoiceSample=true 且有 chatId 就取，不依赖 model）
-    // 改：之前是"只有 cover 模型才取样"，现在"先取样，有样本再决定 model"
-    let audioBase64 = null;
-    let hasVoiceSample = false;
-    if (useVoiceSample && chatId) {
-      const sampleBlob = await getVoiceSampleBlob(chatId);
-      if (sampleBlob) {
-        hasVoiceSample = true;
-        onProgress && onProgress({ stage: 'encode', text: '正在编码参考音频...' });
-        audioBase64 = await blobToBase64(sampleBlob);
-      }
+    let model = explicitModel || settingsModel || 'music-3.0';
+    // ⚠️ 老库里存的 musicModel 可能是 music-cover (cover 模式删了, 模型不再存在)
+    if (String(model).startsWith('music-cover')) {
+      console.log('[AIMusic] Cover 模式已下线, 模型 ' + model + ' 换成 music-3.0');
+      model = 'music-3.0';
     }
 
-    // 4.5 【2026-07-23 改】原本强制 cover，改成读开关 autoCoverWhenHasSample（默认 true 保持原行为）
-    // 关掉后 = 即使有音色样本也用用户在设置里选的普通模型（更便宜，但失去角色专属音色）
-    const autoCover = state.globalSettings?.autoCoverWhenHasSample !== false;
-    if (autoCover && hasVoiceSample && !String(model).startsWith('music-cover')) {
-      console.log('[AIMusic] 检测到角色音色样本，自动从 ' + model + ' 切换到 music-cover（角色专属音色）');
-      model = 'music-cover';
-    } else if (!autoCover && hasVoiceSample && !String(model).startsWith('music-cover')) {
-      console.log('[AIMusic] 角色有音色样本但用户关了 auto-cover，沿用用户选的模型: ' + model);
-    }
-
-    const isCoverModel = String(model).startsWith('music-cover');
-
-    // 4.6 cover 模型但没样本 → 报错（强制提示用户去上传）
-    if (isCoverModel && !hasVoiceSample) {
-      throw new Error('Cover 模式需要先上传角色专属音色样本（在角色设置页 → 音乐设置）');
-    }
-
-    // 5. 纯音乐模式：自动清空 lyrics
+    // 4. 纯音乐模式：自动清空 lyrics
     if (instrumental) {
       lyrics = undefined;
     }
 
-    // 6. 分支调用
-    if (isCoverModel && audioBase64) {
-      return await generateCover({ apiKey, model, prompt, lyrics, audioBase64, onProgress });
-    } else {
-      return await generateNormal({ apiKey, model, prompt, lyrics, instrumental, onProgress });
-    }
+    // 5. 调用
+    return await generateNormal({ apiKey, model, prompt, lyrics, instrumental, onProgress });
   }
 
   // ---------- 暴露 API ----------
   window.AIMusic = {
     generateSong: generateSong,
     getMusicApiKey: getMusicApiKey,
-    MUSIC_API_URL: MUSIC_API_URL,
-    MUSIC_COVER_PREPROCESS_URL: MUSIC_COVER_PREPROCESS_URL
+    MUSIC_API_URL: MUSIC_API_URL
   };
 })();

@@ -478,7 +478,6 @@
 
       // ---- 外面的生活上下文: 影院不需要, 全空 ----
       'timePerceptionContext': '',
-      'weatherContext': '',
       'timeContext': '',
       'musicContextStr': '',
       'readingContextStr': '',

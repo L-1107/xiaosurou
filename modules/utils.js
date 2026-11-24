@@ -599,7 +599,9 @@ const DEFAULT_APP_ICONS = {
     'tutorial': '',
     'werewolf': '',
 
-    'x': '',
+    // v0.2.132: 桌面页2 的 X 应用已删, 换成「图书馆」→ 外观设置的图标槽位跟着换
+    //   (老 key 'x' 会在 init-and-state.js 载入时从 DB 里清掉)
+    'library': '',
     'alipay': '',
     'auction': '',
     'green-river': '',

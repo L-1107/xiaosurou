@@ -2247,6 +2247,50 @@ window.initFeatures = function(state, db) {
     document.getElementById('export-selected-nai-gallery-btn').addEventListener('click', () => executeBatchExportNaiImages());
     document.getElementById('delete-selected-nai-gallery-btn').addEventListener('click', () => executeBatchDeleteNaiImages());
     document.getElementById('delete-selected-nai-gallery-btn').addEventListener('click', () => executeBatchDeleteNaiImages());
+    // ============================================================
+    // 2026-11-16: 快捷功能按钮补「中文名」
+    // ------------------------------------------------------------
+    // 原来这些按钮只有 title 提示, 手机上没有悬停 → 图标再好看也只能靠猜。
+    // 这里给每个按钮挂 data-fn-label, CSS 用 ::after{content:attr(data-fn-label)}
+    // 把名字显示在图标下面 (样式见 css/chat-ui.css)。
+    // ⚠️ 只挂属性, 不新增/移动节点 —— 用户「自定义按钮顺序」是靠 applyButtonOrder()
+    //    重排 DOM 的, 任何分组包装都会把它打乱。
+    // 名字一律 ≤4 字: 一个格子最窄约 56px (320px 屏 / 5 列)。
+    // ============================================================
+    (function applyChatActionLabels() {
+      const LABELS = {
+        'open-cinema-sandbox-btn': '影院',
+        'open-sticker-panel-btn': '表情',
+        'upload-image-btn': '图片',
+        'transfer-btn': '转账',
+        'voice-record-btn': '语音',
+        'send-waimai-request-btn': '外卖',
+        'video-call-btn': '视频通话',
+        'group-video-call-btn': '群视频',
+        'voice-call-btn': '语音通话',
+        'group-voice-call-btn': '群语音',
+        'send-poll-btn': '投票',
+        'share-link-btn': '链接',
+        'share-location-btn': '位置',
+        'pat-btn': '拍一拍',
+        'edit-last-response-btn': '导演',
+        'regenerate-btn': '重生成',
+        'propel-btn': '推剧情',
+        'show-announcement-board-btn': '公告',
+        'werewolf-game-btn': '狼人杀',
+        'read-together-btn': '一起读',
+        'open-quick-reply-btn': '快捷语',
+        'narration-btn': '旁白',
+        'open-todo-list-btn': '待办',
+        'open-truth-game-btn': '真心话',
+        'stop-api-call-btn': '暂停'
+      };
+      Object.keys(LABELS).forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.setAttribute('data-fn-label', LABELS[id]);
+      });
+    })();
+
     document.getElementById('chat-expand-btn').addEventListener('click', () => {
       document.body.classList.toggle('chat-actions-expanded');
     });

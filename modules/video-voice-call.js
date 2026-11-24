@@ -3211,15 +3211,47 @@ let voiceCallStatusHoldUntil = 0;
 
     const chat = state.chats[videoCallState.activeChatId];
 
-    // v0.5.0 P24: 每轮强制"基线恢复"已按用户要求移除。
-    // 移除原因 (两条, 缺一不可):
-    //   ① 用户要真人感: 表情该不该回到平静, 由 AI 自己判断, 不要系统每轮硬重置
-    //      (真人视频里不会每说一句就先"清零"一次脸)。
-    //   ② 那段兜底依赖的"恢复"执行层本身是空操作 ——
-    //      fork 里 motionManager.expressionManager 未实例化, 空 id 的 setExpression
-    //      直接 return false, 一个参数都不会动 (P24 已修, 见 applyVideoCallExpressionDirective)。
-    // 现在"回默认"完全由 AI 自主写 [[表情:恢复]] 驱动;
-    // 切新表情前的"先卸旧"仍在 P20, 两者互不影响。
+    // v0.5.x P28.2: 新轮次基线恢复 —— 把 P22 的行为加回来
+    // ----------------------------------------------------------------
+    // 历史 (查 git 确认过, 不是这次改岔的):
+    //   P22 (9cc98b8) 做过「每轮 AI 开头强制回默认」;
+    //   e5cac19 (v0.5.0 P24, 2026-09-12) 按当时「要真人感、让 AI 自己判断情绪」
+    //   的要求整段删掉了, 只剩这段注释占位。
+    // 删掉之后的真实表现: 表情一旦被选中就再也不会自己回到默认 ——
+    //   AI 几乎不会主动写 [[表情:恢复]], 用户体感就是「表情卡死在脸上」。
+    // 另一条当初删它的理由(「恢复执行层是空操作」)现在已经不成立:
+    //   P24 起恢复改走 canvas._live2dInitialParams 参数快照还原,
+    //   P28 的 resetParametersByScope + 视线驱动重认基值也已就位,
+    //   能真正把参数写回去 (不是靠那个没实例化的 expressionManager)。
+    // 边界: 只还原【面部表情】这一组参数, 不碰 pose 组 ——
+    //   动作/手势是另一套参数, 每轮有它自己的放下逻辑 (见下方 [[动作]] 分支),
+    //   不能在这里被连带卸掉。
+    const lastExprBeforeTurn = videoCallState.lastAppliedExpression || '';
+    if (lastExprBeforeTurn && lastExprBeforeTurn !== '恢复' && lastExprBeforeTurn !== '默认') {
+      try {
+        if (videoCallState.isActive) {
+          let faceParamIds = null;
+          try {
+            const groupsBeforeTurn = await getCallExpressionGroups();
+            faceParamIds = (groupsBeforeTurn && groupsBeforeTurn.faceParams) || null;
+          } catch (e) {
+            // 拿不到分组 → 让 applyVideoCallExpressionDirective 退回整体还原 (不留混脸)
+          }
+          if (videoCallState.isActive) {
+            const okBase = await applyVideoCallExpressionDirective(
+              '恢复', chat,
+              faceParamIds && faceParamIds.length ? { scope: 'face', paramIds: faceParamIds } : undefined);
+            console.log('[视频通话表情] 新轮次基线恢复: 旧表情 →', lastExprBeforeTurn,
+              '回到默认 ok=' + okBase);
+            // 只有真的还原成功才清空记录 —— 失败(模型还没挂载等)留着, 下轮再试,
+            // 否则一次失败就等于永久卡住。
+            if (okBase) videoCallState.lastAppliedExpression = '';
+          }
+        }
+      } catch (e) {
+        console.warn('[视频通话表情] 新轮次基线恢复失败:', e);
+      }
+    }
 
     // 与主聊天保持一致：实时通过 resolveApiSlotConfig 解析主 API 配置，
     // 否则 state.apiConfig 在使用预设引用 / 切换预设 / 角色独立配置时可能为空或过期，
