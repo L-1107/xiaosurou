@@ -465,9 +465,9 @@
     if (CALL_GAZE_PARAMS.every(function (id) { return idx[id] < 0; })) return null;
 
     const lastOff = {};
-    // 表情/默认态给这 5 个参数写的"基值"(不含我们的偏移)。
-    // 由 recapture() 在"外部刚写过这些参数"之后刷新 —— 这样我们只做叠加, 绝不抹掉表情。
-    // 不用"当前值 - 上一帧偏移"反推基值: 表情中途写入会把那个反推污染掉(实测会偏 0.55)。
+    // v0.5.2: exprVals 现在**不再参与写入**, 只作为"表情写了什么"的对照值留着
+    // (recapture / setBase 还在维护它, 因为 live2d-loader.js 的 applyGazeBase 会调)。
+    // 写入基值改成"现场值"(见 frame 里的说明) —— 这样引擎每帧算的呼吸摆动不会被抹掉。
     const exprVals = {};
     CALL_GAZE_PARAMS.forEach(function (id) {
       lastOff[id] = 0;
@@ -495,9 +495,11 @@
     /**
      * 换基值: 把"当前表情写在视线参数上的值"认作新基值。
      *
-     * 为什么不能用"挂载那一刻的快照": 快照里没有表情写的值 → 表情的歪头
-     * (歪头卖萌 ParamAngleZ=30 / 整领带 ParamAngleY=35) 每帧都被抹成 0
-     * → 调试台(没有这个驱动)能歪头, 正式视频通话里歪不了。
+     * v0.5.2 起 frame() 直接读现场值叠加, 所以这里写进 exprVals 的数已经不影响输出 ——
+     * 保留它只是给 live2d-loader.js 的 applyGazeBase() 一个不会报错的落点,
+     * 以及出问题时能在控制台看到"表情声明了什么"。
+     * (真正保证表情歪头不被抹掉的是 frame 里的"现场值 + 偏移"写法:
+     *  表情值是引擎基线的一部分, 现场读就能读到。)
      *
      * 默认是**合并**语义: values 里给了的参数才改, 没给的原样留着。
      *   因为脸表情和姿势表情可以同时存在(整领带是姿势, 歪头卖萌是脸),
@@ -659,8 +661,23 @@
         } catch (e) { continue; }
         const span = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
         const off = frac[id] * span;
-        // 基值(当前表情写的) + 偏移, 两边都不丢
-        let v = (exprVals[id] || 0) + off;
+        // ── v0.5.2 关键修正: 叠加在「现场值」上, 不是叠加在「表情基值」上 ──
+        // 引擎每帧的顺序是:
+        //   saveParameters() → 表情/眨眼 → updateFocus → updateNaturalMovements(呼吸)
+        //   → 物理 → pose → beforeModelUpdate(我们在这里) → coreModel.update() → loadParameters()
+        // 呼吸(updateNaturalMovements)往 ParamAngleX/Y/Z 上写 ±7.5° / ±4° / ±5° 的慢摆,
+        // 这属于**每帧临时值**: 帧末 loadParameters() 会把参数还原成基线, 所以它只活在这一帧。
+        // 旧写法 v = exprVals + off 是"按表情基值重建"→ 呼吸那一份被整帧覆盖掉,
+        // 于是「视频通话里模型完全不动、调试台(没这个驱动)却会晃」。
+        // 新写法读到的是"基线(含表情) + 呼吸(+跟随焦点)", 加 off 后原样交给 coreModel.update(),
+        // 偏移不会累积: 上一帧的 off 到帧末已被 loadParameters() 抹掉, 下一帧读到的仍是干净的现场值。
+        // 实测(真实 沈清越 模型 + 真实 live2d-loader.js, 空闲 5 秒):
+        //   旧写法 AngleX/Y/Z 幅度 0.000 / 0.000 / 0.000 (定死)
+        //   新写法 AngleX/Y/Z 幅度 15.000 / 7.999 / 9.999 (与不开驱动完全一致)
+        //   表情歪头 ParamAngleZ=30 仍保留(实测 25~30, 30 是该参数上限, 正常被夹住)
+        let cur = 0;
+        try { cur = core.getParameterValueByIndex(k); } catch (e) { cur = 0; }
+        let v = cur + off;
         if (v < lo) v = lo; else if (v > hi) v = hi;
         try { core.setParameterValueByIndex(k, v); } catch (e) { /* ignore */ }
         lastOff[id] = off;

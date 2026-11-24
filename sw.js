@@ -1523,7 +1523,26 @@
 //                    modules/cinema-chat.js 0.2.5→0.2.6、
 //                    modules/floating-ball.js 0.0.39→0.0.40。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.134.0';
+// v0.2.135.0 (2026-11-24): 视频通话里模型「不会呼吸」修好 —— 视线驱动不再抹掉引擎的呼吸摆动。
+//   用户: 「沈清越也有在调试台晃动但视频通话里没有呼吸效果的问题」
+//   根因（不是模型问题, 是 330 代码）:
+//     引擎每帧顺序 = saveParameters → 表情/眨眼 → updateFocus → updateNaturalMovements(呼吸)
+//        → 物理 → pose → beforeModelUpdate → coreModel.update() → loadParameters()
+//     呼吸往 ParamAngleX/Y/Z 写 ±7.5° / ±4° / ±5° 的慢摆, 这是**每帧临时值**,
+//     帧末 loadParameters() 就还原了 —— 它的作用只在"这一帧进几何"。
+//     而 v0.5.1 的转头/视线驱动在 beforeModelUpdate 里写 v = 表情基值(exprVals) + 偏移,
+//     等于按基值把这三个参数重建一遍 → 呼吸那一份被整帧覆盖掉。
+//     调试台(live2d-manager.js) 没有这个驱动, 所以那边会晃; 视频通话里就不动了。
+//   修法: v = 现场值 + 偏移。现场值里已经含"基线(表情) + 呼吸 + 跟随焦点",
+//     上一帧的偏移到帧末已被 loadParameters() 抹掉, 所以逐帧叠加不会累积。
+//   实测 (真实 沈清越 模型 + 真实 live2d-loader.js + 真实 drive 源码, 空闲 5 秒, 单位=参数值):
+//     改前 ParamAngleX/Y/Z 幅度 0.000 / 0.000 / 0.000（定死）
+//     改后 ParamAngleX/Y/Z 幅度 15.000 / 7.999 / 9.999（与完全不挂驱动一致）
+//     表情歪头 ParamAngleZ=30 仍保留（实测 25.001~30, 30 是参数上限）
+//     按住拖动 4 秒: AngleX 峰值 18.3 且两段采样一致, 没有向 30 顶死（无累积）
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.89→0.0.90。
+//   ⚠️ 只改了写入时机/基值, 手势、戳脸、表情、口型的逻辑一行没动。
+const CACHE_VERSION = 'v0.2.135.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
