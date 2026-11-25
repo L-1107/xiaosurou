@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>读书屋</title>
-<link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.5">
+<link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.6">
 <!--
   ============================================================================
   读书屋 · iframe 沙盒 (2026-11-01)
@@ -29,6 +29,7 @@
               { type:'reading:page', bookId, pageNo, text, chapterTitle, pageCount }
               { type:'reading:importProgress' | 'reading:importDone' | 'reading:importError' }
               { type:'reading:chatDelta' | 'reading:chatDone' | 'reading:chatError' }
+              { type:'reading:petSay', petName, text, timestamp }   ← 2026-11-25: 宠物说的话
               { type:'reading:coverDone' | 'reading:coverError' }
     本页 → 宿主  { type:'reading:needChat' | 'reading:ready' }
               { type:'reading:needBooks' }
@@ -161,6 +162,6 @@
   <div class="s" id="rr-import-sub">正在切页…</div>
 </div>
 
-<script src="../modules/reading-sandbox.js?v=0.1.5"></script>
+<script src="../modules/reading-sandbox.js?v=0.1.6"></script>
 </body>
 </html>

@@ -590,6 +590,44 @@
     return d;
   }
 
+  /**
+   * 宠物说的话 → 聊天框里的一条气泡 (2026-11-25)
+   *
+   * 【为什么】读书屋是独立 iframe 页面, 打开时整屏盖住宿主聊天框。
+   *   pet-speech.js 说的话由宿主转发过来 (reading:petSay), 这里补一条,
+   *   否则用户在读书屋里根本看不到宠物开口
+   *   (用户原话: 「外面宠物说的话没办法刷新进图书馆的聊天框里」)。
+   *
+   * 【结构】.rr-msg 自己就是气泡本体 (见 CSS 里那条注释), 所以名字 / 正文
+   *   只能是它里面的 span, 不能给 .rr-msg 再套一层 —— 套了气泡样式就落在外层。
+   */
+  function appendPetMsg(d) {
+    if (!el.rrChatBody) return;
+    var name = String((d && d.petName) || '').trim() || '宠物';
+    var text = String((d && d.text) || '').trim();
+    if (!text) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'rr-msg pet';
+    var who = document.createElement('span');
+    who.className = 'rr-msg-pet-name';
+    who.textContent = '🐾 ' + name + '：';
+    var body = document.createElement('span');
+    body.className = 'rr-msg-pet-text';
+    body.textContent = text;
+    wrap.appendChild(who);
+    wrap.appendChild(body);
+    el.rrChatBody.appendChild(wrap);
+    el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
+
+    // 用户看不到聊天框时 (聊天收起了 / 还在书架页) 用 toast 兜一下 ——
+    //   不兜的话宠物这句话等于白说 (跟宿主聊天框那边的 toastSafe 一个道理)。
+    var collapsed = !!(el.rrChat && el.rrChat.classList.contains('collapsed'));
+    if (collapsed || S.view !== 'reader') {
+      toast('🐾 ' + name + '：' + text, 4000);
+    }
+  }
+
   function setChatBusy(busy) {
     S.chatBusy = !!busy;
     if (el.rrSendBtn) el.rrSendBtn.disabled = !!busy;
@@ -861,6 +899,11 @@
 
       case 'reading:chatError':
         onChatError(d);
+        break;
+
+      // 🔴 2026-11-25: 外面的宠物说话了 → 刷一条气泡进读书屋聊天框
+      case 'reading:petSay':
+        appendPetMsg(d);
         break;
 
       // 换封面 (2026-11-02)

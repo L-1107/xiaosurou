@@ -1,4 +1,4 @@
-﻿// Service Worker (sw.js)
+// Service Worker (sw.js)
 // 白名单缓存: 只缓存已知静态资源, API 请求 pass-through
 // CACHE_VERSION bump 强制清缓存
 // 关键约束: URLS_TO_CACHE 增删需同步 sw.js 注释 + ?v= 版本号
@@ -1542,7 +1542,72 @@
 //     按住拖动 4 秒: AngleX 峰值 18.3 且两段采样一致, 没有向 30 顶死（无累积）
 //   index.html 的 ?v=：modules/video-voice-call.js 0.0.89→0.0.90。
 //   ⚠️ 只改了写入时机/基值, 手势、戳脸、表情、口型的逻辑一行没动。
-const CACHE_VERSION = 'v0.2.135.0';
+// v0.2.136.0 (2026-11-25): 视频/语音通话挂断 —— 不再挂断瞬间调总结 API, 通话记录进聊天历史。
+//   用户反馈: 「挂断的时候经常闪退, 排查过发现是挂断那一瞬间的任务太多(要回窗口、要发总结调用);
+//     而且挂断之后聊天记录里虽然插入了视频通话的记录, 但继续和AI聊 AI 就看不到视频通话的内容」
+//   ① 挂断瞬间不再调 summarizeCallTranscript。
+//      原来它在 endVideoCall/endVoiceCall 末尾 fire-and-forget, 跟 openChat 的全量重渲染、
+//      WebGL/摄像头/AudioContext 释放挤在同一帧 —— iPhone PWA 就是在这段峰值崩的。
+//      改成: 挂断时只排队 (localStorage), 等用户在这个聊天里【下次发消息】时才真的调
+//      (init-event-bindingsA.js 的 send-btn → window.callSummaryQueue.flushForChat, 内部再延后 8 秒
+//       避开用户那条消息的 AI 回复并发)。视频/语音两条链路共用一套。
+//   ② 通话里每一句按顺序插进 chat.history / db.messages (像普通聊天一样)。
+//      以前只有一条 "通话结束，时长 X"，通话内容躺在 db.callRecords 里, AI 的上下文根本读不到。
+//      ⚠️ 顺带查明: ai-response.js 的 callTranscriptContext 注入是【死代码】—— 它要求存在一条含
+//      "视频通话刚刚结束" 的隐藏消息, 而那段隐藏消息早被删了, 所以从来没生效过 (这正是 AI 看不见的原因)。
+//      现在走聊天本身的正常链路: ① AI 上下文 (getRecentContextMessages) 按顺序读到
+//      ② 记忆总结 (triggerAutoSummary) 按顺序总结。
+//      消息带 callRecordId / callTurnIndex / callTurnTotal 字段, id 固定 (重复写库不会变两条)。
+//   ③ 界面上不铺开: 同一通电话的消息在聊天里折叠成一条 "📞 通话记录 · N 句", 点开才展开
+//      (chat-interface.js 的 buildCallRenderUnits + createCallTranscriptGroupShell)。
+//      展开时才生成那几个气泡 (懒渲染) —— 挂断那一帧只建一个壳, DOM 压力不涨。
+//      结尾那条 "通话结束" 也在组里, 展开后照样能点开原来的通话记录弹窗。
+//   ④ 挂断防重入: 挂断键不禁用, 而挂断流程里有好几个 await, 手机卡顿时用户很容易再点一下
+//      → 流程跑第二遍会把通话记录存两条、逐句记录插两遍 (AI 上下文里同一通电话出现两次)。
+//      endVideoCall/endVoiceCall 改成"外壳 + doEndXxx"两层, 外壳用 try/finally 持锁,
+//      中途抛异常也会解锁, 不会把用户永久卡在通话界面。
+//   index.html 的 ?v=：modules/video-voice-call.js 0.0.90→0.0.91、
+//                    modules/chat-interface.js 0.0.37→0.0.38、
+//                    modules/init-event-bindingsA.js 0.0.50→0.0.51、
+//                    css/base.css 0.0.41→0.0.42。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.137.0 (2026-11-25): 宠物说的话也要刷进影院 / 读书屋的聊天框。
+//   用户反馈: 「现在图书馆和影院都是单开的页面, 外面宠物说的话没办法刷新进影院和
+//     图书馆的聊天框里, 如果用户在图书馆和影院里的时候, 能把宠物说的话也刷新进聊天框吗」
+//   根因: 影院 / 读书屋都是【独立 iframe 页面】, 一打开就整屏盖住宿主。
+//     宠物说话 (modules/pet-speech.js) 原本只做两件事:
+//       ① 写进主聊天历史 (messageStore)  ② 重绘宿主聊天框 (renderChatInterface)
+//     沙盒里的聊天框是【另一套 DOM】, 上面两件事一个都碰不到它
+//     → 用户在沙盒里时那句话等于白说 (只有退出后才能在主聊天里看到)。
+//   改法 (一条广播 + 两个桥 + 两侧气泡, 消息本身仍走原来的落库路径):
+//     · pet-speech.js: 落库 / 重绘之后广播 window 事件 'pet:spoke'
+//       (detail = { chatId, petId, petName, text, timestamp })。
+//       仍然受每只宠物那个「允许插话到聊天框」开关控制 —— 关掉就一条都不发。
+//       广播失败只 warn, 绝不影响宠物说话本身。
+//     · cinema-room.js (宿主侧): 接 'pet:spoke' → 校验会话 → postMessage
+//       { type:'cinema:petSay' } 给影院 iframe。
+//     · cinema-sandbox/index.html: 收到 cinema:petSay → 调 CinemaLive.appendPetBubble。
+//     · cinema-live.js 新增 appendPetBubble: 居中的虚线金边小气泡,
+//       「🐾 名字：内容」跟主聊天 pet-say 一个观感。
+//       聊天面板收着时用【沙盒自己的】showToast 兜一下 (宿主的 toast 也在 iframe 底下)。
+//     · reading-room.js (宿主侧): 接 'pet:spoke' → 校验会话 (桌面「图书馆」进来的
+//       要认 _overrideChat) → postMessage { type:'reading:petSay' }。
+//     · reading-sandbox.js 新增 appendPetMsg + CSS .rr-msg.pet:
+//       同样居中虚线金边; 聊天收起 / 还在书架页时用读书屋的 toast 兜一下。
+//   ⚠️ 只转发给【沙盒当前绑着的那个会话】—— 别的会话的宠物说话不会串台。
+//   ⚠️ 话已经落库, 所以退出沙盒后主聊天里照样看得到; 这次加的只是"在里面的界面同步"。
+//   index.html 的 ?v=：modules/pet-speech.js 0.0.4→0.0.5、
+//                    modules/reading-room.js 0.1.6→0.1.7、
+//                    modules/cinema-room.js 0.35.0→0.35.1、
+//                    modules/cinema-live.js 2.5.0→2.5.1、
+//                    modules/cinema-room.css 0.39.0→0.39.1。
+//   沙盒页同步：cinema-sandbox/index.html 里那三个 ?v= 一起对齐；
+//              顺手把那里漏 bump 的 cinema-chat.js 0.2.5→0.2.6 对齐宿主
+//              (原来 cinema-host-context 测试一直红着; 文件本身是同一份, 只改缓存号);
+//              reading-sandbox/index.html 里 reading-sandbox.js/css 0.1.5→0.1.6，
+//              modules/reading-room.js 的 iframe src ?v= 0.1.1→0.1.2。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.137.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

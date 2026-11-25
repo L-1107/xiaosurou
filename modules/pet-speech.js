@@ -484,6 +484,55 @@
     return msg;
   }
 
+  /**
+   * 广播「宠物刚开口说了一句话」（2026-11-25）
+   *
+   * 【为什么需要这条广播】
+   *   影院 / 读书屋都是【独立 iframe 页面】—— 一打开就整屏盖住宿主的聊天框。
+   *   宠物说话原本只做两件事: 写进主聊天历史 + 重绘宿主聊天框。
+   *   用户在沙盒里时, 这两件事都看不见 → 那句话等于白说
+   *   (用户原话:「外面宠物说的话没办法刷新进影院和图书馆的聊天框里」)。
+   *   → 这里广播一条 window 事件, 由影院 / 读书屋的【宿主侧】接住,
+   *     再 postMessage 转发进各自沙盒的聊天框。
+   *
+   * 【为什么用事件而不是直接调 CinemaRoom / ReadingRoom】
+   *   ① pet-speech.js 排在 cinema-room / reading-room 之后加载, 这里直接引用
+   *      那两个对象会绑死加载顺序 (以后谁调一下顺序就静默失效);
+   *   ② "宠物说话了"本来就该是广播, 谁想听谁听 —— 沙盒没开时没人接,
+   *      不产生任何副作用。
+   *
+   * ⚠️ 广播【只负责界面同步】。话本身已经落库 (persistToChat),
+   *   就算这里抛异常也绝不影响宠物说话 / 聊天记录。
+   */
+  function announceSpoken(chat, petRow, text, timestamp) {
+    const body = String(text || '').trim();
+    if (!body) return false;
+    const detail = {
+      chatId: (chat && chat.id) || '',
+      petId: (petRow && petRow.id) || '',
+      petName: (petRow && petRow.name) || '宠物',
+      text: body,
+      timestamp: Number(timestamp) || Date.now()
+    };
+    try {
+      let ev = null;
+      if (typeof window.CustomEvent === 'function') {
+        ev = new window.CustomEvent('pet:spoke', { detail: detail });
+      } else if (typeof document !== 'undefined' && typeof document.createEvent === 'function') {
+        // 老 WebView 兜底 (没有 CustomEvent 构造器那条路)
+        ev = document.createEvent('CustomEvent');
+        ev.initCustomEvent('pet:spoke', false, false, detail);
+      }
+      if (ev && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(ev);
+        return true;
+      }
+    } catch (e) {
+      console.warn('[宠物说话] 广播 pet:spoke 失败（不影响说话本身）:', (e && e.message) || e);
+    }
+    return false;
+  }
+
   /** 聊天记录最近 N 条 → 给宠物当上文 */
   async function recentChatLines(chat, limit) {
     const n = Math.max(0, Number(limit || 30));
@@ -637,8 +686,12 @@
 
       // 落进聊天框（受「允许插话」开关控制）
       if (chat && chatInsertEnabled(petRow)) {
-        await persistToChat(chat, petRow, text);
+        const saved = await persistToChat(chat, petRow, text);
         renderChatIfActive(chat.id);
+        // 🔴 2026-11-25: 影院 / 读书屋开着时, 宿主聊天框被 iframe 整屏盖住 ——
+        //   广播出去, 让它们把这句话也刷进各自的聊天框
+        //   (见 cinema-room.js / reading-room.js 的 pet:spoke 监听)。
+        announceSpoken(chat, petRow, text, (saved && saved.timestamp) || Date.now());
       }
 
       return text;
@@ -843,6 +896,8 @@
     chatInsertEnabled,
     mostRecentChat,
     recentChatLines,
+    // 2026-11-25: 「宠物开口了」的广播 —— 影院 / 读书屋这类独立沙盒页靠它同步聊天框
+    announceSpoken,
     lastSpokeAt,
     markSpoke
   };

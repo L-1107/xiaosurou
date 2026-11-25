@@ -1384,6 +1384,27 @@ body.cinema-room-active #floating-ball * {
   color: #fff3e2;
 }
 
+/* 宠物说话 (2026-11-25): 宿主转发进来的宠物发言。
+   跟用户 / AI 气泡区分开 —— 居中、虚线金边的小气泡 (跟主聊天 pet-say 一个观感)。
+   ⚠️ 名字是气泡里的一个 span, 所以颜色只能下到 .cinema-chat-pet-name, 别改气泡本体。 */
+.cinema-chat-msg.pet {
+  align-self: center;
+  max-width: 92%;
+}
+
+.cinema-chat-msg.pet .cinema-chat-bubble {
+  background: rgba(255, 246, 230, .10);
+  border: 1px dashed rgba(216, 168, 116, .55);
+  border-radius: 13px;
+  color: #f5e6d2;
+}
+
+.cinema-chat-msg.pet .cinema-chat-pet-name {
+  color: #e8c48a;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
 /* 输入行 */
 .cinema-chat-input-row {
   display: flex;

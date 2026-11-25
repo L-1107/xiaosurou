@@ -927,6 +927,55 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  /**
+   * 宠物说的话 → 影院聊天框里的一条气泡 (2026-11-25)
+   *
+   * 【为什么由这里渲染】影院是独立 iframe 页面, 宿主的桌宠气泡和聊天框
+   *   都被它整屏盖住。宠物开口时宿主把话转发过来 (cinema:petSay),
+   *   必须在沙盒自己的聊天框里补一条, 否则用户完全不知道宠物说话了
+   *   (用户原话: 「外面宠物说的话没办法刷新进影院的聊天框里」)。
+   *
+   * 【结构】跟用户 / AI 气泡一致: 外层 .cinema-chat-msg 套内层 .cinema-chat-bubble,
+   *   名字单独一个 span (.cinema-chat-pet-name), 跟主聊天 pet-say 的「名字：内容」一个观感。
+   */
+  function appendPetBubble(petName, text, timestamp) {
+    var box = getChatBox();
+    if (!box) return;
+    var body = String(text || '').trim();
+    if (!body) return;
+    var name = String(petName || '').trim() || '宠物';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'cinema-chat-msg pet';
+    if (timestamp) wrap.dataset.timestamp = String(timestamp);
+
+    var bubble = document.createElement('div');
+    bubble.className = 'cinema-chat-bubble';
+    var who = document.createElement('span');
+    who.className = 'cinema-chat-pet-name';
+    who.textContent = '🐾 ' + name + '：';
+    var txt = document.createElement('span');
+    txt.className = 'cinema-chat-pet-text';
+    txt.textContent = body;
+    bubble.appendChild(who);
+    bubble.appendChild(txt);
+    wrap.appendChild(bubble);
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+
+    // 聊天面板收着的时候用户看不到这条气泡 → 用沙盒自己的 toast 兜一下。
+    // ⚠️ 必须走沙盒的 window.showToast (cinema-sandbox/index.html 里那份):
+    //   宿主的 showToast 也在 iframe 底下, 用户同样看不见。
+    try {
+      var chatOpen = !window.CinemaRoom || typeof window.CinemaRoom.isChatOpen !== 'function'
+        ? true
+        : !!window.CinemaRoom.isChatOpen();
+      if (!chatOpen && typeof window.showToast === 'function') {
+        window.showToast('🐾 ' + name + '：' + body);
+      }
+    } catch (e) { /* 提示失败不影响气泡本身 */ }
+  }
+
   function getAvatarUrl() {
     try {
       var chat = getCurrentChat();
@@ -4919,6 +4968,7 @@
     finalizeAssistantBubble: finalizeAssistantBubble,
     resetBubble: resetBubble,
     appendSystemLine: appendSystemLine,
+    appendPetBubble: appendPetBubble,
     recordAssistant: recordAssistantFinal,
 
     // 生命周期

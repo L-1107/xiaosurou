@@ -23,6 +23,7 @@
 //                 reading:books / reading:page / reading:progress /
 //                 reading:importProgress / reading:importDone /
 //                 reading:chatDelta / reading:chatDone / reading:chatError
+//                 reading:petSay  ← 2026-11-25 宠物说的话, 刷进读书屋聊天框
 //   沙盒 → 宿主:  reading:needChat / reading:ready / reading:needBooks /
 //                 reading:requestPage / reading:saveProgress /
 //                 reading:deleteBook / reading:importFile /
@@ -421,6 +422,32 @@
       frame.contentWindow.postMessage(payload, '*');
     } catch (e) { /* noop */ }
   }
+
+  // ============================================================
+  // 🔴 2026-11-25: 外面（宿主）的宠物说了话 → 转发进读书屋的聊天框
+  //
+  // 【为什么】读书屋是独立 iframe 页面, 一打开就整屏盖住宿主的聊天框。
+  //   pet-speech.js 只把话写进主聊天历史 + 重绘宿主聊天框 —— 用户在读书屋里
+  //   一点都看不见 (用户原话: 「外面宠物说的话没办法刷新进图书馆的聊天框里」)。
+  //   话本身已经落库 (退出读书屋照样能看到), 这里只负责【界面同步】。
+  //
+  // 【为什么认 _overrideChat】桌面第二页「图书馆」进来时没有 activeChatId,
+  //   读书对象是 _overrideChat (最近聊过的那条) —— 那才是"当前会话"。
+  // ============================================================
+  function handlePetSpoke(e) {
+    if (!frame) return;
+    var d = (e && e.detail) || null;
+    if (!d || !String(d.text || '').trim()) return;
+    var c = currentChatObject(_overrideChat);
+    if (c && d.chatId && c.id !== d.chatId) return;
+    replyToSandbox({
+      type: 'reading:petSay',
+      petName: d.petName || '宠物',
+      text: String(d.text),
+      timestamp: Number(d.timestamp) || Date.now()
+    });
+  }
+  global.addEventListener('pet:spoke', handlePetSpoke);
 
   // ============================================================
   // 旧书迁移 (只在这一刻做, 别的时候一律不碰)
@@ -1114,7 +1141,7 @@
     frame.id = 'reading-sandbox-frame';
     // ⚠️ 必须带 ?v=: 沙盒页会被 SW 的 '/index.html' 白名单命中 → 不带 ?v= 就是
     //   cache-first, 改了沙盒也不生效。带 ?v= 走 network-first, 断网回落到预缓存。
-    frame.src = 'reading-sandbox/index.html?v=0.1.1';
+    frame.src = 'reading-sandbox/index.html?v=0.1.2';
     frame.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
     frame.style.cssText =
       'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;' +

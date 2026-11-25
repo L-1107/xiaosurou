@@ -698,6 +698,22 @@ button { font-family: inherit; }
   text-align: center;
   padding: 6px 10px;
 }
+/* 宠物说话 (2026-11-25): 宿主转发进来的宠物发言。
+   居中、暖金虚线边 —— 跟用户 / AI 气泡区分开, 但仍然是气泡形态。
+   ⚠️ 名字和正文是气泡里的 span, 颜色只能下到 .rr-msg-pet-name。 */
+.rr-msg.pet {
+  align-self: center;
+  max-width: 90%;
+  background: rgba(255, 250, 238, 0.98);
+  border: 1px dashed var(--rr-accent-gold);
+  color: var(--rr-ink);
+  font-size: 13px;
+}
+.rr-msg.pet .rr-msg-pet-name {
+  color: var(--rr-accent-gold);
+  font-weight: 600;
+  margin-right: 2px;
+}
 
 #rr-chat-input-wrap {
   flex: 0 0 auto;

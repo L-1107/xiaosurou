@@ -2747,7 +2747,7 @@
   // 每次改动影院都顺手改这里。
   // 🔴 2026-11-04: 顺手跟 ?v= 对齐 (以前 ?v= 是 0.34.0, 这里还停在 0.33.0,
   //   看着像两份代码, 排查时白白分神)。
-  global.__CINEMA_VER = '0.34.1';
+  global.__CINEMA_VER = '0.35.1';
 
   global.CinemaRoom = {
     open: open,
@@ -3322,6 +3322,34 @@
         } catch (err) { /* noop */ }
       }
     });
+
+    // =========================================================================
+    // 🔴 2026-11-25: 外面（宿主）的宠物说了话 → 转发进影院的聊天框
+    //
+    // 【为什么】影院是独立 iframe 页面, 一打开就整屏盖住宿主的聊天框。
+    //   pet-speech.js 只把话写进主聊天历史 + 重绘宿主聊天框 —— 用户在影院里
+    //   一个像素都看不见 (用户原话: 「外面宠物说的话没办法刷新进影院的聊天框里」)。
+    //   消息本身已经落库 (退出影院照样能看到), 这里只负责【界面同步】。
+    //
+    // 【为什么只转给当前会话】影院绑的是打开那一刻的 activeChatId。
+    //   别的会话的宠物说话不能串进来; 会话对不上就静默丢掉。
+    // =========================================================================
+    function handlePetSpoke(e) {
+      if (!frame) return;
+      var d = (e && e.detail) || null;
+      if (!d || !String(d.text || '').trim()) return;
+      var c = currentChatObject();
+      if (c && d.chatId && c.id !== d.chatId) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'cinema:petSay',
+          petName: d.petName || '宠物',
+          text: String(d.text),
+          timestamp: Number(d.timestamp) || Date.now()
+        }, '*');
+      } catch (err) { /* 转发失败不能影响宠物说话本身 */ }
+    }
+    try { window.addEventListener('pet:spoke', handlePetSpoke); } catch (e) { /* noop */ }
 
     sbtn.addEventListener('click', function () {
       if (frame) { closeSandbox(); return; }   // 再点一次 = 退出沙盒

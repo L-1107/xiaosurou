@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Cinema Room (iframe 沙盒)</title>
 <!-- ⚠️ 影院本体样式, 和生产完全同一份文件。上一版重写时漏了这行, 导致整个房间裸奔。 -->
-<link rel="stylesheet" href="../modules/cinema-room.css?v=0.39.0">
+<link rel="stylesheet" href="../modules/cinema-room.css?v=0.39.1">
 <!--
   ============================================================================
   Cinema Room · iframe 沙盒 (2026-10-09)
@@ -33,6 +33,10 @@
                   { type:'cinema:exportMemory' } 剧情记忆导出(全部 chunk 一起发)
                   { type:'cinema:chatMessage' }  影院里说的话, 请写进主聊天历史
                   { type:'cinema:closed' }      用户退出了影院
+
+  🔴 2026-11-25 宿主 → 本页新增 { type:'cinema:petSay', petName, text, timestamp }:
+    外面的宠物说话了 → 补一条气泡到影院聊天框 (见下方 message 监听的 cinema:petSay)。
+    影院整屏盖住宿主, 不转发的话用户在影院里看不到宠物开口。
 
   ⚠️ 2026-10-28: 以前这里还有一条 'cinema:memory'(把 longTermMemory 的【最后一条】
   发给宿主) —— 那条只带得走最后一块, 导出切成 4 块就只过去 1 块, 其余被清账删掉,
@@ -310,6 +314,13 @@
         currentChat.watchTogetherSettings.geminiApiKey = d.key || '';
         post({ type: 'cinema:keyChanged', key: d.key || '' });
       }
+    } else if (d.type === 'cinema:petSay') {
+      // 🔴 2026-11-25: 宿主那边的宠物开口了 → 补一条气泡进影院聊天框。
+      //   影院整屏盖住宿主, 那边写了什么这里都看不见 (用户要求: 宠物说的话也要刷进来)。
+      //   气泡面板收着时 appendPetBubble 自己会用沙盒 toast 兜一下。
+      if (window.CinemaLive && typeof window.CinemaLive.appendPetBubble === 'function') {
+        window.CinemaLive.appendPetBubble(d.petName, d.text, d.timestamp);
+      }
     }
   });
 
@@ -396,10 +407,11 @@
 <script src="../modules/live-client.js?v=0.6.0"></script>
 <script src="../modules/cinema-storage.js?v=0.5.4"></script>
 <script src="../modules/cinema-img.js?v=0.1.0"></script>
-<script src="../modules/cinema-room.js?v=0.35.0"></script>
-<script src="../modules/cinema-live.js?v=2.5.0"></script>
+<script src="../modules/cinema-room.js?v=0.35.1"></script>
+<script src="../modules/cinema-live.js?v=2.5.1"></script>
 <!-- 2026-10-23 影院陪聊层 (陪聊改走主 API) -->
-<script src="../modules/cinema-chat.js?v=0.2.5"></script>
+<!-- 2026-11-25: ?v= 对齐宿主的 0.2.6 (原来漏在 0.2.5, cinema-host-context 测试一直报红) -->
+<script src="../modules/cinema-chat.js?v=0.2.6"></script>
 
 </body>
 </html>

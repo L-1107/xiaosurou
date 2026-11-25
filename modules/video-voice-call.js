@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // video-voice-call.js
 // 来源：script.js 第 25404 ~ 26812 行
 // 功能：视频通话 & 语音通话 & 拍一拍 & 通话消息操作
@@ -6,6 +6,14 @@
 
 (function () {
   // state 通过全局作用域访问（window.state，由 init-and-state.js 初始化）
+
+  // 挂断流程重入锁 (2026-11-25)
+  //   挂断按钮没有禁用, 而 endVideoCall/endVoiceCall 中间有好几个 await
+  //   (存通话记录 / 写聊天历史 / 回窗口的全量重渲染)。
+  //   用户在手机卡顿时很容易"再点一下" → 流程跑第二遍 →
+  //   通话记录存两条 + 通话逐句记录插两遍 (AI 上下文里同一通电话出现两次)。
+  let videoCallHangingUp = false;
+  let voiceCallHangingUp = false;
 
   let videoCallState = {
     isActive: false,
@@ -70,6 +78,229 @@
     }
     if (content == null) return '';
     return typeof content === 'string' ? content : String(content);
+  }
+
+  // ============================================================
+  // 通话记录 → 聊天历史 (视频通话 + 语音通话 共用这一套)
+  // ------------------------------------------------------------
+  // 【为什么要有这一段】(2026-11-25 用户反馈)
+  //   挂断以后聊天记录里只剩一条 "通话结束，时长 X分Y秒"，
+  //   通话里说过的话全躺在 db.callRecords 里，AI 的上下文根本读不到 →
+  //   用户接着聊天时 AI "失忆"，感觉视频通话白聊了。
+  //   顺带查出来一件事: ai-response.js 里那段 "刚刚结束的通话记录" 注入
+  //   (callTranscriptContext) 其实是【死代码】—— 它要求存在一条含
+  //   "视频通话刚刚结束" 的隐藏消息, 而那段隐藏消息早就被删了, 所以从来没生效过。
+  //   现在改成把通话的每一句按顺序当成普通聊天消息插进 chat.history,
+  //   走的是聊天本身的正常链路:
+  //     ① AI 上下文 (getRecentContextMessages) 能按顺序读到通话内容
+  //     ② 记忆总结 (triggerAutoSummary) 能按顺序把通话总结进去
+  //
+  // 【界面上不铺开】
+  //   同一通电话的这些消息在聊天里折叠成一条 "📞 通话记录 · N 句"，
+  //   点开才展开 (渲染在 chat-interface.js)。挂断那一刻只建一个壳,
+  //   里面那 N 个气泡等用户点开再生成 —— 挂断瞬间的 DOM 压力不涨。
+  // ============================================================
+
+  /** 挂断后排队等"用户下次发消息"的通话总结 (localStorage, 刷新/重启也不丢) */
+  const PENDING_CALL_SUMMARY_KEY = 'mavis-pending-call-summaries-v1';
+
+  function readPendingCallSummaries() {
+    try {
+      const raw = localStorage.getItem(PENDING_CALL_SUMMARY_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function writePendingCallSummaries(list) {
+    try {
+      localStorage.setItem(PENDING_CALL_SUMMARY_KEY, JSON.stringify(list));
+    } catch (e) { /* ignore */ }
+  }
+
+  /**
+   * 挂断后登记一条"待总结"。
+   * ⚠️ 关键: 挂断那一刻【不】调总结 API。
+   *   那是挂断瞬间最大的一笔并发 (一次完整 AI 请求 + 一次长文本解析),
+   *   跟"回窗口的全量重渲染"、WebGL/摄像头释放挤在同一帧 —— iPhone PWA 就是在这里闪退。
+   *   改成: 等用户在这个聊天里下次发消息时再跑 (见 flushPendingCallSummaries)。
+   */
+  function schedulePendingCallSummary(chatId, callRecordId, callType) {
+    if (!chatId || !callRecordId) return;
+    const list = readPendingCallSummaries();
+    // 同一通电话只登记一次 (挂断流程可能重入)
+    if (list.some(item => item.chatId === chatId && item.callRecordId === callRecordId)) return;
+    list.push({
+      chatId,
+      callRecordId,
+      callType: callType || 'video',
+      queuedAt: Date.now(),
+      attempts: 0
+    });
+    writePendingCallSummaries(list);
+    console.log('[通话总结] 已排队 (等用户下次发消息再调):', { chatId, callRecordId });
+  }
+
+  function removePendingCallSummary(job) {
+    const list = readPendingCallSummaries().filter(item =>
+      !(item.chatId === job.chatId && item.callRecordId === job.callRecordId)
+    );
+    writePendingCallSummaries(list);
+  }
+
+  /** 把一条通话记录拼成总结用的纯文字 (跟老实现同一套格式, 群聊不套两层名字) */
+  function buildCallTranscriptText(chat, record) {
+    if (!chat || !record || !Array.isArray(record.transcript)) return '';
+    return record.transcript.map(h => {
+      const sender = h.role === 'user'
+        ? (chat.settings.myNickname || '我')
+        : (h.senderName || chat.name);
+      const text = callHistoryContentToText(h.content);
+      const prefix = `${sender}:`;
+      return text.startsWith(prefix) ? text : `${sender}: ${text}`;
+    }).join('\n');
+  }
+
+  // 每个聊天一个计时器 —— 别让 A 聊天的排队被 B 聊天的一次发消息顶掉
+  const pendingCallSummaryTimers = new Map();
+
+  /**
+   * 用户在这个聊天里发了消息 → 把挂断时排队的通话总结跑掉。
+   * 延后一小会儿再跑: 别跟用户这条消息的 AI 回复抢并发 (那也是一整次请求)。
+   */
+  function flushPendingCallSummaries(chatId) {
+    if (!chatId) return;
+    const mine = readPendingCallSummaries().filter(item => item.chatId === chatId);
+    if (mine.length === 0) return;
+    // 通话进行中不跑 —— 通话里的并发已经够多了
+    if (videoCallState.isActive || voiceCallState.isActive) return;
+    const oldTimer = pendingCallSummaryTimers.get(chatId);
+    if (oldTimer) clearTimeout(oldTimer);
+    const timer = setTimeout(() => {
+      pendingCallSummaryTimers.delete(chatId);
+      runPendingCallSummaries(chatId);
+    }, 8000);
+    pendingCallSummaryTimers.set(chatId, timer);
+  }
+
+  async function runPendingCallSummaries(chatId) {
+    const list = readPendingCallSummaries();
+    const mine = list.filter(item => item.chatId === chatId);
+    if (mine.length === 0) return;
+    // 一次只跑一条 (省并发, 也省额度)
+    const job = mine[0];
+    const chat = state.chats[job.chatId];
+    if (!chat) {
+      removePendingCallSummary(job);
+      return;
+    }
+    try {
+      const record = await db.callRecords.get(job.callRecordId);
+      if (!record) {
+        removePendingCallSummary(job);
+        return;
+      }
+      const transcriptText = buildCallTranscriptText(chat, record);
+      if (!transcriptText) {
+        removePendingCallSummary(job);
+        return;
+      }
+      await summarizeCallTranscript(job.chatId, transcriptText);
+      removePendingCallSummary(job);
+      console.log('[通话总结] 延后总结完成:', job.callRecordId);
+    } catch (err) {
+      console.warn('[通话总结] 延后总结失败:', err);
+      job.attempts = (job.attempts || 0) + 1;
+      // 试满 3 次还不行就放弃 —— 通话记录页里还能手动总结
+      if (job.attempts >= 3) {
+        removePendingCallSummary(job);
+      } else {
+        writePendingCallSummaries(list);
+      }
+    }
+  }
+
+  /**
+   * 把一次通话的逐句记录转成【普通聊天消息】。
+   *
+   * 这些消息会进 chat.history / db.messages, 于是:
+   *   ① AI 上下文能按顺序读到通话里说过的话
+   *   ② 记忆总结能按顺序把通话内容总结进长期记忆
+   *
+   * 字段说明:
+   *   id             固定 id (同一通电话同一句永远是同一条, 重复写库也不会变成两条)
+   *   callRecordId   属于哪通电话 (界面据此把它们折叠成一条)
+   *   callTurnIndex  第几句 (结尾那条 "通话结束" 没有这个字段)
+   */
+  function buildCallTranscriptChatMessages(chat, callHistory, callRecordId) {
+    if (!chat || !Array.isArray(callHistory) || callHistory.length === 0) return [];
+    const myNickname = chat.settings.myNickname || '我';
+    const messages = [];
+    let lastTs = 0;
+
+    callHistory.forEach((h) => {
+      if (!h) return;
+      const text = callHistoryContentToText(h.content);
+      if (!text) return;
+      // [ERROR: ...] 是通话里的报错提示, 不是对话内容 —— 别塞进聊天记录
+      if (text.indexOf('[ERROR:') === 0) return;
+
+      const isUser = h.role === 'user';
+      let ts = Number(h.timestamp);
+      if (!Number.isFinite(ts) || ts <= 0) ts = lastTs + 1;
+      if (ts <= lastTs) ts = lastTs + 1;   // 同一毫秒的两句 → 强制递增, 免得排序乱
+      lastTs = ts;
+
+      const senderName = isUser ? myNickname : (h.senderName || chat.name);
+      let content = text;
+      if (!isUser && chat.isGroup) {
+        // 群聊里 AI 那条本来就带 "名字: 台词"。
+        // 聊天气泡上方已经显示说话人, 这里去掉前缀免得变成 "名字: 名字: 台词";
+        // AI 上下文那边 (ai-response.js 群聊分支) 本来就会自己补上说话人, 不会丢。
+        const prefix = `${senderName}:`;
+        if (content.startsWith(prefix)) content = content.slice(prefix.length).trim();
+      }
+
+      messages.push({
+        id: `${chat.id}::call${callRecordId}::${messages.length + 1}`,
+        role: isUser ? 'user' : 'assistant',
+        content,
+        timestamp: ts,
+        senderName,
+        callRecordId,
+        callTurnIndex: messages.length + 1
+      });
+    });
+
+    return messages;
+  }
+
+  /**
+   * 把一批消息按顺序写进聊天历史 (视频/语音挂断共用)。
+   *
+   * ⚠️ chat.history.push 已经被 message-store.js 接管 (自动写 db.messages),
+   *   这里再显式 await 一次落库 —— 保证紧接着的 openChat 渲染能拿到这些消息。
+   *   (两条消息 id 固定, 重复写库也只会覆盖同一条, 不会变成两条)
+   *
+   * @param {Object} chat
+   * @param {Array} messages 已有序的消息数组
+   * @returns {Promise<Array>} 写进去的消息
+   */
+  async function insertCallMessagesToChatHistory(chat, messages) {
+    if (!chat || !Array.isArray(messages) || messages.length === 0) return [];
+
+    chat.history.push(...messages);
+    try {
+      if (window.messageStore && typeof window.messageStore.persistMessages === 'function') {
+        await window.messageStore.persistMessages(chat.id, messages);
+      }
+    } catch (e) {
+      console.warn('[通话记录] 逐句记录落库失败:', e);
+    }
+    console.log('[通话记录] 已插入聊天历史:', messages.length, '条');
+    return messages;
   }
 
   // 正式视频通话页 Live2D 手势交互状态 (单指拖拽 + 双指捏合)
@@ -414,12 +645,72 @@
   //   所以表情写进去的值不会被抹掉, 而是"在表情的基础上再偏一点";
   //   松手后 offset 回到 0, base 自然自愈。
   const CALL_GAZE_PARAMS = ['ParamEyeBallX', 'ParamEyeBallY', 'ParamAngleX', 'ParamAngleY', 'ParamAngleZ'];
-  // 脸在模型 canvas 里的位置。来自 character.json 的 head.face:
-  //   centre [643,194]  rx 75  ry_up 86  ry_down 110  (canvas 1280×1280)
+  // 脸在模型 canvas 里的位置。
+  // ⚠ v0.5.3: 下面这组只是**兜底**。真正用的是挂载时从模型里量出来的真实脸框
+  //   (computeCallFaceFrac 读 Face_Skin 图层的当前顶点)。
+  //   原因: 写死一组数字永远对不上所有模型 ——
+  //     沈清越 head.rest_tilt_deg=-5 把脸推到 (653,222)、canvas 1296 高;
+  //     景澜 (639,172)、canvas 1280;  许初言 (622,234)、canvas 1370。
+  //   旧硬编码 (643,194) 让沈清越的右脸颊外缘 (canvas 735,285) 归一化距离 1.20 > 1
+  //   → 直接判不到脸 → 「戳右脸没反应、戳左脸有」。景澜/许初言因为脸更靠近那组旧数字,
+  //   所以它们看着没毛病(其实许初言左脸颊也擦边)。
   const CALL_FACE_FRAC = {
-    cx: 643 / 1280, cy: 194 / 1280,
-    rx: 75 / 1280, ru: 86 / 1280, rd: 110 / 1280
+    cx: 643 / 1280, cy: 210 / 1296,
+    rx: 75 / 1280, ru: 86 / 1296, rd: 110 / 1296
   };
+
+  /**
+   * 从模型里量「实际画出来的脸框」(canvas 归一化 0..1)。
+   * 读 Face_Skin 图层在当前参数下的顶点 —— 这样静态歪头(head.rest_tilt_deg)、
+   * 画布尺寸、每个角色脸的位置全都是自动的, 不用再为任何角色改数字。
+   * 拿不到就返回 null(调用方回落到 CALL_FACE_FRAC)。
+   */
+  function computeCallFaceFrac(model) {
+    try {
+      const im = model && model.internalModel;
+      if (!im || !(im.width > 0) || !(im.height > 0)) return null;
+      const W = im.width, H = im.height;
+      if (typeof im.getDrawableIDs !== 'function' || typeof im.getDrawableVertices !== 'function') return null;
+      const ids = im.getDrawableIDs() || [];
+      let faceId = null;
+      for (let i = 0; i < ids.length; i++) {
+        const n = String(ids[i] || '');
+        if (/face_?skin/i.test(n)) { faceId = n; break; }
+      }
+      if (!faceId) return null;
+      const pts = im.getDrawableVertices(faceId);
+      if (!pts || pts.length < 8) return null;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        const x = pts[i], y = pts[i + 1];
+        if (!isFinite(x) || !isFinite(y)) continue;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      if (!(x1 > x0) || !(y1 > y0)) return null;
+      const cxRaw = (x0 + x1) / 2;
+      const cyRaw = (y0 + y1) / 2;
+      const fr = {
+        cx: cxRaw / W,
+        cy: cyRaw / H,
+        rx: ((x1 - x0) / 2) / W,
+        ru: (cyRaw - y0) / H,
+        rd: (y1 - cyRaw) / H
+      };
+      // 合理性夹一下: 脸框太离谱(读错层/模型没这个层)就回落
+      const sane = fr.cx > 0 && fr.cx < 1 && fr.cy > 0 && fr.cy < 1
+        && fr.rx > 0.02 && fr.rx < 0.35 && fr.ru > 0.02 && fr.ru < 0.35 && fr.rd > 0.02 && fr.rd < 0.35;
+      if (!sane) return null;
+      console.log('[视频通话视线] 脸框(自动量): cx=' + fr.cx.toFixed(3) + ' cy=' + fr.cy.toFixed(3)
+        + ' rx=' + fr.rx.toFixed(3) + ' ru=' + fr.ru.toFixed(3) + ' rd=' + fr.rd.toFixed(3));
+      return fr;
+    } catch (e) {
+      console.warn('[视频通话视线] 量脸框失败:', e && e.message);
+      return null;
+    }
+  }
 
   /** 应急开关: 控制台 setItem('mavis-call-gaze','off') 后刷新 → 彻底关掉转头/视线跟随 */
   function isCallGazeDisabled() {
@@ -454,6 +745,9 @@
       pokeHoldMs: 900,    // 戳脸后歪头保持多久
       pokeTilt: 0.7       // 歪头幅度 (占 AngleZ 范围的比例; 0.7×30≈21 → 约 7° 实际倾斜)
     };
+
+    // 脸框: 优先用模型里量出来的真实值, 量不到才用兜底常量
+    const FACE = computeCallFaceFrac(model) || CALL_FACE_FRAC;
 
     const idx = {};
     CALL_GAZE_PARAMS.forEach(function (id) {
@@ -565,20 +859,20 @@
     const isOnFace = function (mp) {
       if (!mp) return false;
       // 判定椭圆放宽 1.35 倍: 手机上手指粗, 严格椭圆很难戳中
-      const rx = CALL_FACE_FRAC.rx * 1.35;
-      const ry = (mp.y < CALL_FACE_FRAC.cy ? CALL_FACE_FRAC.ru : CALL_FACE_FRAC.rd) * 1.35;
-      const dx = (mp.x - CALL_FACE_FRAC.cx) / rx;
-      const dy = (mp.y - CALL_FACE_FRAC.cy) / ry;
+      const rx = FACE.rx * 1.35;
+      const ry = (mp.y < FACE.cy ? FACE.ru : FACE.rd) * 1.35;
+      const dx = (mp.x - FACE.cx) / rx;
+      const dy = (mp.y - FACE.cy) / ry;
       return (dx * dx + dy * dy) <= 1;
     };
 
     const setTargetFromPoint = function (mp) {
       if (!mp) return;
       // 参考系用脸的大小: 手指移到脸的左侧边缘外一点就已经是"看到极限", 手感才跟手
-      const halfX = CALL_FACE_FRAC.rx * 3.2;
-      const halfY = CALL_FACE_FRAC.ru * 2.6;
-      target.x = Math.max(-1, Math.min(1, (mp.x - CALL_FACE_FRAC.cx) / halfX));
-      target.y = Math.max(-1, Math.min(1, (mp.y - CALL_FACE_FRAC.cy) / halfY));
+      const halfX = FACE.rx * 3.2;
+      const halfY = FACE.ru * 2.6;
+      target.x = Math.max(-1, Math.min(1, (mp.x - FACE.cx) / halfX));
+      target.y = Math.max(-1, Math.min(1, (mp.y - FACE.cy) / halfY));
     };
 
     const onDown = function (ev) {
@@ -589,7 +883,7 @@
       if (isOnFace(mp)) {
         // 戳脸: 往被戳的**反方向**歪一下头 (被戳到会躲开)
         // ParamAngleZ + = 往画面左歪, 所以戳右脸要让 AngleZ 变正
-        const side = mp.x >= CALL_FACE_FRAC.cx ? 1 : -1;
+        const side = mp.x >= FACE.cx ? 1 : -1;
         tilt = CFG.pokeTilt * side;
         pokeUntil = nowMs() + CFG.pokeHoldMs;
         // 记下来, 下一轮组装请求时告诉 AI "刚才被戳了"
@@ -679,6 +973,19 @@
         try { cur = core.getParameterValueByIndex(k); } catch (e) { cur = 0; }
         let v = cur + off;
         if (v < lo) v = lo; else if (v > hi) v = hi;
+        // ── v0.5.3: 戳脸被限位夹住时改往反方向躲 ──
+        // 症状(用户 2026-11-24): 「戳右边脸没反应, 戳左边有」, 只有沈清越这个角色。
+        // 根因: 歪头卖萌那条表情写 ParamAngleZ=30, 一旦被吸收成基线, 头就贴在 +30 上限;
+        //   戳右脸要 +21 → 被夹死在 30 (实测 AngleZ 恒定 30, 一帧都没动),
+        //   戳左脸是 -21 → 30-9, 反而有反应。左右不对称就是这么来的。
+        // 修法: 只在「戳脸保持期」内, 若这次偏移被夹掉 65% 以上, 就改往反方向躲 ——
+        //   幅度仍是 21 度, 只是方向反过来, 保证任何基线状态下都有可见反应。
+        //   ⚠ 只对戳脸生效: 拖拽时反方向甩头会很怪, 所以拖拽保持原样(拖到限位就是到限位)。
+        if (id === 'ParamAngleZ' && now < pokeUntil
+            && Math.abs(off) > 0.5 && Math.abs(v - cur) < Math.abs(off) * 0.35) {
+          const alt = cur - off;
+          v = alt < lo ? lo : (alt > hi ? hi : alt);
+        }
         try { core.setParameterValueByIndex(k, v); } catch (e) { /* ignore */ }
         lastOff[id] = off;
       }
@@ -2343,6 +2650,7 @@ let voiceCallStatusHoldUntil = 0;
     videoCallState.isAwaitingResponse = false;
     videoCallState.startTime = Date.now();
     videoCallState.callHistory = [];
+    videoCallHangingUp = false;   // 新通话开始 → 挂断重入锁解开
     callDiagReset('video');
 
     // v0.5.0 P26: 新通话开始, 旧 turn 状态机清零 (兜底: 防止异常路径漏掉 endVideoCall)
@@ -2881,6 +3189,13 @@ let voiceCallStatusHoldUntil = 0;
     }
   }
 
+  /**
+   * 挂断 (视频通话) —— 外壳只干两件事:
+   *   ① 停背景音乐 (跟以前一样, 不管有没有在通话中都执行 —— 防止跨通话残留)
+   *   ② 防重入锁: 挂断流程里有好几个 await, 用户在手机卡顿时很容易再点一下挂断键,
+   *      流程跑第二遍就会把通话记录存两条、逐句记录插两遍 (AI 上下文里同一通电话出现两次)。
+   *      用 try/finally 保证流程中途抛异常时锁也会解开, 不会把用户永久卡在通话界面。
+   */
   async function endVideoCall() {
     // === 挂断停止背景音乐 START ===
     // 跟语音通话 endVoiceCall 顶部 if (window.voiceCallBgAudio) ... 等价
@@ -2888,9 +3203,17 @@ let voiceCallStatusHoldUntil = 0;
     stopVideoCallWaitingMusicOnHangup();
     // === 挂断停止背景音乐 END ===
 
-    // v0.5.0 P25: 挂断不需要管"启用音频"按钮 — 它 DOM 在呼叫等待页内部, 切屏时自动隐藏。
+    if (!videoCallState.isActive || videoCallHangingUp) return;
+    videoCallHangingUp = true;
+    try {
+      await doEndVideoCall();
+    } finally {
+      videoCallHangingUp = false;
+    }
+  }
 
-    if (!videoCallState.isActive) return;
+  async function doEndVideoCall() {
+    // v0.5.0 P25: 挂断不需要管"启用音频"按钮 — 它 DOM 在呼叫等待页内部, 切屏时自动隐藏。
 
     callDiagStage('hangup:start');
 
@@ -2959,7 +3282,6 @@ let voiceCallStatusHoldUntil = 0;
     const endCallText = `通话结束，时长 ${durationText}`;
 
     const chat = state.chats[videoCallState.activeChatId];
-    let callTranscriptForAI = '';
     if (chat) {
 
       const participantsData = [];
@@ -3004,38 +3326,36 @@ let voiceCallStatusHoldUntil = 0;
       callDiagStage('hangup:record-saved');
       console.log("通话记录已保存:", callRecord);
 
+      // ⚠️ 挂断这一刻【不】调总结 API (2026-11-25)。
+      //   总结是挂断瞬间最大的一笔并发: 一次完整 AI 请求 + 长文本解析,
+      //   跟"回窗口的全量重渲染"、WebGL/摄像头释放挤在同一帧 —— iPhone PWA 就是在这里闪退。
+      //   改成排队, 等用户在这个聊天里下次发消息时再跑 (flushPendingCallSummaries)。
+      schedulePendingCallSummary(chat.id, newRecordId, 'video');
+      callDiagStage('hangup:summary-queued');
+
+      // 逐句记录插进聊天历史 —— 像普通聊天一样, 于是:
+      //   ① AI 上下文能按顺序读到这次通话说过的话 (以前读不到)
+      //   ② 记忆总结能按顺序把通话内容总结进长期记忆
+      const transcriptMessages = buildCallTranscriptChatMessages(chat, videoCallState.callHistory, newRecordId);
+      const lastTurnTs = transcriptMessages.length
+        ? Number(transcriptMessages[transcriptMessages.length - 1].timestamp) || 0
+        : 0;
 
       let summaryMessage = {
         role: videoCallState.initiator === 'user' ? 'user' : 'assistant',
         content: endCallText,
-        timestamp: Date.now(),
-        callRecordId: newRecordId
+        // 必须排在最后一句通话记录之后 (同一毫秒也不许重叠, 否则排序会乱)
+        timestamp: Math.max(Date.now(), lastTurnTs + 1),
+        callRecordId: newRecordId,
+        // 这通电话一共几句 —— 界面折叠成一条时用它显示 "N 句"
+        callTurnTotal: transcriptMessages.length
       };
       if (chat.isGroup && summaryMessage.role === 'assistant') {
         summaryMessage.senderName = videoCallState.callRequester || chat.members[0]?.originalName || chat.name;
       }
-      chat.history.push(summaryMessage);
-
-
-
-
-
-
-      callTranscriptForAI = videoCallState.callHistory.map(h => {
-        const sender = h.role === 'user'
-          ? (chat.settings.myNickname || '我')
-          : (h.senderName || chat.name);   // 以前没兜底 → 总结里 AI 那几行全是 "undefined: "
-        const text = callHistoryContentToText(h.content);
-        // 群聊通话里 AI 那条内容本来就带 "名字: 台词", 别再套一层变成 "名字: 名字: 台词"
-        const prefix = `${sender}:`;
-        return text.startsWith(prefix) ? text : `${sender}: ${text}`;
-      }).join('\n');
-
-
-
-      // ⚠️ 通话记忆总结不再在这里跑 (挪到本函数末尾"切回聊天界面"之后),
-      //   原位置跟 db.chats.put / openChat / triggerAiResponse 全挤在同一帧,
-      //   是挂断瞬间最大的一波并发。产物写进长期记忆, 晚几百毫秒没有任何区别。
+      // 逐句记录 + "通话结束" 那条, 一次性按顺序写进聊天历史
+      await insertCallMessagesToChatHistory(chat, [...transcriptMessages, summaryMessage]);
+      callDiagStage('hangup:transcript-inserted');
 
 
       // ⚠️ 这里【不再】往 chat.history 塞"通话结束请主动发一两句"的隐藏系统指令,
@@ -3084,17 +3404,11 @@ let voiceCallStatusHoldUntil = 0;
       }
       callDiagStage('hangup:back-to-chat');
 
-      // 记忆总结挪到界面稳定之后再跑 (原来是在落库途中就 fire-and-forget)。
-      // 它是 fire-and-forget, 必须自己接住 reject, 否则就是 unhandledrejection。
-      if (callTranscriptForAI) {
-        try {
-          Promise.resolve(summarizeCallTranscript(chat.id, callTranscriptForAI)).catch(err => {
-            console.warn('[视频通话] 通话总结失败 (不影响挂断):', err);
-          });
-        } catch (err) {
-          console.warn('[视频通话] 通话总结调用失败 (不影响挂断):', err);
-        }
-      }
+      // ⚠️ 这里【不】再调 summarizeCallTranscript (2026-11-25)。
+      //   通话总结已经改成"排队 → 等用户在这个聊天里下次发消息时才调"
+      //   (见上面的 schedulePendingCallSummary)。
+      //   原因: 挂断瞬间并发越多越容易把 iPhone PWA 顶崩 ——
+      //   一次完整 AI 请求 + 长文本解析, 跟全量重渲染、WebGL/摄像头释放挤在一帧。
     }
     callDiagStage('hangup:done');
   }
@@ -4544,6 +4858,7 @@ ${linkedContents}
     voiceCallState.isActive = true;
     voiceCallState.isAwaitingResponse = false;
     voiceCallState.startTime = Date.now();
+    voiceCallHangingUp = false;   // 新通话开始 → 挂断重入锁解开
     callDiagReset('voice');
     voiceCallState.callHistory = [];
     voiceCallState.isAiResponding = false;
@@ -4622,6 +4937,10 @@ ${linkedContents}
     console.log("语音通话已恢复。");
   }
 
+  /**
+   * 挂断 (语音通话) —— 外壳只干三件事:
+   *   ① 停背景音乐 ② 重置"启用音频"按钮 ③ 防重入锁 (跟视频通话 endVideoCall 同一套)
+   */
   async function endVoiceCall() {
     // === 挂断停止背景音乐 START ===
     if (window.voiceCallBgAudio) {
@@ -4636,8 +4955,16 @@ ${linkedContents}
     // 下次再打时按钮要重新出现
     setVoiceCallAudioUnlockBtnVisibility(true);
 
-    if (!voiceCallState.isActive) return;
+    if (!voiceCallState.isActive || voiceCallHangingUp) return;
+    voiceCallHangingUp = true;
+    try {
+      await doEndVoiceCall();
+    } finally {
+      voiceCallHangingUp = false;
+    }
+  }
 
+  async function doEndVoiceCall() {
     callDiagStage('hangup:start');
 
     // v0.5.1: 硬件 / 音频资源提前释放 (原来排在两次 await 落库之后 ——
@@ -4675,7 +5002,6 @@ ${linkedContents}
     const endCallText = `语音通话结束，时长 ${durationText}`;
 
     const chat = state.chats[voiceCallState.activeChatId];
-    let callTranscriptForAI = '';
     if (chat) {
       const participantsData = [];
       if (voiceCallState.isGroupCall) {
@@ -4711,26 +5037,32 @@ ${linkedContents}
       const newRecordId = await db.callRecords.add(callRecord);
       console.log("语音通话记录已保存:", callRecord);
 
+      // ⚠️ 挂断这一刻【不】调总结 API (2026-11-25) —— 跟视频通话同一套:
+      //   总结改成排队, 等用户在这个聊天里下次发消息时再跑 (flushPendingCallSummaries)。
+      schedulePendingCallSummary(chat.id, newRecordId, 'voice');
+      callDiagStage('hangup:summary-queued');
+
+      // 逐句记录插进聊天历史 —— 像普通聊天一样 (跟视频通话共用同一套逻辑)
+      const transcriptMessages = buildCallTranscriptChatMessages(chat, voiceCallState.callHistory, newRecordId);
+      const lastTurnTs = transcriptMessages.length
+        ? Number(transcriptMessages[transcriptMessages.length - 1].timestamp) || 0
+        : 0;
+
       let summaryMessage = {
         role: voiceCallState.initiator === 'user' ? 'user' : 'assistant',
         content: endCallText,
-        timestamp: Date.now(),
-        callRecordId: newRecordId
+        // 必须排在最后一句通话记录之后 (同一毫秒也不许重叠, 否则排序会乱)
+        timestamp: Math.max(Date.now(), lastTurnTs + 1),
+        callRecordId: newRecordId,
+        // 这通电话一共几句 —— 界面折叠成一条时用它显示 "N 句"
+        callTurnTotal: transcriptMessages.length
       };
       if (chat.isGroup && summaryMessage.role === 'assistant') {
         summaryMessage.senderName = voiceCallState.callRequester || chat.members[0]?.originalName || chat.name;
       }
-      chat.history.push(summaryMessage);
-
-      callTranscriptForAI = voiceCallState.callHistory.map(h => {
-        const sender = h.role === 'user'
-          ? (chat.settings.myNickname || '我')
-          : (h.senderName || chat.name);   // 以前没兜底 → 总结里 AI 那几行全是 "undefined: "
-        const text = callHistoryContentToText(h.content);
-        // 群聊通话里 AI 那条内容本来就带 "名字: 台词", 别再套一层变成 "名字: 名字: 台词"
-        const prefix = `${sender}:`;
-        return text.startsWith(prefix) ? text : `${sender}: ${text}`;
-      }).join('\n');
+      // 逐句记录 + "通话结束" 那条, 一次性按顺序写进聊天历史
+      await insertCallMessagesToChatHistory(chat, [...transcriptMessages, summaryMessage]);
+      callDiagStage('hangup:transcript-inserted');
 
       await db.chats.put(chat);
       callDiagStage('hangup:chat-saved');
@@ -4760,15 +5092,8 @@ ${linkedContents}
       }
       callDiagStage('hangup:back-to-chat');
 
-      if (callTranscriptForAI) {
-        try {
-          Promise.resolve(summarizeCallTranscript(chat.id, callTranscriptForAI)).catch(err => {
-            console.warn('[语音通话] 通话总结失败 (不影响挂断):', err);
-          });
-        } catch (err) {
-          console.warn('[语音通话] 通话总结调用失败 (不影响挂断):', err);
-        }
-      }
+      // ⚠️ 这里【不】再调 summarizeCallTranscript (2026-11-25) —— 跟视频通话同一套:
+      //   通话总结已经改成"排队 → 等用户在这个聊天里下次发消息时才调"。
     }
     callDiagStage('hangup:done');
   }
@@ -5567,6 +5892,11 @@ ${voiceCallTtsBlock}
   window.voiceCallState = voiceCallState;
   // 通话记录里取纯文字用 —— 视频通话的用户那条可能是多模态数组
   window.callHistoryContentToText = callHistoryContentToText;
+  // 挂断后排队等总结的那套 (用户下次发消息时才真的调总结 API)
+  window.callSummaryQueue = {
+    schedule: schedulePendingCallSummary,
+    flushForChat: flushPendingCallSummaries
+  };
   // v0.5.x 性能: 气泡 DOM 上限 —— ai-response.js 的「重新生成回应」重渲染气泡时也用这个值
   window.CALL_FEED_MAX_BUBBLES = CALL_FEED_MAX_BUBBLES;
   window.handleInitiateCall = handleInitiateCall;

@@ -1781,6 +1781,13 @@ window.initEventBindingsA = async function(state, db) {
         await db.chats.put(chat);
         renderChatList();
 
+        // 通话总结 (2026-11-25): 挂断那一刻【不】调总结 API, 只排队。
+        //   现在用户在这个聊天里发了消息 → 把排队的通话总结跑掉 (内部还会延后几秒,
+        //   免得跟这条消息的 AI 回复抢并发)。
+        if (window.callSummaryQueue && typeof window.callSummaryQueue.flushForChat === 'function') {
+          window.callSummaryQueue.flushForChat(chat.id);
+        }
+
         // v0.2.27: user 发消息后立即 sync 给 push-server, push-server 端 context_full 立刻包含最新对话
         //   真凶: 之前 PWA 端只在切 push 模式 + 启动 + 保存主 API 时 sync, user 日常聊天从来不 sync
         //   push-server 巡视时 context 还是保存 API 那次的旧 context, LLM 看到旧话题, 生成"过时的"AI 回复
