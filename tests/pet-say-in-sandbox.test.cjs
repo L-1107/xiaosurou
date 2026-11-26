@@ -301,7 +301,7 @@ function makeSandbox(cfg) {
     check('读书屋沙盒页的 reading-sandbox.css 对齐 0.1.6', /reading-sandbox\.css\?v=0\.1\.6/.test(sandboxReading));
 
     check('SW 里有这次的变更记录', /v0\.2\.137\.0/.test(sw) && /宠物说的话也要刷进影院/.test(sw));
-    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.140.0', /const CACHE_VERSION = 'v0\.2\.140\.0'/.test(sw));
+    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.141.0', /const CACHE_VERSION = 'v0\.2\.141\.0'/.test(sw));
   }
 
   // ============================================================
