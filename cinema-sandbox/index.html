@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Cinema Room (iframe 沙盒)</title>
 <!-- ⚠️ 影院本体样式, 和生产完全同一份文件。上一版重写时漏了这行, 导致整个房间裸奔。 -->
-<link rel="stylesheet" href="../modules/cinema-room.css?v=0.39.1">
+<link rel="stylesheet" href="../modules/cinema-room.css?v=0.39.2">
 <!-- 🔴 2026-11-26: 沙盒里的桌宠 + 悬浮球 (宿主在 iframe 底下是静默的, 进不来) -->
 <link rel="stylesheet" href="../css/companion-layer.css?v=0.2.0">
 <!--
@@ -424,12 +424,19 @@
 <script src="../modules/cinema-storage.js?v=0.5.4"></script>
 <script src="../modules/cinema-img.js?v=0.1.0"></script>
 <script src="../modules/cinema-room.js?v=0.35.3"></script>
-<script src="../modules/cinema-live.js?v=2.5.1"></script>
+<script src="../modules/cinema-live.js?v=2.5.2"></script>
 <!-- 2026-10-23 影院陪聊层 (陪聊改走主 API) -->
 <!-- 2026-11-25: ?v= 对齐宿主的 0.2.6 (原来漏在 0.2.5, cinema-host-context 测试一直报红) -->
 <script src="../modules/cinema-chat.js?v=0.2.6"></script>
 <!-- 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进影院 -->
 <script src="../modules/companion-layer.js?v=0.2.0"></script>
+<!--
+  🔴 2026-11-26: 引入 ui-loaders.js 只为拿 parseMarkdown ——
+  AI 回复的 **加粗** / *斜体* / ~~删除~~ / ||剧透|| 要跟主聊天一样渲染,
+  以前这里是纯文本, 标记原样显示成字面符号 (用户反馈"格式跟主 API 回复不一样")。
+  ?v= 跟宿主 index.html 里的 0.0.36 对齐。
+-->
+<script src="../modules/ui-loaders.js?v=0.0.36"></script>
 <script>
   // 沙盒这一侧只负责"演出": 点了「摸摸」把动作交回宿主做,
   // 宠物的话也由宿主生成 (上下文跟外面一模一样), 这里只负责把气泡冒出来。

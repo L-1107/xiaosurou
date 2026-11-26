@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.41">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.43">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -237,8 +237,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/live2d-manager.js?v=0.0.8" defer></script>
   <!-- v0.5.0 P11: 通话舞台背景管理页 (依赖 live2d-call-prep.js / live2d-ui.js) -->
   <script src="modules/live2d-bg-manager.js?v=0.0.3" defer></script>
-  <script src="modules/api-endpoint-presets.js?v=0.0.38" defer></script>
-<script src="modules/gemini-key-pool.js?v=0.1.2" defer></script>
+  <script src="modules/api-endpoint-presets.js?v=0.0.39" defer></script>
+<script src="modules/gemini-key-pool.js?v=0.2.0" defer></script>
   <!-- 死锁状态修复（F5 启动时清残留 isGenerating 状态） -->
   <script src="modules/chat-stuck-state-repair.js?v=0.0.36" defer></script>
   <script src="modules/openai-compatible-image-settings.js?v=0.0.36" defer></script>
@@ -261,10 +261,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
   <script src="modules/cinema-room.js?v=0.35.3" defer></script>
-  <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.1">
+  <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.2">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
-  <script src="modules/cinema-live.js?v=2.5.1" defer></script>
+  <script src="modules/cinema-live.js?v=2.5.2" defer></script>
   <!-- Cinema Room 的【陪聊】层 (2026-10-23)。
        陪聊改走【主聊天的主 API】: 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆,
        性格跟外面聊天一致。Live 只负责看画面 + 写剧情记忆。
@@ -2102,14 +2102,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             <div class="settings-item">
                 <div>
                     <label>启用 Key 池</label>
-                    <div class="settings-desc">勾选的站点预设各带一个 Key。请求报错（503/429/超时）时自动换下一个 Key，坏 Key 冷却一段时间不再用。只对「谷歌直连」地址生效；关掉就回到原来的行为。</div>
+                    <div class="settings-desc"><b>打开 = 主聊天直接走谷歌直连轮询</b>：池里勾选的站点预设各带一个 Key，挨个轮着来；报错（503 / 429 / 超时）自动换下一个，坏 Key 冷却一阵不再用。<b>关闭 = 主 API 走你自己选的渠道</b>，行为跟以前一模一样。</div>
                 </div>
                 <label class="toggle-switch">
                     <input type="checkbox" id="gemini-pool-enabled">
                     <span class="slider"></span>
                 </label>
             </div>
-            <div class="settings-item gemini-pool-member-item">
+            <div class="settings-item gemini-pool-stacked-item">
                 <label>池成员（勾选站点预设）</label>
                 <div class="gemini-pool-multi" id="gemini-pool-multi">
                     <button type="button" class="gemini-pool-trigger" id="gemini-pool-preset-trigger">
@@ -2125,8 +2125,12 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     </div>
                 </div>
             </div>
+            <div class="settings-item gemini-pool-stacked-item">
+                <label>生效范围</label>
+                <div id="gemini-pool-scope" class="settings-description gemini-pool-scope" style="width: 100%;"></div>
+            </div>
             <div class="settings-item">
-                <label>轮询模型</label>
+                <label>轮询模型（只管池）</label>
                 <div class="settings-right" style="flex-wrap: wrap; gap: 8px;">
                     <select id="gemini-pool-model-select" class="settings-select" style="flex-grow: 1; width: auto;"></select>
                     <button type="button" id="gemini-pool-fetch-models-btn" class="settings-mini-btn">拉取模型</button>

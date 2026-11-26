@@ -404,11 +404,12 @@ async function main() {
     resolved = await sandbox.window.resolveApiSlotConfig('main');
     check('池开启时换成池里的某个 key', resolved.apiKey === KEY_A || resolved.apiKey === KEY_B, 'apiKey=' + resolved.apiKey);
     check('下发的必须是单个 key（不能是逗号串）', resolved.apiKey.indexOf(',') < 0, 'apiKey=' + resolved.apiKey);
-    check('地址不受影响', resolved.proxyUrl === GEMINI_BASE, 'proxyUrl=' + resolved.proxyUrl);
+    check('地址是谷歌直连', resolved.proxyUrl === GEMINI_BASE, 'proxyUrl=' + resolved.proxyUrl);
+    check('标记为「被池接管」', resolved.poolForced === true, 'poolForced=' + resolved.poolForced);
   }
 
   // ------------------------------------------------------------
-  section('⑪ 非谷歌直连地址 → 池不接管');
+  section('⑪ 池开启 → 主聊天【强制】走谷歌轮询，哪怕主 API 选的是 OpenAI 中转站');
   {
     const OPENAI_PRESET = { id: 9, name: '中转站', proxyUrl: 'https://api.example.com/v1', apiKey: 'sk-xxx' };
     const { sandbox } = makeSandbox({
@@ -416,13 +417,46 @@ async function main() {
       state: { apiConfig: { mainEndpointPresetId: 9, model: 'gpt-4o' }, globalSettings: {} },
       loadPresetsModule: true,
     });
+
+    // 池关着：中转站原样
+    let resolved = await sandbox.window.resolveApiSlotConfig('main');
+    check('池关闭时走中转站', resolved.proxyUrl === 'https://api.example.com/v1', 'proxyUrl=' + resolved.proxyUrl);
+    check('池关闭时用中转站自己的 key', resolved.apiKey === 'sk-xxx', 'apiKey=' + resolved.apiKey);
+    check('池关闭时模型也是中转站的', resolved.model === 'gpt-4o', 'model=' + resolved.model);
+    check('池关闭时没有「被接管」标记', resolved.poolForced === false);
+
+    // 池开着：强制改成谷歌轮询
     enablePool(sandbox, [1]);
-    const resolved = await sandbox.window.resolveApiSlotConfig('main');
-    check('中转站的 key 不被池改写', resolved.apiKey === 'sk-xxx', 'apiKey=' + resolved.apiKey);
+    resolved = await sandbox.window.resolveApiSlotConfig('main');
+    check('池开启后地址被强制改成谷歌直连', resolved.proxyUrl === GEMINI_BASE, 'proxyUrl=' + resolved.proxyUrl);
+    check('池开启后 key 换成池里的', resolved.apiKey === KEY_A, 'apiKey=' + resolved.apiKey);
+    check('池开启后模型也换成了谷歌模型（不能还是 gpt-4o）', resolved.model === 'gemini-2.5-flash', 'model=' + resolved.model);
+    check('池开启后标了「被接管」', resolved.poolForced === true);
   }
 
   // ------------------------------------------------------------
-  section('⑫ 「拉取模型」走自己的循环，不被池的故障转移接管');
+  section('⑫ 池关闭 → 主 API 完全回到自己选的渠道（老行为一字未改）');
+  {
+    const OPENAI_PRESET = { id: 9, name: '中转站', proxyUrl: 'https://api.example.com/v1', apiKey: 'sk-xxx' };
+    const { sandbox } = makeSandbox({
+      presets: [[1, PRESET_A], [9, OPENAI_PRESET]],
+      state: { apiConfig: { mainEndpointPresetId: 9, model: 'gpt-4o' }, globalSettings: {} },
+      loadPresetsModule: true,
+    });
+    // 池开着 → 强制谷歌
+    enablePool(sandbox, [1]);
+    let r = await sandbox.window.resolveApiSlotConfig('main');
+    check('先确认池开着时是谷歌', r.proxyUrl === GEMINI_BASE, 'proxyUrl=' + r.proxyUrl);
+    // 关掉 → 立刻回到中转站
+    sandbox.window.GeminiKeyPool.saveConfig({ enabled: false });
+    r = await sandbox.window.resolveApiSlotConfig('main');
+    check('关掉池后地址回到中转站', r.proxyUrl === 'https://api.example.com/v1', 'proxyUrl=' + r.proxyUrl);
+    check('关掉池后 key 回到中转站的', r.apiKey === 'sk-xxx', 'apiKey=' + r.apiKey);
+    check('关掉池后模型回到 gpt-4o', r.model === 'gpt-4o', 'model=' + r.model);
+  }
+
+  // ------------------------------------------------------------
+  section('⑬ 「拉取模型」走自己的循环，不被池的故障转移接管');
   {
     const { sandbox, fetchStub } = makeSandbox({
       presets: [[1, PRESET_A], [2, PRESET_B]],
@@ -455,6 +489,121 @@ async function main() {
       JSON.stringify(log[0] || {}));
     check('按钮文案还原了', btn.textContent === '拉取模型', btn.textContent);
     check('按钮重新可点', btn.disabled === false);
+  }
+
+  // ------------------------------------------------------------
+  section('⑭ 主 API 被强制接管；谷歌直连的其它功能位照常走池');
+  {
+    const OPENAI_PRESET = { id: 9, name: '中转站', proxyUrl: 'https://api.example.com/v1', apiKey: 'sk-xxx' };
+    const { sandbox } = makeSandbox({
+      presets: [[1, PRESET_A], [2, PRESET_B], [9, OPENAI_PRESET]],
+      state: {
+        apiConfig: {
+          mainEndpointPresetId: 9,        // 主 API 选的是 OpenAI 中转站
+          visionEndpointPresetId: 1,      // 识图走谷歌直连，且 Key 在池里
+          model: 'gpt-4o',
+          visionModel: 'gemini-2.5-flash'
+        },
+        globalSettings: {}
+      },
+      loadPresetsModule: true,
+    });
+    enablePool(sandbox, [1, 2]);
+
+    const main = await sandbox.window.resolveApiSlotConfig('main');
+    check('主 API 被强制改成谷歌直连', main.proxyUrl === GEMINI_BASE, 'proxyUrl=' + main.proxyUrl);
+    check('主 API 的 key 换成了池里的', main.apiKey === KEY_A || main.apiKey === KEY_B, 'apiKey=' + main.apiKey);
+    check('主 API 的模型换成了谷歌模型', main.model === 'gemini-2.5-flash', 'model=' + main.model);
+
+    const vision = await sandbox.window.resolveApiSlotConfig('vision');
+    check('识图（谷歌直连 + Key 在池里）由池接管',
+      vision.apiKey === KEY_A || vision.apiKey === KEY_B, 'apiKey=' + vision.apiKey);
+    check('识图地址不变', vision.proxyUrl === GEMINI_BASE, 'proxyUrl=' + vision.proxyUrl);
+    check('识图模型不变（它不是主槽位，池不改它的模型）',
+      vision.model === 'gemini-2.5-flash', 'model=' + vision.model);
+  }
+
+  // ------------------------------------------------------------
+  section('⑮ 池外的 Key（没被勾进池的谷歌直连）在【其它功能位】保持自己的 Key');
+  {
+    const OUTSIDE_KEY = 'AIzaOUTSIDE999999999999999999ZZZZ';
+    const OUTSIDE_PRESET = { id: 7, name: '池外谷歌', proxyUrl: GEMINI_BASE, apiKey: OUTSIDE_KEY };
+    const { sandbox } = makeSandbox({
+      presets: [[1, PRESET_A], [7, OUTSIDE_PRESET]],
+      state: {
+        apiConfig: { mainEndpointPresetId: 7, visionEndpointPresetId: 7, model: 'm', visionModel: 'm' },
+        globalSettings: {}
+      },
+      loadPresetsModule: true,
+    });
+    enablePool(sandbox, [1]);
+
+    const vision = await sandbox.window.resolveApiSlotConfig('vision');
+    check('池外的谷歌直连功能位保持自己的 Key', vision.apiKey === OUTSIDE_KEY, 'apiKey=' + vision.apiKey);
+
+    const main = await sandbox.window.resolveApiSlotConfig('main');
+    check('主槽位则是强制接管（主聊天一律走池）', main.apiKey === KEY_A, 'apiKey=' + main.apiKey);
+  }
+
+  // ------------------------------------------------------------
+  section('⑯ 轮询不跳号：每个 Key 都会被轮到（回归：槽位和拦截器各推一次游标 → 跳一半）');
+  {
+    const { sandbox, fetchStub } = makeSandbox({
+      presets: [[1, PRESET_A], [2, PRESET_B], [3, PRESET_C]],
+      handlers: {
+        [KEY_A]: { status: 200 },
+        [KEY_B]: { status: 200 },
+        [KEY_C]: { status: 200 },
+      },
+      state: { apiConfig: { mainEndpointPresetId: 1, model: 'gemini-2.5-flash' }, globalSettings: {} },
+      loadPresetsModule: true,
+    });
+    enablePool(sandbox, [1, 2, 3]);
+
+    // 真实链路是「先解析槽位拿配置 → 再发请求」，这里照着走一遍
+    for (let i = 0; i < 3; i++) {
+      const cfg = await sandbox.window.resolveApiSlotConfig('main');
+      await geminiFetch(sandbox, cfg.apiKey);
+    }
+    const used = fetchStub.calls.map(c => c.key);
+    check('3 次请求正好用了 3 个不同的 Key',
+      new Set(used).size === 3, 'used=' + used.map(k => k.slice(6, 10)).join(','));
+    check('按 A → B → C 顺序轮询（没有跳号）',
+      used[0] === KEY_A && used[1] === KEY_B && used[2] === KEY_C,
+      'used=' + used.map(k => k.slice(6, 10)).join(','));
+  }
+
+  // ------------------------------------------------------------
+  section('⑰ 模型兜底：主 API 是 gpt-4o、预设也没默认模型时，不能把 gpt-4o 发给谷歌');
+  {
+    const OPENAI_PRESET = { id: 9, name: '中转站', proxyUrl: 'https://api.example.com/v1', apiKey: 'sk-xxx' };
+    const NO_MODEL_PRESET = { id: 1, name: '谷歌A', proxyUrl: GEMINI_BASE, apiKey: KEY_A };
+    const { sandbox } = makeSandbox({
+      presets: [[1, NO_MODEL_PRESET], [9, OPENAI_PRESET]],
+      state: { apiConfig: { mainEndpointPresetId: 9, model: 'gpt-4o' }, globalSettings: {} },
+      loadPresetsModule: true,
+    });
+    enablePool(sandbox, [1]);
+    const resolved = await sandbox.window.resolveApiSlotConfig('main');
+    check('模型不是 gpt-4o', resolved.model !== 'gpt-4o', 'model=' + resolved.model);
+    check('兜底成 gemini-2.5-flash', resolved.model === 'gemini-2.5-flash', 'model=' + resolved.model);
+  }
+
+  // ------------------------------------------------------------
+  section('⑱ 池的模型不污染主 API 的模型（池一关，主 API 还是自己那个模型）');
+  {
+    const { sandbox } = makeSandbox({
+      presets: [[1, PRESET_A], [2, PRESET_B]],
+      state: { apiConfig: { mainEndpointPresetId: 1, model: 'gpt-4o' }, globalSettings: {} },
+      loadPresetsModule: true,
+    });
+    enablePool(sandbox, [1, 2]);
+    await sandbox.window.GeminiKeyPoolUI.applyModel('gemini-2.5-pro');
+    check('池的模型存进了池自己的配置',
+      sandbox.window.GeminiKeyPool.loadConfig().model === 'gemini-2.5-pro',
+      'model=' + sandbox.window.GeminiKeyPool.loadConfig().model);
+    check('主 API 的模型没被改（还是 gpt-4o）',
+      sandbox.state.apiConfig.model === 'gpt-4o', 'model=' + sandbox.state.apiConfig.model);
   }
 
   // ------------------------------------------------------------

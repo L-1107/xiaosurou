@@ -287,21 +287,21 @@ function makeSandbox(cfg) {
       ['pet-speech.js', '0.0.6', home],
       ['reading-room.js', '0.1.9', home],
       ['cinema-room.js', '0.35.3', home],
-      ['cinema-live.js', '2.5.1', home],
-      ['cinema-room.css', '0.39.1', home]
+      ['cinema-live.js', '2.5.2', home],
+      ['cinema-room.css', '0.39.2', home]
     ];
     for (const [file, ver, src] of pairs) {
       check('index.html 的 ' + file + ' ?v=' + ver,
         new RegExp(file.replace(/\./g, '\\.') + '\\?v=' + ver.replace(/\./g, '\\.')).test(src));
     }
     check('影院沙盒页的 cinema-room.js 对齐 0.35.3', /cinema-room\.js\?v=0\.35\.3/.test(sandboxCinema));
-    check('影院沙盒页的 cinema-live.js 对齐 2.5.1', /cinema-live\.js\?v=2\.5\.1/.test(sandboxCinema));
-    check('影院沙盒页的 cinema-room.css 对齐 0.39.1', /cinema-room\.css\?v=0\.39\.1/.test(sandboxCinema));
-    check('读书屋沙盒页的 reading-sandbox.js 对齐 0.1.7', /reading-sandbox\.js\?v=0\.1\.7/.test(sandboxReading));
-    check('读书屋沙盒页的 reading-sandbox.css 对齐 0.1.6', /reading-sandbox\.css\?v=0\.1\.6/.test(sandboxReading));
+    check('影院沙盒页的 cinema-live.js 对齐 2.5.2', /cinema-live\.js\?v=2\.5\.2/.test(sandboxCinema));
+    check('影院沙盒页的 cinema-room.css 对齐 0.39.2', /cinema-room\.css\?v=0\.39\.2/.test(sandboxCinema));
+    check('读书屋沙盒页的 reading-sandbox.js 对齐 0.1.8', /reading-sandbox\.js\?v=0\.1\.8/.test(sandboxReading));
+    check('读书屋沙盒页的 reading-sandbox.css 对齐 0.1.7', /reading-sandbox\.css\?v=0\.1\.7/.test(sandboxReading));
 
     check('SW 里有这次的变更记录', /v0\.2\.137\.0/.test(sw) && /宠物说的话也要刷进影院/.test(sw));
-    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.141.0', /const CACHE_VERSION = 'v0\.2\.141\.0'/.test(sw));
+    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.142.0', /const CACHE_VERSION = 'v0\.2\.142\.0'/.test(sw));
   }
 
   // ============================================================

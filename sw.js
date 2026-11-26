@@ -1676,7 +1676,26 @@
 //              modules/reading-room.js 的 iframe src ?v= 0.1.3→0.1.4。
 //   新增回归: tests/companion-api-preset.test.cjs。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.141.0';
+// v0.2.142.0 (2026-11-26): Key 池语义改成「一目了然」+ 影院/读书屋回复格式跟主聊天一致。
+//   · modules/gemini-key-pool.js: 池开启时【主聊天强制走谷歌直连轮询】
+//     (地址+模型+Key 一起换), 池关闭时主 API 走用户自己选的渠道 —— 两条路不再打架。
+//     附带修一个轮询跳号 bug: 槽位解析和 fetch 拦截器各推一次游标,
+//     一次请求走两格 → 10 个 Key 实际只用 5 个。现在只有拦截器推。
+//   · modules/api-endpoint-presets.js: resolveApiSlotConfig 支持「池强制改写地址/模型」。
+//   · modules/cinema-live.js + modules/reading-sandbox.js: AI 气泡改走 parseMarkdown
+//     (跟主聊天同一套 **加粗** / *斜体* / ~~删除~~ / ||剧透||), 以前是纯文本,
+//     标记原样显示成字面符号 —— 用户反馈「影院和读书屋的格式跟主 API 回复不一样」。
+//     沙盒是同源 iframe, 所以先转义 & < > 再解析, 不给父页面开 XSS 口子。
+//   · 两个沙盒页新引 modules/ui-loaders.js (只为拿 parseMarkdown) → 必须预缓存。
+//   index.html 的 ?v=：css/features-1.css 0.0.41→0.0.43、
+//                    modules/api-endpoint-presets.js 0.0.38→0.0.39、
+//                    modules/gemini-key-pool.js 0.1.2→0.2.0、
+//                    modules/cinema-live.js 2.5.1→2.5.2。
+//   沙盒页同步：cinema-sandbox 里 cinema-live.js 2.5.1→2.5.2、
+//              reading-sandbox 里 reading-sandbox.js 0.1.7→0.1.8。
+//   新增回归: tests/gemini-key-pool.test.cjs (69 条)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.142.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1744,6 +1763,10 @@ const URLS_TO_CACHE = [
   //   弱网/离线首屏就会漏掉它，window.fetch 没被包住 → 池静默失效，
   //   用户以为开关生效了其实没生效。必须预缓存。
   './modules/gemini-key-pool.js',
+  // 🔴 2026-11-26: 两个沙盒 (影院/读书屋) 现在也引 ui-loaders.js ——
+  //   只为拿 parseMarkdown, 让 AI 回复的 **加粗** / ||剧透|| 跟主聊天一样渲染。
+  //   不预缓存的话断网进影院, 沙盒 script 加载失败 → 整页 JS 挂掉。
+  './modules/ui-loaders.js',
   // 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进影院/读书屋。
   //   这两个文件是【沙盒页】要引的 —— 不预缓存的话断网进影院,
   //   桌宠和悬浮球直接消失 (读书屋沙盒页在预缓存里, 断网进得去, 却少了宠物)。
@@ -1881,6 +1904,8 @@ self.addEventListener('fetch', event => {
      url.includes('/modules/reading-room.js') ||
      url.includes('/modules/reading-sandbox.js') ||
      url.includes('/modules/reading-sandbox.css') ||
+     // v0.2.142.0: 影院/读书屋沙盒新引 ui-loaders.js (拿 parseMarkdown) → 纳入拦截
+     url.includes('/modules/ui-loaders.js') ||
      url.includes('/assets/reading-room/'));
 
   const isKnownCDN =

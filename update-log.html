@@ -166,11 +166,47 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.66 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.66</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">Key 池改成「一目了然」：开关打开 = 主聊天直接走谷歌轮询</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>如果我打开轮询池开关，而主API又选的是其他Openai的渠道，这个时候是优先轮询池的谷歌还是主API的别的渠道？</strong>」+「<strong>现在这两有点冲突，你得说清楚，轮询池是选谷歌渠道以后才轮询，或者，作为用户乍一看，就会以为开了轮询开关就自动走谷歌所有key的轮询了</strong>」。这个反馈很准 —— 上一版确实含糊：池只在「主 API 恰好选了谷歌直连」时才生效，你<strong>先选渠道、再开池</strong>，两个开关各管一段，确实会打架。</li>
+          <li><strong>现在按你定的来，一句话说完</strong> —— <strong>轮询开关打开 → 主聊天直接走谷歌轮询</strong>（池里的 Key 挨个轮着来），<strong>不管主 API 原来选的是哪个渠道</strong>；<strong>轮询开关关闭 → 主 API 走你选择的渠道</strong>，行为跟以前一模一样。不用再在两个设置之间猜哪个优先。</li>
+          <li><strong>为什么连「模型」也一起换</strong> —— 谷歌直连的请求地址是<strong>代码里写死的</strong>（<code>generativelanguage.googleapis.com/.../{模型名}</code>），如果只把 Key 换成池里的、模型还留着 <code>gpt-4o</code>，谷歌会直接回 400（它不认这个模型）。所以池开着的时候，<strong>地址、模型、Key 三样都归池管</strong>。模型没选的话会<strong>自动挑一个能用的</strong>（先看池里选的 → 再看主 API 当前的模型是不是 gemini → 再看预设的默认模型 → 最后兜底 <code>gemini-2.5-flash</code>），并且<strong>在「生效范围」那一行明明白白写出来用的是哪个</strong>。</li>
+          <li><strong>池的模型跟主 API 的模型现在是两套，互不污染</strong> —— 上一版你选完池的模型会<strong>顺手改掉主 API 的模型框</strong>，结果池一关、主 API 还停在 gemini 模型上，打中转站必 400。现在<strong>池的模型只管池</strong>，主 API 的模型框你自己定。</li>
+          <li><strong>「生效范围」那一行重写了</strong> —— 以前它只说「池正在接管：某某功能位」，看不懂。现在直接告诉你：<strong>开着池主聊天走的是什么、用的哪个模型、几个 Key、你原先选的渠道现在不生效（关掉池自动切回去）</strong>，外加副 API / 后台 / 识图 / 情侣空间<strong>各自什么情况</strong>（走轮询还是用自己那份）。</li>
+          <li><strong>顺带修了一个你可能已经撞上的 bug：轮询【跳号】</strong> —— 之前<strong>槽位解析和 fetch 拦截器各推一次游标</strong>，一次请求等于走两格 → <strong>10 个 Key 实际只有 5 个在干活</strong>，另外 5 个永远轮不到。现在<strong>只有真正发请求的那个推游标</strong>，10 个 Key 一个不落地轮着来。这条<strong>有专门的回归测试守着</strong>。</li>
+          <li><strong>下拉列表能滚了</strong> —— 你说「<strong>最多只选到 5 个key，列表不能滚动，后面五个没看到</strong>」。根因是浮层面板是 flex 布局、列表被内容撑开又被面板裁掉，<strong>永远不产生滚动条</strong>。现在列表会被压进面板高度里，<strong>能滚了</strong>，10 个预设随便挑。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">影院 / 读书屋：你问的「是不是没走轮询」和「格式不一样」，答案在这</div>
+        <ul class="item-list">
+          <li><strong>先回答「开轮询开关，影院和图书馆聊天是不是也走谷歌轮询」</strong> —— <strong>是</strong>。影院和读书屋的 AI 请求<strong>走的都是主 API 那个槽位</strong>（<code>resolveApiSlotConfig('main')</code>），而且<strong>请求是宿主页面发出的</strong>（沙盒 iframe 只管画界面，谷歌直连那种它自己打不了，会通过 postMessage 交给宿主代打）—— 所以<strong>池的拦截器管得到</strong>。而且现在主槽位被池<strong>强制</strong>接管了，<strong>主 API 选的是 OpenAI 中转站也一样会走谷歌轮询</strong>。</li>
+          <li><strong>但「格式不一样」跟池没关系</strong> —— 这是<strong>两个渲染差异</strong>，不是渠道差异：①<strong>渲染层</strong>：主聊天走 <code>parseMarkdown()</code> 再把换行转成 <code>&lt;br&gt;</code>，所以 <code>**加粗**</code>、<code>*斜体*</code>、<code>~~删除~~</code>、<code>||剧透||</code> 会变成样式；<strong>影院和读书屋原来是纯文本</strong>（<code>textContent</code>），这些标记<strong>原样显示成字面符号</strong>。②<strong>文本层</strong>：读书屋额外做了一步思维链清洗，影院没做。</li>
+          <li><strong>现在把渲染对齐了</strong> —— 两个沙盒的 AI 气泡都改走<strong>主聊天那一套 markdown</strong>（沙盒页新引了 <code>ui-loaders.js</code>，拿的就是主聊天用的同一个 <code>parseMarkdown</code>）。<strong>用户消息仍然走纯文本</strong>，不会被当成 HTML。另外沙盒是<strong>同源 iframe</strong>，所以多了一步<strong>先转义再解析</strong> —— 不给父页面开 XSS 口子。剧透的「藏起来、鼠标移上去才显示」也补上了，跟主聊天一致。</li>
+          <li><strong>还有一处提示词层面的差异（这次没动）</strong> —— 影院/读书屋会<strong>把 JSON 指令系统从提示词里剥掉</strong>，让模型直接输出纯文字；主聊天是让模型输出 JSON 数组再由代码还原。所以<strong>两边回复的「结构」本来就不一样</strong>（影院是一整段纯文本，主聊天可能拆成好几个气泡）—— 这个是<strong>设计如此</strong>，不是坏了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这一版的边界（先说清，免得白期待）</div>
+        <ul class="item-list">
+          <li><strong>本地验过的</strong> —— Key 池 <strong>69 条断言全过</strong>（新增：池开=主聊天强制走谷歌、池关=回到你选的渠道、<strong>轮询不跳号</strong>、模型兜底、池的模型不污染主 API 的模型）；<code>node --check</code> 全过；全项目测试跑了一遍，<strong>只有抠图那个老红</strong>，跟这次无关。</li>
+          <li><strong>本地验不了的（只能你手上试）</strong> —— <strong>真 Key + 真 503</strong> 的实际表现；<strong>影院/读书屋的聊天界面</strong>（要真的有角色、有房间才进得去，我这边只能验到代码层）；<strong>下拉能不能滚</strong>这个是布局问题，得你在真机上看一眼。</strong></li>
+          <li><strong>「角色单独设过 API」的那种角色，池管不到它</strong> —— 悬浮球里能给单个角色设独立 API，那种角色的请求<strong>用它自己的 API</strong>（这是它更具体的设置，优先级更高），<strong>不参与池的轮询</strong>。其余角色全部走池。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.65 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.65</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-26</span>
       </div>
       <div class="section">
         <div class="section-title feat">谷歌直连 Key 池 —— 10 个 Key 轮着用，报错自动换下一个</div>

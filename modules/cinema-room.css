@@ -1373,6 +1373,24 @@ body.cinema-room-active #floating-ball * {
   word-break: break-word;
 }
 
+/* 🔴 2026-11-26 AI 气泡改走 parseMarkdown (跟主聊天同一套) 后,
+   ||剧透|| 会变成 <span class="spoiler">。主聊天里它是【藏起来, 鼠标移上去才显示】
+   (css/main-ui.css 的 .spoiler) —— 沙盒要一样, 不然剧透直接就露出来了。
+   .diary-highlight 那几个类在主聊天里本来就没样式 (只有日记页有), 沙盒也不用加。 */
+.cinema-chat-bubble .spoiler {
+  background-color: #333;
+  color: #333;
+  padding: 0 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+.cinema-chat-bubble .spoiler:hover,
+.cinema-chat-bubble .spoiler:active {
+  background-color: #e0e0e0;
+  color: inherit;
+}
+
 .cinema-chat-msg.assistant .cinema-chat-bubble {
   background: rgba(255, 255, 255, .07);
   border-top-left-radius: 4px;

@@ -1,15 +1,22 @@
 // ============================================================
 // 谷歌直连 Key 池：多 Key 轮询 + 失败自动换 Key + 超时上限
 // [2026-11-26] v0.1.0 第一版只做 Key 轮询；模型轮询等 Key 轮询跑通再加
+// [2026-11-26] v0.2.0 语义改成「一目了然」（用户拍板）：
+//     开关打开 → 主聊天【直接走谷歌轮询】，不管主 API 原来选的是哪个渠道；
+//     开关关闭 → 主 API 走你选择的渠道（= 改造前的老行为，一字未改）。
+//   所以池开着的时候，地址和模型都归池管 —— 只换 Key 不换模型会 400
+//   （拿 gpt-4o 去打谷歌）。其它槽位（副/后台/识图/情侣空间）保持老规矩：
+//   自己走谷歌直连 + 自己的 Key 已在池里才接管。
 //
 // 设计要点：
 //  1. 池成员 = 用户在设置页勾选的「API 预设」（一个预设一个 Key），不手填 Key。
-//  2. 池开启时只接管「谷歌直连地址 + 用主 API 预设」的槽位，其余槽位原样放行。
-//  3. 故障转移靠 fetch 拦截器实现 —— 全部 Gemini 调用点（100 处 / 19 文件）
+//  2. 故障转移靠 fetch 拦截器实现 —— 全部 Gemini 调用点（100 处 / 19 文件）
 //     都是非流式的 `fetch(geminiConfig.url, geminiConfig.data)`，
 //     拦截器改 header 里的 x-goog-api-key 即可，调用点一行都不用改。
 //     因为是「拿完整 body 才渲染」，换 Key 重试绝不会重复输出。
-//  4. 总开关关闭时，拦截器只放行不重试 —— 行为与改造前完全一致，可一键回退。
+//  3. 总开关关闭时，拦截器只放行不重试 —— 行为与改造前完全一致，可一键回退。
+//  4. 游标只能有一个推 —— 槽位解析只【看】不推（advance=false），
+//     真正发请求的拦截器推。否则一次请求走两格，每个 Key 被跳过一半。
 // ============================================================
 (function () {
   'use strict';
@@ -126,6 +133,31 @@
     return url.indexOf('/v1beta/models') >= 0 && url.indexOf('/v1beta/openai') < 0;
   }
 
+  // 谷歌原生地址的标准形态 —— 主槽位被池强制接管时用它
+  const GEMINI_NATIVE_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+  // 池里没选模型、其它线索也指不出一个谷歌模型时的兜底
+  const FALLBACK_GEMINI_MODEL = 'gemini-2.5-flash';
+
+  function looksLikeGeminiModel(model) {
+    return /gemini/i.test(String(model || ''));
+  }
+
+  // 把一个地址说成人话，给「生效范围」那行字用
+  function describeChannel(url) {
+    const u = String(url || '').trim();
+    if (!u) return '没配';
+    if (isGeminiNativeUrl(u)) return '谷歌直连';
+    const m = u.match(/^https?:\/\/([^/]+)/i);
+    return m ? m[1] : u;
+  }
+
+  function modelSourceText(src) {
+    if (src === 'pool') return '池里选的';
+    if (src === 'main') return '跟着主 API 的模型';
+    if (src === 'preset') return '来自预设默认模型';
+    return '兜底默认';
+  }
+
   async function getPoolKeys() {
     const cfg = loadConfig();
     if (!cfg.enabled || !cfg.presetIds.length) return [];
@@ -158,10 +190,72 @@
     return poolCache.promise;
   }
 
+  // 池成员预设本身（要拿到它们的地址和默认模型，不只是 Key）
+  async function getPoolPresets() {
+    const cfg = loadConfig();
+    if (!cfg.presetIds.length) return [];
+    if (typeof db === 'undefined' || !db || !db.apiPresets) return [];
+    try {
+      const all = await db.apiPresets.toArray();
+      const ids = new Set(cfg.presetIds.map(Number));
+      return (all || []).filter(p => ids.has(Number(p.id)));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ============================================================
+  // 池开启时主聊天的「强制目标」：地址 + 模型
+  // ------------------------------------------------------------
+  // 用户 2026-11-26 拍板的语义：
+  //   轮询开关打开 → 主聊天直接走谷歌轮询，不管主 API 原来选的是哪个渠道；
+  //   轮询开关关闭 → 主 API 走你选择的渠道（老行为一字未改）。
+  // 所以池开着的时候，地址和模型都得由池说了算 —— 只换 Key 不换模型会 400
+  // （拿 gpt-4o 去打谷歌）。
+  // ============================================================
+  async function resolvePoolMainTarget(currentModel) {
+    const cfg = loadConfig();
+    const presets = await getPoolPresets();
+
+    // 地址：池里第一个「谷歌直连」的预设地址；都没有就用官方地址
+    let proxyUrl = '';
+    for (const p of presets) {
+      const u = String((p && p.proxyUrl) || '').trim();
+      if (u && isGeminiNativeUrl(u)) { proxyUrl = u; break; }
+    }
+    if (!proxyUrl) proxyUrl = GEMINI_NATIVE_BASE;
+
+    // 模型：池里选的轮询模型 → 主 API 当前的模型（是 gemini 才认）→ 预设默认模型 → 兜底
+    let model = String(cfg.model || '').trim();
+    let modelSource = model ? 'pool' : '';
+    if (!model) {
+      const cur = String(currentModel || '').trim();
+      if (looksLikeGeminiModel(cur)) {
+        model = cur;
+        modelSource = 'main';
+      } else {
+        for (const p of presets) {
+          const dm = String((p && (p.defaultModel || p.model)) || '').trim();
+          if (looksLikeGeminiModel(dm)) { model = dm; modelSource = 'preset'; break; }
+        }
+      }
+    }
+    if (!model) {
+      model = FALLBACK_GEMINI_MODEL;
+      modelSource = 'fallback';
+    }
+    return { proxyUrl: proxyUrl, model: model, modelSource: modelSource };
+  }
+
   // ============================================================
   // Key 选择（顺序轮询 + 跳过冷却/隔离）
+  // ------------------------------------------------------------
+  // ⚠️ advance=false = 【只看不拿】：返回当前游标位置的可用 Key，但不动游标。
+  //   槽位解析用这个模式 —— 因为真正发请求的是 fetch 拦截器，
+  //   它自己会 pick 一次并推进游标。两边都推进的话游标一次请求走 2 格，
+  //   结果就是【每个 Key 被跳过一半】（10 个 Key 实际只用 5 个）。
   // ============================================================
-  function pickHealthyKey(keys, exclude) {
+  function pickHealthyKey(keys, exclude, advance) {
     if (!keys || !keys.length) return null;
     const now = Date.now();
     const states = loadStates();
@@ -175,8 +269,10 @@
       const fp = fingerprint(key);
       if (isQuarantined(fp, now)) continue;
       if (isCooling(fp, now)) continue;
-      states.__cursor = (idx + 1) % n;
-      saveStates(states);
+      if (advance !== false) {
+        states.__cursor = (idx + 1) % n;
+        saveStates(states);
+      }
       return key;
     }
     return null;
@@ -491,17 +587,40 @@
   }
 
   // ============================================================
-  // 供槽位解析使用：池开启时给主槽位下发一个当前可用的 Key
+  // 供槽位解析使用：池开启时给槽位下发 Key（主槽位还会被强制改地址/模型）
   // ============================================================
   async function getSlotKeyOverride(ctx) {
     const cfg = loadConfig();
     if (!cfg.enabled) return null;
     const info = ctx || {};
-    if (!isGeminiNativeUrl(info.proxyUrl)) return null;
-    if (!info.presetId || info.presetId !== info.mainPresetId) return null;
     const keys = await getPoolKeys();
     if (!keys.length) return null;
-    const key = pickHealthyKey(keys, null);
+
+    // ---- 主槽位：池开启 = 主聊天【强制】走谷歌直连轮询 ----
+    // 语义（用户 2026-11-26 拍板）：
+    //   开关打开 → 主聊天直接走谷歌轮询，不管主 API 原来选的是哪个渠道；
+    //   开关关闭 → 主 API 走你选择的渠道（这里直接 return null，老行为一字未改）。
+    // 地址 + 模型一起换：只换 Key 不换模型会 400（拿 gpt-4o 去打谷歌）。
+    if (info.slot === 'main') {
+      const target = await resolvePoolMainTarget(info.currentModel || '');
+      const key = pickHealthyKey(keys, null, false);
+      return {
+        key: key || keys[0],
+        poolSize: keys.length,
+        proxyUrl: target.proxyUrl,
+        model: target.model,
+        modelSource: target.modelSource,
+        forced: true
+      };
+    }
+
+    // ---- 其它槽位（副 API / 后台 / 识图 / 情侣空间）----
+    // 只有「自己走谷歌直连 + 自己的 Key 已在池里」才接管；
+    // 走别的渠道的、或 Key 不在池里的，保持自己的原样，不被硬塞。
+    if (!isGeminiNativeUrl(info.proxyUrl)) return null;
+    const own = String(info.ownApiKey || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!own.length || !own.some(k => keys.indexOf(k) >= 0)) return null;
+    const key = pickHealthyKey(keys, null, false);
     return { key: key || keys[0], poolSize: keys.length };
   }
 
@@ -638,8 +757,75 @@
 
       await this.renderPresetList(cfg);
       this.renderModelSelect(cfg);
+      await this.renderScope(cfg);
       this.renderStatus(cfg);
       this.renderErrorLog();
+    },
+
+    // 池到底在给谁干活 —— 开着池却没人走池，是最容易懵的情况，必须写出来
+    async renderScope(cfg) {
+      const box = document.getElementById('gemini-pool-scope');
+      if (!box) return;
+      const SLOTS = [
+        { name: '副 API', slot: 'secondary' },
+        { name: '后台', slot: 'background' },
+        { name: '识图', slot: 'vision' },
+        { name: '情侣空间', slot: 'couplespace' }
+      ];
+      const resolver = (typeof window !== 'undefined') ? window.resolveApiSlotConfig : null;
+      if (typeof resolver !== 'function') {
+        box.textContent = '（读不到功能位配置）';
+        return;
+      }
+      const keys = await getPoolKeys();
+      const lines = [];
+
+      // 主 API 你自己选的是什么（池关掉时走的就是它）
+      let mainRaw = null;
+      try { mainRaw = await resolver('main', { applyPool: false }); } catch (e) { /* 读不到就跳过 */ }
+      const mainName = describeChannel(mainRaw && mainRaw.proxyUrl);
+
+      if (!cfg.enabled) {
+        lines.push('🔕 池已关闭 —— 主 API 走你自己选的渠道（' + mainName + '），所有功能位都按各自的预设走。');
+        lines.push('打开上面的开关，主聊天就会改成走谷歌直连轮询。');
+        box.textContent = lines.join('\n');
+        return;
+      }
+
+      if (!keys.length) {
+        lines.push('⚠️ 池已开启，但一个预设都没勾 —— 没有可轮询的 Key。');
+        lines.push('在下面「池成员」里勾几个谷歌直连的站点预设，主聊天就会走它们轮询。');
+        box.textContent = lines.join('\n');
+        return;
+      }
+
+      const target = await resolvePoolMainTarget(mainRaw ? mainRaw.model : '');
+      lines.push('✅ 池已开启 —— 主聊天【强制走谷歌直连轮询】：' + keys.length +
+        ' 个 Key 轮着来，模型 ' + target.model + '（' + modelSourceText(target.modelSource) + '）。');
+      if (mainRaw && mainRaw.proxyUrl && !isGeminiNativeUrl(mainRaw.proxyUrl)) {
+        lines.push('你给主 API 选的「' + mainName + '」现在不生效（池开着就以池为准），关掉池自动切回去。');
+      }
+      if (!looksLikeGeminiModel(target.model)) {
+        lines.push('⚠️ 模型「' + target.model + '」不是 gemini-* 的名字，谷歌大概率报 400 —— 点「拉取模型」换一个。');
+      }
+
+      const others = [];
+      for (const s of SLOTS) {
+        try {
+          const r = await resolver(s.slot, { applyPool: false });
+          if (!r || !r.proxyUrl) continue;
+          if (!isGeminiNativeUrl(r.proxyUrl)) {
+            others.push(s.name + '（走自己的渠道，不参与轮询）');
+            continue;
+          }
+          const own = String(r.apiKey || '').split(',').map(x => x.trim()).filter(Boolean);
+          if (own.some(k => keys.indexOf(k) >= 0)) others.push(s.name + '（Key 在池里 → 走轮询）');
+          else others.push(s.name + '（Key 不在池里 → 用自己的）');
+        } catch (e) { /* 读不到就跳过 */ }
+      }
+      if (others.length) lines.push('其它功能位：' + others.join('；') + '。');
+      lines.push('影院 / 读书屋的聊天也走主 API，所以同样吃这个轮询。');
+      box.textContent = lines.join('\n');
     },
 
     renderModelSelect(cfg) {
@@ -648,12 +834,10 @@
       // 已经拉过模型列表就别覆盖（用户可能正在挑）
       if (sel.dataset.filled === '1') return;
       sel.innerHTML = '';
-      const cur = String(cfg.model
-        || (typeof state !== 'undefined' && state.apiConfig && state.apiConfig.model)
-        || '').trim();
+      const cur = String(cfg.model || '').trim();
       const opt = document.createElement('option');
       opt.value = cur;
-      opt.textContent = cur || '（点右边「拉取模型」选一个）';
+      opt.textContent = cur || '（没选 → 自动用主 API 的模型）';
       sel.appendChild(opt);
       sel.value = cur;
     },
@@ -791,18 +975,13 @@
 
     async applyModel(model) {
       saveConfig({ model: model });
-      const input = document.getElementById('model-input');
-      if (input) input.value = model;
-      try {
-        if (typeof state !== 'undefined' && state.apiConfig) {
-          state.apiConfig.model = model;
-          if (typeof db !== 'undefined' && db && db.apiConfig) {
-            await db.apiConfig.put(state.apiConfig);
-          }
-        }
-      } catch (e) { /* 存失败不影响本次使用 */ }
+      // ⚠️ 池的模型和主 API 的模型现在是【两套】：
+      //   池开着 → 主聊天用池的模型；池关掉 → 主聊天用主 API 的模型。
+      // 所以这里【不】再往 #model-input / state.apiConfig.model 写 ——
+      // 写了的话，池一关主 API 还停在 gemini 模型上（打中转站必 400）。
+      this.refresh();
       if (typeof showToast === 'function') {
-        showToast(`轮询模型已设为：${model}`, 'success');
+        showToast('轮询模型已设为：' + model + '（只影响 Key 池，不改主 API 的模型）', 'success');
       }
     },
 
