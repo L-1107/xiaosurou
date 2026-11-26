@@ -166,11 +166,42 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.65 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.65</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">谷歌直连 Key 池 —— 10 个 Key 轮着用，报错自动换下一个</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>最近依赖谷歌模型聊天，但外面openai公益站基本死完了，想用谷歌直连，但503报错实在是太频繁了，而且每次报错之后那个key就得歇一阵才能再点，否则无限503，我有10个key,挨个切换有点实在太麻烦了</strong>」。</li>
+          <li><strong>先回答你那个问题</strong> —— 「一个预设里放 10 个 Key，有没有这功能？」<strong>代码层面早就有，界面上没有</strong>：<code>modules/utils.js</code> 里的 <code>getRandomValue()</code> 会把带逗号的字符串拆开、<strong>随机挑一个</strong>用。所以你手动往预设的 Key 框里粘 <code>key1,key2,…,key10</code> 是能跑的 —— 但它<strong>只有「随机抽签」，没有冷却、没有失败转移</strong>。抽到坏 Key 就直接报错，一个都不换。</li>
+          <li><strong>为什么你会觉得「无限 503」</strong> —— 因为<strong>代码里没有任何地方记得「这个 Key 刚才失败了」</strong>。每次请求都重新抽签，1/10 的概率又抽中同一个坏 Key，体感就是「这个 Key 坏了，得歇一阵」。你手动歇一歇之所以管用，是 Google 那边的限流窗口过去了 —— 但那是<strong>你替代码记着</strong>。</li>
+          <li><strong>现在做成 Key 池</strong> —— 设置页主 API 下面多了一块「<strong>🔑 谷歌直连 Key 池</strong>」。<strong>池成员就是你现在这些 API 预设</strong>（一个预设一个 Key），勾几个进去就行，<strong>不用再手抄一遍 Key</strong>。开池之后：请求报错（503 / 429 / 超时）→ <strong>立刻换下一个 Key</strong> 接着试；<strong>401 / 403</strong>（Key 本身失效）→ 这个 Key 被<strong>隔离 15 分钟</strong>，以后请求直接跳过它；<strong>坏 Key 冷却 60 秒</strong>，越失败越久（翻倍，最多 10 分钟）。</li>
+          <li><strong>超时上限按你说的来</strong> —— <strong>单个 Key 给 40 秒</strong>没反应就放弃它换下一个；整轮最多 4 分钟；<strong>全部 Key 都在冷却</strong>时不会傻等，而是立刻告诉你「最近 XX 秒后恢复」。</li>
+          <li><strong>池里配「拉取模型」</strong> —— 池卡片上有<strong>拉取模型</strong>按钮 + 下拉框：<strong>逐个 Key 试</strong>，第一个拉成功的就把模型列表填进去；你<strong>手动选一个</strong>就是池的轮询模型，选完自动同步到主 API 的模型框。10 个 Key 全拉失败的话会直接告诉你，不会干等。</li>
+          <li><strong>看得见的诊断</strong> —— 池卡片下面有「<strong>Key 状态</strong>」和「<strong>最近错误</strong>」两块：每个 Key 现在是<strong>可用 / 冷却中（还剩几秒）/ 已隔离</strong>都写着，Google 返回的<strong>完整错误体</strong>也摊开给你看（可复制）。这样你一眼就能分清 503 到底是<strong>Key 的问题</strong>还是<strong>模型的问题</strong>—— 这个我本地没法替你验，只有你的真 Key 能验。</li>
+          <li><strong>改动面很小，但覆盖很全</strong> —— 全项目 <strong>100 处</strong>谷歌直连调用点（分布在 19 个文件）<strong>一行都没改</strong>：池在 <code>fetch</code> 链底换掉请求头里的 Key。因为<strong>谷歌直连全是「拿完整内容才渲染」的非流式</strong>，所以换 Key 重试<strong>绝不会把同一句话说两遍</strong>。</li>
+          <li><strong>随时能退回去</strong> —— 池<strong>默认是关的</strong>，关着的时候行为跟以前<strong>一模一样</strong>。不想要了，把开关一关就回到原样，不用改代码、不用回退版本。</li>
+          <li><strong>顺带修了一个会互相打架的地方</strong> —— MCP 工具桥接也会包装 <code>window.fetch</code>，它以前「卸载」的时候会把 <code>window.fetch</code> 直接还原掉，<strong>会把池的拦截器一起抹掉</strong>（表现就是：明明开了池，突然又不轮换了）。现在改成<strong>只关自己的行为、不动别人的包装</strong>，两边能和平共存。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这一版的边界（先说清，免得白期待）</div>
+        <ul class="item-list">
+          <li><strong>「模型过载」那种报错，这一版先不管</strong> —— 按你说的办。如果 503 的错误体是 <code>The model is overloaded</code>，那是<strong>模型级</strong>拥塞，换 Key 也可能照样报；<strong>等 Key 轮询这一版你实测跑通了，再加上「换模型轮询」</strong>（池从「Key 一维」升级成「Key × 模型」两维）。接缝已经留好了，升级只是加一维，不用重写。</li>
+          <li><strong>你的 10 个 Key 是不是同一个 Google 项目下的，这个决定轮询有没有用</strong> —— 如果是<strong>同一个项目</strong>，免费配额是<strong>按项目算</strong>的，轮询摊薄不了配额，这一版就只是「防抖 + 不再死磕坏 Key」；如果是<strong>10 个独立项目</strong>，配额 ×10，轮询才真正值钱。这个我没法从代码里看出来，<strong>「最近错误」面板里的配额信息能自己分辨</strong>。</li>
+          <li><strong>本地验过的</strong> —— 池的开关行为、503 换 Key、401 隔离、超时换 Key、你点「停止生成」不乱换、400 不乱换、全部冷却的报错文案、槽位下发的是<strong>单个</strong> Key（不是逗号串）—— 共 <strong>35 条断言全过</strong>；全项目 <strong>25 个测试文件 24 绿 1 红</strong>，唯一那个红是<strong>抠图</strong>的老账，跟这次无关。</li>
+          <li><strong>本地验不了的（只能你手上试）</strong> —— <strong>真 Key + 真 503</strong>的实际表现、10 个 Key 的配额到底共享不共享、你的网络到谷歌的实际延迟（决定 40 秒够不够）。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.64 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.64</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-26</span>
       </div>
       <div class="section">
         <div class="section-title feat">在影院/读书屋里，直接换 API 预设 —— 不用再被踢出去</div>

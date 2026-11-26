@@ -4713,3 +4713,47 @@
            #alipay-screen.theme-blackgold #add-kinship-btn {
                color: #d4af37 !important;
            }
+
+           /* ============================================================
+              [2026-11-26] 谷歌直连 Key 池（设置页）
+              ============================================================ */
+           .gemini-pool-preset-row {
+               display: flex;
+               align-items: center;
+               gap: 8px;
+               padding: 6px 0;
+               font-size: 13px;
+               line-height: 1.4;
+           }
+           .gemini-pool-preset-row input[type="checkbox"] {
+               flex: 0 0 auto;
+               margin: 0;
+           }
+           .gemini-pool-preset-name {
+               flex: 0 0 auto;
+               max-width: 45%;
+               overflow: hidden;
+               text-overflow: ellipsis;
+               white-space: nowrap;
+               color: #333;
+           }
+           .gemini-pool-preset-info {
+               flex: 1 1 auto;
+               font-size: 12px;
+               color: #888;
+               word-break: break-all;
+           }
+           .gemini-pool-status-row,
+           .gemini-pool-error-row {
+               display: flex;
+               align-items: center;
+               gap: 8px;
+               padding: 3px 0;
+               font-size: 12px;
+               line-height: 1.5;
+           }
+           .gemini-pool-error-row {
+               font-family: ui-monospace, Menlo, Consolas, monospace;
+               color: #c0392b;
+               word-break: break-all;
+           }

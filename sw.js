@@ -1676,7 +1676,7 @@
 //              modules/reading-room.js 的 iframe src ?v= 0.1.3→0.1.4。
 //   新增回归: tests/companion-api-preset.test.cjs。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.140.0';
+const CACHE_VERSION = 'v0.2.141.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1739,6 +1739,11 @@ const URLS_TO_CACHE = [
   // 2026-10-23 影院陪聊层 (陪聊改走主 API)。跟上面三个一样必须预缓存 ——
   // SW 缓存了旧 index.html 就会漏掉这个新 script 标签, 手机上影院聊天直接报错。
   './modules/cinema-chat.js',
+  // 🔴 2026-11-26: 谷歌直连 Key 池（多 Key 轮询 + 失败自动换 Key）。
+  //   这个模块在【fetch 链底】包了一层 window.fetch —— 池的拦截器要是没预缓存，
+  //   弱网/离线首屏就会漏掉它，window.fetch 没被包住 → 池静默失效，
+  //   用户以为开关生效了其实没生效。必须预缓存。
+  './modules/gemini-key-pool.js',
   // 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进影院/读书屋。
   //   这两个文件是【沙盒页】要引的 —— 不预缓存的话断网进影院,
   //   桌宠和悬浮球直接消失 (读书屋沙盒页在预缓存里, 断网进得去, 却少了宠物)。

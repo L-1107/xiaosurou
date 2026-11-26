@@ -134,12 +134,30 @@
     }
 
     if (preset && (preset.proxyUrl || '').trim() && (preset.apiKey || '').trim()) {
+      let apiKey = preset.apiKey || '';
+      // [2026-11-26 谷歌直连 Key 池] 池开启时，主预设的 Key 改由池轮询下发。
+      // 只下发「单个」可用 Key（不拼逗号串），避免 getRandomValue 之外的路径把逗号串当密钥发出去。
+      // applyPool:false 用于「填 UI / 同步状态快照」这类不该消耗轮询游标的场合。
+      const applyPool = !(options && options.applyPool === false);
+      if (applyPool && typeof window !== 'undefined' && window.GeminiKeyPool && typeof window.GeminiKeyPool.getSlotKeyOverride === 'function') {
+        try {
+          const override = await window.GeminiKeyPool.getSlotKeyOverride({
+            slot: slotName,
+            presetId: presetId,
+            mainPresetId: normalizePresetId(cfg.mainEndpointPresetId),
+            proxyUrl: preset.proxyUrl
+          });
+          if (override && override.key) apiKey = override.key;
+        } catch (e) {
+          console.warn('[Key池] 取轮询 Key 失败，回退预设原 Key：', e);
+        }
+      }
       return {
         slot: slotName,
         presetId,
         preset,
         proxyUrl: (preset.proxyUrl || '').trim(),
-        apiKey: preset.apiKey || '',
+        apiKey: apiKey,
         model: (cfg[def.modelKey] || getApiPresetDefaultModel(preset) || '').trim()
       };
     }
@@ -264,8 +282,17 @@
     for (const [id, meta] of Object.entries(endpointFieldMap)) {
       const el = document.getElementById(id);
       if (!el) continue;
-      const resolved = await resolveApiSlotConfig(meta.slot);
+      const resolved = await resolveApiSlotConfig(meta.slot, { applyPool: false });
       el.value = resolved && resolved.preset ? (resolved[meta.field.endsWith('ApiKey') || meta.field === 'apiKey' ? 'apiKey' : 'proxyUrl'] || '') : (state.apiConfig[meta.field] || '');
+    }
+
+    // [2026-11-26 谷歌直连 Key 池] 顺带刷新 Key 池面板（勾选状态 / Key 状态 / 错误日志）
+    if (window.GeminiKeyPoolUI && typeof window.GeminiKeyPoolUI.refresh === 'function') {
+      try {
+        await window.GeminiKeyPoolUI.refresh();
+      } catch (e) {
+        console.warn('[Key池] 面板刷新失败：', e);
+      }
     }
   }
 
@@ -426,7 +453,7 @@
       const def = API_SLOT_DEFS[slotName];
       let resolved = null;
       try {
-        resolved = await resolveApiSlotConfig(slotName);
+        resolved = await resolveApiSlotConfig(slotName, { applyPool: false });
       } catch (e) {
         console.warn(`[API 设置] 解析 ${slotName} 槽位预设失败:`, (e && e.message) || e);
         continue;

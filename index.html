@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.39">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.40">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -237,7 +237,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/live2d-manager.js?v=0.0.8" defer></script>
   <!-- v0.5.0 P11: 通话舞台背景管理页 (依赖 live2d-call-prep.js / live2d-ui.js) -->
   <script src="modules/live2d-bg-manager.js?v=0.0.3" defer></script>
-  <script src="modules/api-endpoint-presets.js?v=0.0.37" defer></script>
+  <script src="modules/api-endpoint-presets.js?v=0.0.38" defer></script>
+<script src="modules/gemini-key-pool.js?v=0.1.0" defer></script>
   <!-- 死锁状态修复（F5 启动时清残留 isGenerating 状态） -->
   <script src="modules/chat-stuck-state-repair.js?v=0.0.36" defer></script>
   <script src="modules/openai-compatible-image-settings.js?v=0.0.36" defer></script>
@@ -2091,6 +2092,65 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <div class="settings-right">
                     <select id="model-select" class="settings-select" style="flex-grow: 1; width: auto;"></select>
                     <button id="fetch-models-btn" class="settings-mini-btn">拉取</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- [2026-11-26] 谷歌直连 Key 池：多 Key 轮询 + 失败自动换 Key -->
+        <div class="settings-header">🔑 谷歌直连 Key 池（多 Key 自动切换）</div>
+        <div class="settings-section" id="gemini-key-pool-section">
+            <div class="settings-item">
+                <div>
+                    <label>启用 Key 池</label>
+                    <div class="settings-desc">勾选的站点预设各带一个 Key。请求报错（503/429/超时）时自动换下一个 Key，坏 Key 冷却一段时间不再用。只对「谷歌直连」地址生效；关掉就回到原来的行为。</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="gemini-pool-enabled">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="settings-item">
+                <label>池成员（勾选站点预设）</label>
+                <div class="settings-right" style="flex-wrap: wrap; gap: 8px; width: 100%;">
+                    <div id="gemini-pool-preset-list" class="settings-description" style="width: 100%;"></div>
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>轮询模型</label>
+                <div class="settings-right" style="flex-wrap: wrap; gap: 8px;">
+                    <select id="gemini-pool-model-select" class="settings-select" style="flex-grow: 1; width: auto;"></select>
+                    <button type="button" id="gemini-pool-fetch-models-btn" class="settings-mini-btn">拉取模型</button>
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>单个 Key 超时（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-attempt-timeout" class="settings-num-input" min="5" max="300" step="5">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>整轮上限（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-total-timeout" class="settings-num-input" min="10" max="1800" step="10">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>失败冷却（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-cooldown" class="settings-num-input" min="5" max="3600" step="5">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>Key 状态</label>
+                <div class="settings-right" style="width: 100%;">
+                    <div id="gemini-pool-status-list" class="settings-description" style="width: 100%;"></div>
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>最近错误</label>
+                <div class="settings-right" style="width: 100%;">
+                    <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn">展开 / 收起</button>
+                    <div id="gemini-pool-error-log" class="settings-description" style="display: none; width: 100%; max-height: 220px; overflow: auto;"></div>
                 </div>
             </div>
         </div>
@@ -8810,7 +8870,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
      顺序: 通用 client → Tool Bridge (依赖 client) → UI 列表 (依赖 client)
      同步加载, 确保 McpBridge 在主代码里可用 -->
 <script src="js/mcp-generic-client.js?v=1.0.0"></script>
-<script src="js/mcp-tool-bridge.js?v=1.0.10"></script>
+<script src="js/mcp-tool-bridge.js?v=1.0.11"></script>
 <script src="js/mcp-ui-list.js?v=1.0.0"></script>
 <script src="js/mcp-menu-card.js?v=1.0.0"></script>
 <script src="js/mcp-pay-card.js?v=1.0.0"></script>

@@ -706,6 +706,12 @@
 
     let originalFetch = null;
     let hookInstalled = false;
+    // [2026-11-26 谷歌直连 Key 池] hookActive + wrappedFetchRef：
+    // 卸载时如果 window.fetch 已经被别的包装叠在上面（Key 池的拦截器就是），
+    // 直接还原成 originalFetch 会把人家的包装抹掉 → 故障转移失效。
+    // 所以改成「只关行为（hookActive=false），window.fetch 是不是自己的才还原」。
+    let hookActive = false;
+    let wrappedFetchRef = null;
     let lastPreloadError = { message: null, at: 0 };
     let lastInterceptLog = [];
 
@@ -738,7 +744,10 @@
             return false;
         }
         originalFetch = window.fetch;
-        const wrappedFetch = async function (input, init) {
+        wrappedFetchRef = async function (input, init) {
+            // [2026-11-26 Key池] 已卸载 → 不再拦截，直接放行（但仍留在 fetch 链里，
+            // 避免把叠在上面的别的包装抹掉）
+            if (!hookActive) return originalFetch.apply(this, arguments);
             const url = (typeof input === 'string' ? input : (input && input.url)) || '';
             const method = (init && init.method) || (input && input.method) || 'GET';
 
@@ -786,6 +795,7 @@
             }
             return originalFetch.apply(this, arguments);
         };
+        const wrappedFetch = wrappedFetchRef;
 
         let installErr = null;
         try {
@@ -804,6 +814,7 @@
                 return false;
             }
         }
+        hookActive = true;
         hookInstalled = true;
         console.log('[McpBridge] fetch hook 已安装 (通用 MCP, mode=' + (installErr ? 'defineProperty' : 'direct') + ')');
         return true;
@@ -811,7 +822,10 @@
 
     function uninstallHook() {
         if (!hookInstalled) return;
-        if (originalFetch) {
+        // [2026-11-26 Key池] 先关行为；只有 window.fetch 还是自己的包装时才还原，
+        // 否则会把别人叠在上面的包装抹掉。
+        hookActive = false;
+        if (originalFetch && window.fetch === wrappedFetchRef) {
             try { window.fetch = originalFetch; }
             catch (e) {
                 try { Object.defineProperty(window, 'fetch', { value: originalFetch, writable: true, configurable: true }); }
