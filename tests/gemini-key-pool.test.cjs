@@ -422,6 +422,42 @@ async function main() {
   }
 
   // ------------------------------------------------------------
+  section('⑫ 「拉取模型」走自己的循环，不被池的故障转移接管');
+  {
+    const { sandbox, fetchStub } = makeSandbox({
+      presets: [[1, PRESET_A], [2, PRESET_B]],
+      handlers: {
+        // 线路A 连模型列表都拉不到（503），线路B 正常
+        [KEY_A]: { status: 503, message: 'quota exceeded' },
+        [KEY_B]: { status: 200, body: JSON.stringify({ models: [{ name: 'models/gemini-2.5-flash' }] }) },
+      },
+    });
+    enablePool(sandbox, [1, 2]);
+
+    const btn = { textContent: '拉取模型', disabled: false };
+    await sandbox.window.GeminiKeyPoolUI.fetchModels(btn);
+
+    check('正好发 2 次请求（没被拦截器额外再换一轮 Key）', fetchStub.calls.length === 2,
+      'calls=' + fetchStub.calls.length);
+    check('第 1 次用线路A的 Key', fetchStub.calls[0] && fetchStub.calls[0].key === KEY_A,
+      fetchStub.calls[0] && fetchStub.calls[0].key);
+    check('第 2 次用线路B的 Key', fetchStub.calls[1] && fetchStub.calls[1].key === KEY_B,
+      fetchStub.calls[1] && fetchStub.calls[1].key);
+    check('两次请求的都是模型列表接口',
+      fetchStub.calls.every(c => c.url.indexOf('/v1beta/models') >= 0));
+
+    // 失败归属必须准：线路A 只该被记 1 次失败（记两遍会让退避翻倍过快）
+    const log = sandbox.window.GeminiKeyPool.getErrorLog();
+    check('线路A 的失败只被记了 1 次', log.length === 1, 'log=' + log.length +
+      ' ' + JSON.stringify(log.map(e => e.fingerprint + ':' + e.status)));
+    check('记的就是线路A 的 503',
+      log.length === 1 && log[0].status === 503 && log[0].error.indexOf('quota exceeded') >= 0,
+      JSON.stringify(log[0] || {}));
+    check('按钮文案还原了', btn.textContent === '拉取模型', btn.textContent);
+    check('按钮重新可点', btn.disabled === false);
+  }
+
+  // ------------------------------------------------------------
   console.log('\n========================================');
   console.log(' 通过 ' + passed + ' / 失败 ' + failed);
   console.log('========================================');

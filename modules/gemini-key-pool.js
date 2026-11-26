@@ -459,6 +459,12 @@
         if (!cfg.enabled) {
           return await poolBaseFetch(input, init);
         }
+        // [2026-11-26] 「拉取模型」这条路自己负责逐个 Key 试 + 准确记谁失败，
+        // 所以给它开了个旁路 —— 否则内层循环和拦截器各换一轮 Key，
+        // 失败归属就乱了（同一次失败被记两遍，退避翻倍过快）。
+        if (window.__geminiKeyPoolBypass) {
+          return await poolBaseFetch(input, init);
+        }
         // Request 对象（body 不可重用）不参与故障转移
         if (typeof Request !== 'undefined' && input instanceof Request) {
           return await poolBaseFetch(input, init);
@@ -810,17 +816,32 @@
       const original = btn.textContent;
       btn.disabled = true;
       btn.textContent = '拉取中…';
+      let lastMsg = '';
       try {
-        for (const key of keys) {
+        // 顺序：池列表原序，但【正在冷却/隔离的 Key 往后排】——
+        // 免得每次都先撞那个刚坏掉的。
+        const now = Date.now();
+        const busy = (k) => isCooling(fingerprint(k), now) || isQuarantined(fingerprint(k), now);
+        const ordered = keys.slice().sort((a, b) => (busy(a) ? 1 : 0) - (busy(b) ? 1 : 0));
+
+        for (const key of ordered) {
           try {
-            const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
-              method: 'GET',
-              headers: { 'x-goog-api-key': key }
-            });
+            // 旁路池的故障转移：本循环自己逐个试，失败归属才准
+            window.__geminiKeyPoolBypass = true;
+            let resp;
+            try {
+              resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+                method: 'GET',
+                headers: { 'x-goog-api-key': key }
+              });
+            } finally {
+              window.__geminiKeyPoolBypass = false;
+            }
             if (!resp.ok) {
               const body = await resp.text().catch(() => '');
               const parsed = parseGeminiError(body);
               reportFailure(key, resp.status, parsed.message || body);
+              lastMsg = `${fingerprint(key)} → ${resp.status} ${parsed.message || ''}`;
               continue;
             }
             const data = await resp.json();
@@ -843,15 +864,16 @@
               if (cfg.model && list.indexOf(cfg.model) >= 0) sel.value = cfg.model;
             }
             if (typeof showToast === 'function') {
-              showToast(`已拉取 ${list.length} 个模型`, 'success');
+              showToast(`已从 ${fingerprint(key)} 拉取 ${list.length} 个模型`, 'success');
             }
             return;
           } catch (e) {
             reportFailure(key, 0, (e && e.message) || String(e));
+            lastMsg = `${fingerprint(key)} → ${(e && e.message) || String(e)}`;
           }
         }
         if (typeof showToast === 'function') {
-          showToast(`${keys.length} 个 Key 全部拉取失败，详见「最近错误」`, 'error');
+          showToast(`${ordered.length} 个 Key 全部拉取失败。最近错误：${lastMsg}`, 'error');
         }
       } finally {
         btn.disabled = false;

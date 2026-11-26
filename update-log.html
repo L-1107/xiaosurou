@@ -182,6 +182,7 @@
           <li><strong>超时上限按你说的来</strong> —— <strong>单个 Key 给 40 秒</strong>没反应就放弃它换下一个；整轮最多 4 分钟；<strong>全部 Key 都在冷却</strong>时不会傻等，而是立刻告诉你「最近 XX 秒后恢复」。</li>
           <li><strong>池成员做成下拉了，不铺开</strong> —— 你说「全部铺在主界面上太占地方」—— 是的，10 个预设全摊开那一屏就废了。现在主界面只留<strong>一个按钮</strong>，写着「已选 10 个预设（谷歌线路A、谷歌线路B…）」，<strong>点一下才弹出来</strong>，里面有勾选框 + 「全选直连 / 清空」两个快捷键，勾完<strong>按钮上的摘要立刻更新</strong>，点外面自动收起。</li>
           <li><strong>「拉取模型」也在这一块里</strong> —— 池卡片上有<strong>拉取模型</strong>按钮 + 下拉框：<strong>逐个 Key 试</strong>，第一个拉成功的就把模型列表填进去；你<strong>手动选一个</strong>就是池的轮询模型，选完自动同步到主 API 的模型框。10 个 Key 全拉失败的话会直接告诉你，不会干等。</li>
+          <li><strong>拉模型用的是哪个 Key？</strong> —— <strong>从池列表第一个开始挨个试</strong>（正在冷却/隔离的 Key 会自动往后排，免得每次都先撞刚坏的那个），<strong>第一个拉成功的就用它的模型列表</strong>，提示条上会写明是从哪个 Key 拉的（只显示头尾几位，不露完整 Key）。这条路<strong>不走故障转移</strong>，自己试自己记账 —— 否则同一个失败会被记两遍，退避会翻倍得过快。</li>
           <li><strong>看得见的诊断</strong> —— 池卡片下面有「<strong>Key 状态</strong>」和「<strong>最近错误</strong>」两块：每个 Key 现在是<strong>可用 / 冷却中（还剩几秒）/ 已隔离</strong>都写着，Google 返回的<strong>完整错误体</strong>也摊开给你看（可复制）。这样你一眼就能分清 503 到底是<strong>Key 的问题</strong>还是<strong>模型的问题</strong>—— 这个我本地没法替你验，只有你的真 Key 能验。</li>
           <li><strong>改动面很小，但覆盖很全</strong> —— 全项目 <strong>100 处</strong>谷歌直连调用点（分布在 19 个文件）<strong>一行都没改</strong>：池在 <code>fetch</code> 链底换掉请求头里的 Key。因为<strong>谷歌直连全是「拿完整内容才渲染」的非流式</strong>，所以换 Key 重试<strong>绝不会把同一句话说两遍</strong>。</li>
           <li><strong>随时能退回去</strong> —— 池<strong>默认是关的</strong>，关着的时候行为跟以前<strong>一模一样</strong>。不想要了，把开关一关就回到原样，不用改代码、不用回退版本。</li>
