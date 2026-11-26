@@ -285,6 +285,87 @@
   background: rgba(0, 0, 0, .08);
 }
 
+/* API 预设二级菜单 (2026-11-26) —— 沙盒里就地换预设, 不退出影院/读书屋 */
+.cx-ball-submenu {
+  position: fixed;
+  background: var(--secondary-bg, #fff);
+  color: var(--text-color, #333);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+  min-width: 180px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 6px;
+  z-index: 2147483060;
+  opacity: 0;
+  transform: scale(.9);
+  transition: opacity .2s, transform .2s;
+  pointer-events: none;
+  font-size: 13px;
+}
+
+.cx-ball-submenu.show {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.cx-ball-submenu-head {
+  padding: 8px 12px;
+  font-size: 12px;
+  opacity: .7;
+  cursor: pointer;
+}
+
+.cx-ball-submenu-head:hover {
+  opacity: 1;
+}
+
+.cx-ball-submenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cx-ball-submenu-item:hover {
+  background: rgba(0, 122, 255, .12);
+}
+
+.cx-ball-submenu-item.active {
+  color: #007aff;
+  font-weight: 600;
+}
+
+.cx-radio {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: .45;
+}
+
+.cx-ball-submenu-item.active .cx-radio {
+  opacity: 1;
+  background: currentColor;
+  box-shadow: inset 0 0 0 2.5px var(--secondary-bg, #fff);
+}
+
+.cx-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cx-ball-submenu-empty {
+  padding: 14px 12px;
+  text-align: center;
+  opacity: .65;
+}
+
 /* ------------------------------------------------------------
    提示条 (沙盒自己的)
    ------------------------------------------------------------ */

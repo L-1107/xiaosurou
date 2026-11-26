@@ -783,7 +783,11 @@
   }
 
   // 切换 API 预设
-  async function switchApiPreset(presetId) {
+  async function switchApiPreset(presetId, opts) {
+    // ⚠️【2026-11-26】silent —— 影院/读书屋沙盒里的悬浮球也能切预设 (那是用户把球
+    //   带进影院的主要理由)。但宿主这条 toast 开在 iframe 底下, 沙盒里根本看不见
+    //   → 沙盒那边自己冒提示, 别让宿主弹一条用户看不到的。
+    const silent = !!(opts && opts.silent);
     const oldConfig = state.apiConfig || {};
     const oldMainPreset = oldConfig.mainEndpointPresetId ?? null;
     const oldMainModel = oldConfig.model || '';
@@ -801,10 +805,10 @@
           skippedOtherSlots: true,
           error: 'preset_not_found'
         });
-        if (typeof showToast === 'function') {
+        if (!silent && typeof showToast === 'function') {
           showToast('预设不存在，无法切换');
         }
-        return;
+        return { ok: false, error: 'preset_not_found', name: '' };
       }
 
       const defaultModel = getFloatingApiPresetDefaultModel(preset);
@@ -877,9 +881,10 @@
         skippedOtherSlots: true
       });
       
-      if (typeof showToast === 'function') {
+      if (!silent && typeof showToast === 'function') {
         showToast(`已切换主 API 到：${preset.name}`);
       }
+      return { ok: true, id: preset.id, name: preset.name || '' };
     } catch (error) {
       logFloatingApiPresetSwitch('FLOATING_API_PRESET_SWITCH_ERROR', {
         presetId,
@@ -892,9 +897,50 @@
         error: error && error.message ? error.message : String(error)
       });
       console.error('悬浮球切换 API 预设失败:', error);
-      if (typeof showToast === 'function') {
+      if (!silent && typeof showToast === 'function') {
         showToast('切换 API 预设失败');
       }
+      return {
+        ok: false,
+        error: (error && error.message) ? error.message : String(error),
+        name: ''
+      };
+    }
+  }
+
+  /**
+   * 列 API 预设 (2026-11-26)
+   *
+   * 【给谁用】影院/读书屋沙盒里的悬浮球。
+   *   沙盒够不着 db.apiPresets (影院沙盒只加载 dexie / live-client / cinema-storage /
+   *   cinema-img / cinema-room / cinema-live / cinema-chat 七个文件, 没有 api-endpoint-presets.js,
+   *   自己的库是 CinemaSandboxDB, 里面也没有 apiPresets 表)
+   *   → 沙盒只能向宿主要列表。
+   *
+   * 【为什么不复用 renderApiSubmenu】那个函数直接往宿主的 submenuEl 里塞 DOM,
+   *   宿主的球被 iframe 盖着, 塞了也看不见。
+   */
+  async function listApiPresets() {
+    try {
+      const presets = await db.apiPresets.toArray();
+      const currentConfig = state.apiConfig || {};
+      const currentPresetId = (currentConfig.mainEndpointPresetId != null && currentConfig.mainEndpointPresetId !== '')
+        ? parseInt(currentConfig.mainEndpointPresetId, 10)
+        : null;
+      return {
+        ok: true,
+        currentId: currentPresetId,
+        presets: (presets || []).map(function (p) {
+          return { id: p.id, name: p.name || ('预设 ' + p.id) };
+        })
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        currentId: null,
+        presets: [],
+        error: (error && error.message) ? error.message : String(error)
+      };
     }
   }
 
@@ -2099,9 +2145,13 @@ touch-action: none;`;
   //     (沙盒里那份只是"演出", 真正干活的还是宿主这一份)
   //   · syncFromStorage()        → 沙盒那边拖过球, 退出沙盒后宿主这份跟上位置
   //   · getState()               → 需要时把位置/可见性/样式读出来
+  //   · listApiPresets()         → 沙盒要列 API 预设 (沙盒够不着 db.apiPresets)
+  //   · switchApiPreset(id)      → 沙盒里就地换预设, 【不用退出影院】
   window.FloatingBall = {
     handleMenuAction: handleMenuAction,
     syncFromStorage: syncFromStorage,
+    listApiPresets: listApiPresets,
+    switchApiPreset: switchApiPreset,
     getState: function () {
       return {
         position: floatingBallState.position,

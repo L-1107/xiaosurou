@@ -236,7 +236,7 @@ function makeSandbox(cfg) {
       /currentChatObject\(_overrideChat\)/.test(src) &&
       /d\.chatId\s*&&\s*c\.id\s*!==\s*d\.chatId/.test(src));
     check('iframe src 换了新 ?v= (不然 PWA 吃旧沙盒页)',
-      /reading-sandbox\/index\.html\?v=0\.1\.3/.test(src));
+      /reading-sandbox\/index\.html\?v=0\.1\.4/.test(src));
   }
 
   // ============================================================
@@ -285,8 +285,8 @@ function makeSandbox(cfg) {
 
     const pairs = [
       ['pet-speech.js', '0.0.6', home],
-      ['reading-room.js', '0.1.8', home],
-      ['cinema-room.js', '0.35.2', home],
+      ['reading-room.js', '0.1.9', home],
+      ['cinema-room.js', '0.35.3', home],
       ['cinema-live.js', '2.5.1', home],
       ['cinema-room.css', '0.39.1', home]
     ];
@@ -294,14 +294,14 @@ function makeSandbox(cfg) {
       check('index.html 的 ' + file + ' ?v=' + ver,
         new RegExp(file.replace(/\./g, '\\.') + '\\?v=' + ver.replace(/\./g, '\\.')).test(src));
     }
-    check('影院沙盒页的 cinema-room.js 对齐 0.35.2', /cinema-room\.js\?v=0\.35\.2/.test(sandboxCinema));
+    check('影院沙盒页的 cinema-room.js 对齐 0.35.3', /cinema-room\.js\?v=0\.35\.3/.test(sandboxCinema));
     check('影院沙盒页的 cinema-live.js 对齐 2.5.1', /cinema-live\.js\?v=2\.5\.1/.test(sandboxCinema));
     check('影院沙盒页的 cinema-room.css 对齐 0.39.1', /cinema-room\.css\?v=0\.39\.1/.test(sandboxCinema));
     check('读书屋沙盒页的 reading-sandbox.js 对齐 0.1.7', /reading-sandbox\.js\?v=0\.1\.7/.test(sandboxReading));
     check('读书屋沙盒页的 reading-sandbox.css 对齐 0.1.6', /reading-sandbox\.css\?v=0\.1\.6/.test(sandboxReading));
 
     check('SW 里有这次的变更记录', /v0\.2\.137\.0/.test(sw) && /宠物说的话也要刷进影院/.test(sw));
-    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.139.0', /const CACHE_VERSION = 'v0\.2\.139\.0'/.test(sw));
+    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.140.0', /const CACHE_VERSION = 'v0\.2\.140\.0'/.test(sw));
   }
 
   // ============================================================

@@ -166,11 +166,28 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.64 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.64</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">在影院/读书屋里，直接换 API 预设 —— 不用再被踢出去</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>悬浮球弄进影院就是为了方便切换API预设的，不然都弹出去了我还弄它进来干啥呢</strong>」。说得对，这条是上一版做歪了。</li>
+          <li><strong>原来是怎么回事</strong> —— 悬浮球菜单里 12 项，有 9 项干的事在<strong>宿主那一层</strong>（角色API配置、样式设置、清聊天记录、宠物屋……）。宿主在影院底下是<strong>彻底静默</strong>的，这些窗口开出来你根本看不见 → 宿主那边的规矩是<strong>「先把影院收掉，再执行」</strong>。而「切换API预设」当时也被归进了这一类 → 你点一下，<strong>影院当场关掉</strong>，人被弹回主页面去选预设，选完想回去还得再点一次。</li>
+          <li><strong>现在改成就地换</strong> —— 在影院/读书屋里点「切换API预设」，<strong>球旁边直接弹出一列预设名</strong>，你选一个，沙盒里冒一句「已切换主 API 到：XXX」，<strong>影院不关</strong>，接着看。</li>
+          <li><strong>换完立刻生效，不是"下次进影院才生效"</strong> —— 影院里的 AI 配置是<strong>进房间那一刻的快照</strong>，所以宿主换完预设会把新配置<strong>重新推回影院</strong>，影院里的陪聊<strong>马上</strong>就换线路，不用退出重进。</li>
+          <li><strong>其余菜单项维持原样</strong> —— 角色API配置、样式设置、AI原创曲管理、清聊天记录、宠物屋这些，<strong>还是会先把影院/读书屋收掉</strong>再执行：它们要开窗/弹提示条，<strong>得让你看得见结果</strong>才算数。桌宠开关、隐藏/关闭悬浮球则是<strong>在房间里就地生效</strong>，不动房间。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.63 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.63</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-26</span>
       </div>
       <div class="section">
         <div class="section-title feat">桌宠和悬浮球，现在跟着你一起进影院和读书屋</div>
@@ -201,7 +218,7 @@
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.62</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-26</span>
       </div>
       <div class="section">
         <div class="section-title feat">宠物屋的装扮提示词重写：那句话终于通顺了</div>

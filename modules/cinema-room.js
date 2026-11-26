@@ -3253,6 +3253,9 @@
       // 🔴 2026-11-26: 沙盒里的桌宠/悬浮球把动作交回宿主做
       else if (d.type === 'cinema:petAction') handleCinemaPetAction(d);
       else if (d.type === 'cinema:ballAction') handleCinemaBallAction(d);
+      // 🔴 2026-11-26: 沙盒里就地换 API 预设 (不退出影院)
+      else if (d.type === 'cinema:needApiPresets') handleCinemaApiPresets();
+      else if (d.type === 'cinema:switchApiPreset') handleCinemaSwitchApiPreset(d);
       // 🔴 2026-10-28: 陪聊要最新的上下文 (外面聊天框的历史 + 长期记忆 + 提示词)。
       //   沙盒算不了这些 → 宿主算, 按 query 取 (向量记忆按 query 检索)。
       else if (d.type === 'cinema:needContext') {
@@ -3431,9 +3434,62 @@
       if (!fb || typeof fb.handleMenuAction !== 'function') return;
       // ⚠️ 悬浮球的菜单动作全都在宿主那一层做 (开弹窗/切预设/清聊天记录…),
       //   宿主被 iframe 整屏盖着 → 先把影院收掉, 用户才看得见结果。
+      //   ⚠️【2026-11-26 例外】"切换API预设" 不走这条路 ——
+      //     用户把悬浮球带进影院就是为了方便换预设, 为换预设把这场影院踢掉本末倒置。
+      //     它改成沙盒就地换 (见 handleCinemaSwitchApiPreset), 整个过程不退出影院。
       closeSandbox();
       try { fb.handleMenuAction(action); } catch (e) { /* noop */ }
       try { if (typeof fb.syncFromStorage === 'function') fb.syncFromStorage(); } catch (e) { /* noop */ }
+    }
+
+    /**
+     * 沙盒里的悬浮球要列 API 预设
+     * (沙盒够不着 db.apiPresets —— 见 modules/companion-layer.js 的说明)
+     */
+    function handleCinemaApiPresets() {
+      var fb = window.FloatingBall;
+      if (!fb || typeof fb.listApiPresets !== 'function') return;
+      Promise.resolve(fb.listApiPresets()).then(function (res) {
+        if (!frame) return;
+        try {
+          frame.contentWindow.postMessage({
+            type: 'cinema:apiPresets',
+            ok: !!(res && res.ok),
+            presets: (res && res.presets) || [],
+            currentId: (res && res.currentId != null) ? res.currentId : null
+          }, '*');
+        } catch (e) { /* noop */ }
+      });
+    }
+
+    /**
+     * 沙盒里就地换 API 预设 → 宿主真的去换, 换完把新配置推回沙盒
+     *
+     * ⚠️【必须重推配置】沙盒那边 state.apiConfig 只是【启动时的快照】,
+     *   而沙盒里没有 resolveApiSlotConfig (影院沙盒没加载 api-endpoint-presets.js)
+     *   → 不重推的话, 影院里的陪聊还在用旧预设, 等于白切。
+     *   换之前还要把影院这份缓存 (_mainApiCfg) 作废, 否则推回去的还是旧的。
+     */
+    function handleCinemaSwitchApiPreset(d) {
+      var id = d && d.id;
+      var fb = window.FloatingBall;
+      if (!fb || typeof fb.switchApiPreset !== 'function') return;
+      Promise.resolve(fb.switchApiPreset(id, { silent: true })).then(function (res) {
+        var okFlag = !!(res && res.ok);
+        if (okFlag) {
+          _mainApiCfg = null;
+          _mainApiCfgPromise = null;
+          pushMainApiConfig();
+        }
+        if (!frame) return;
+        try {
+          frame.contentWindow.postMessage({
+            type: 'cinema:apiPresetSwitched',
+            ok: okFlag,
+            name: (res && res.name) || ''
+          }, '*');
+        } catch (e) { /* noop */ }
+      });
     }
 
     sbtn.addEventListener('click', function () {

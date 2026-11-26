@@ -189,7 +189,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/werewolf.js?v=0.0.37" defer></script>
   <!-- 读书屋 (2026-11-01): 存储层 + 宿主桥接。阅读室本体在 reading-sandbox/ 沙盒里。 -->
   <script src="modules/reading-storage.js?v=0.1.3" defer></script>
-  <script src="modules/reading-room.js?v=0.1.8" defer></script>
+  <script src="modules/reading-room.js?v=0.1.9" defer></script>
 
   <!-- 第七层：其余功能 -->
   <script src="api-config.js?v=0.0.36" defer></script>
@@ -259,7 +259,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.35.2" defer></script>
+  <script src="modules/cinema-room.js?v=0.35.3" defer></script>
   <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.1">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
@@ -368,6 +368,20 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                         modules/reading-room.js 0.1.7 → 0.1.8。
        新增回归: tests/companion-in-sandbox.test.cjs (57 条)。
        ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
+  <!-- 🔴 2026-11-26: 悬浮球在影院/读书屋里【就地换 API 预设】, 不再退出影院
+       【用户原话】「悬浮球弄进影院就是为了方便切换API预设的, 不然都弹出去了我还弄它进来干啥呢」
+
+       【原来】沙盒点「切换API预设」→ 转发 ballAction → 宿主那边先 closeSandbox() 再执行
+               → 影院当场关掉, 用户被弹回主页面去选预设 (本末倒置)。
+       【现在】沙盒就地画二级菜单 → 选完沙盒发 'xx:switchApiPreset' → 宿主真的去切
+               → 宿主把新配置重推回沙盒 (沙盒那份只是启动时的快照,
+                 不重推的话影院里的陪聊还在用旧预设, 等于白切)。
+
+       index.html 的 ?v=：modules/floating-ball.js 0.0.41 → 0.0.42、
+                        modules/cinema-room.js 0.35.2 → 0.35.3、
+                        modules/reading-room.js 0.1.8 → 0.1.9。
+       新增回归: tests/companion-api-preset.test.cjs。
+       ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
   <script src="modules/pet-nest.js?v=0.0.39" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
@@ -387,7 +401,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 情侣空间（从内联 script 拆分） -->
   <script src="couple-space.js?v=0.0.39"></script>
   <script src="force-update.js?v=0.0.36" defer></script>
-  <script src="modules/floating-ball.js?v=0.0.41" defer></script>
+  <script src="modules/floating-ball.js?v=0.0.42" defer></script>
   
   <!-- 后台保活音频播放器样式（保持上传弹窗的玻璃面板/装饰条样式） -->
   <link rel="stylesheet" href="css/keep-alive-player.css?v=0.0.41">

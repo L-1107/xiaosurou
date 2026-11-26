@@ -72,6 +72,8 @@
     moved: false,
     startX: 0, startY: 0, originX: 0, originY: 0,
     ballMenuOpen: false,
+    ballSubmenuOpen: false,
+    hostMsgBound: false,
     enabled: true
   };
 
@@ -484,8 +486,15 @@
       '<div class="cx-ball-item danger" data-action="close">✕ 关闭悬浮球</div>';
     document.body.appendChild(menu);
 
+    // API 预设二级菜单 (2026-11-26) —— 沙盒里就地换预设用
+    var sub = document.createElement('div');
+    sub.id = 'cx-ball-submenu';
+    sub.className = 'cx-ball-submenu';
+    document.body.appendChild(sub);
+
     D.ball = ball;
     D.ballMenu = menu;
+    D.ballSubmenu = sub;
   }
 
   function renderBall(st) {
@@ -532,6 +541,140 @@
   function closeBallMenu() {
     S.ballMenuOpen = false;
     if (D.ballMenu) D.ballMenu.classList.remove('show');
+  }
+
+  // ============================================================
+  // 3a. API 预设二级菜单 (2026-11-26)
+  //
+  // 【为什么要在沙盒里就地换预设】
+  //   悬浮球菜单 12 项里有 9 项干的事在宿主那一层 (开弹窗/开面板/弹提示条),
+  //   宿主被 iframe 整屏盖着 → 宿主那边的规矩是"先 closeSandbox() 再执行"。
+  //   但【切换API预设】恰恰是用户把悬浮球带进影院/读书屋的主要理由 ——
+  //   为换预设把当前这一场踢掉, 本末倒置 (用户原话:
+  //   「悬浮球弄进影院就是为了方便切换API预设的, 不然都弹出去了我还弄它进来干啥呢」)。
+  //   → 这一项改成: 沙盒向宿主要列表 → 沙盒自己画列表 → 用户选 →
+  //     沙盒发指令给宿主去切 → 宿主切完把新配置推回沙盒。
+  //   整个过程【不退出影院/读书屋】。
+  //
+  // 【数据从哪来】沙盒够不着 db.apiPresets (沙盒没加载 api-endpoint-presets.js,
+  //   自己的库是 CinemaSandboxDB, 里面也没有 apiPresets 表)
+  //   → 列表要宿主给 (宿主那边 listApiPresets())。
+  // ============================================================
+
+  function closeApiSubmenu() {
+    S.ballSubmenuOpen = false;
+    if (D.ballSubmenu) D.ballSubmenu.classList.remove('show');
+  }
+
+  /** 摆到悬浮球旁边 (跟宿主那份 submenu 一个套路: 球在左半 → 菜单在右, 反之在左) */
+  function positionApiSubmenu() {
+    if (!D.ballSubmenu || !D.ball) return;
+    var r = D.ball.getBoundingClientRect();
+    var vw = global.innerWidth || 390;
+    var vh = global.innerHeight || 844;
+    var sw = D.ballSubmenu.offsetWidth || 200;
+    var sh = D.ballSubmenu.offsetHeight || 200;
+    var left;
+    if (r.left < vw / 2) {
+      left = r.right + 8;
+      if (left + sw + 6 > vw) left = r.left - sw - 8;
+    } else {
+      left = r.left - sw - 8;
+      if (left < 6) left = r.right + 8;
+    }
+    left = clamp(left, 6, Math.max(6, vw - sw - 6));
+    var top = clamp(r.top, 6, Math.max(6, vh - sh - 6));
+    D.ballSubmenu.style.left = left + 'px';
+    D.ballSubmenu.style.top = top + 'px';
+  }
+
+  /** 宿主把预设列表发过来了 → 画出来 */
+  function openApiSubmenu(payload) {
+    if (!D.ballSubmenu) return;
+    var presets = (payload && payload.presets) || [];
+    var currentId = (payload && payload.currentId != null) ? payload.currentId : null;
+
+    D.ballSubmenu.innerHTML = '';
+
+    var head = document.createElement('div');
+    head.className = 'cx-ball-submenu-head';
+    head.textContent = '‹ 返回';
+    D.ballSubmenu.appendChild(head);
+
+    if (!presets.length) {
+      var empty = document.createElement('div');
+      empty.className = 'cx-ball-submenu-empty';
+      empty.textContent = '还没有 API 预设';
+      D.ballSubmenu.appendChild(empty);
+    } else {
+      presets.forEach(function (p) {
+        var item = document.createElement('div');
+        var active = (currentId != null && String(p.id) === String(currentId));
+        item.className = 'cx-ball-submenu-item' + (active ? ' active' : '');
+        item.setAttribute('data-preset-id', String(p.id));
+        var radio = document.createElement('span');
+        radio.className = 'cx-radio';
+        var name = document.createElement('span');
+        name.className = 'cx-name';
+        // ⚠️ textContent, 不拼 innerHTML —— 预设名是用户自己起的, 可能带尖括号
+        name.textContent = p.name || ('预设 ' + p.id);
+        item.appendChild(radio);
+        item.appendChild(name);
+        D.ballSubmenu.appendChild(item);
+      });
+    }
+
+    positionApiSubmenu();
+    D.ballSubmenu.classList.add('show');
+    S.ballSubmenuOpen = true;
+  }
+
+  /** 沙盒点「切换API预设」→ 向宿主要列表 (不转发 ballAction, 转发的话宿主会收沙盒) */
+  function requestApiPresets() {
+    closeBallMenu();
+    closeApiSubmenu();
+    toast('正在读取 API 预设…');
+    postToHost({ type: S.ns + ':needApiPresets' });
+  }
+
+  function bindApiSubmenuEvents() {
+    if (!D.ballSubmenu || D.ballSubmenu.dataset.cxInit === '1') return;
+    D.ballSubmenu.dataset.cxInit = '1';
+    D.ballSubmenu.addEventListener('click', function (e) {
+      var head = e.target.closest ? e.target.closest('.cx-ball-submenu-head') : null;
+      if (head) {
+        closeApiSubmenu();
+        openBallMenu();
+        return;
+      }
+      var item = e.target.closest ? e.target.closest('.cx-ball-submenu-item') : null;
+      if (!item) return;
+      var id = item.getAttribute('data-preset-id');
+      if (!id) return;
+      closeApiSubmenu();
+      toast('正在切换…');
+      // ⚠️ 真正去切的是宿主 (沙盒没有 db.apiPresets, 也没那个切换逻辑)
+      postToHost({ type: S.ns + ':switchApiPreset', id: id });
+    });
+  }
+
+  /** 收宿主发来的消息 (预设列表 / 切换结果) */
+  function bindHostMessages() {
+    if (S.hostMsgBound) return;
+    S.hostMsgBound = true;
+    global.addEventListener('message', function (e) {
+      if (!S.ns) return;
+      // 只认宿主发来的 (沙盒是 iframe, 宿主 = window.parent)
+      if (global.parent && global.parent !== global && e.source !== global.parent) return;
+      var d = e.data || {};
+      if (d.type === S.ns + ':apiPresets') {
+        openApiSubmenu(d);
+      } else if (d.type === S.ns + ':apiPresetSwitched') {
+        closeApiSubmenu();
+        if (d.ok) toast('已切换主 API 到：' + (d.name || ''));
+        else toast('切换 API 预设失败');
+      }
+    });
   }
 
   function openBallMenu() {
@@ -594,6 +737,7 @@
     D.ball.addEventListener('click', function (e) {
       e.stopPropagation();
       if (moved) { moved = false; return; }
+      closeApiSubmenu();
       if (S.ballMenuOpen) closeBallMenu(); else openBallMenu();
     });
 
@@ -604,6 +748,14 @@
         var action = item.getAttribute('data-action') || '';
         closeBallMenu();
         if (!action) return;
+        // ⚠️【2026-11-26】"切换API预设" 在沙盒里就地做 —— 不转发给宿主,
+        //   所以【不会退出影院/读书屋】(转发的话宿主那边会先 closeSandbox)。
+        //   用户把悬浮球带进来就是为了方便换预设 (原话: 「悬浮球弄进影院就是为了
+        //   方便切换API预设的, 不然都弹出去了我还弄它进来干啥呢」)。
+        if (action === 'switch-api') {
+          requestApiPresets();
+          return;
+        }
         // 桌宠开关: 沙盒这边自己改就行 (跟宿主共用 localStorage)
         if (action === 'toggle-desktop-pet') {
           try {
@@ -629,6 +781,11 @@
     }
 
     document.addEventListener('mousedown', function (e) {
+      if (S.ballSubmenuOpen) {
+        if (D.ballSubmenu && D.ballSubmenu.contains(e.target)) return;
+        if (D.ball && D.ball.contains(e.target)) return;
+        closeApiSubmenu();
+      }
       if (!S.ballMenuOpen) return;
       if (D.ball && D.ball.contains(e.target)) return;
       if (D.ballMenu && D.ballMenu.contains(e.target)) return;
@@ -675,6 +832,8 @@
     bindPetEvents();
     buildBallDom();
     bindBallEvents();
+    bindApiSubmenuEvents();
+    bindHostMessages();
 
     // 桌宠开关 (跟宿主共用一份)
     var petVisible = true;
@@ -705,6 +864,8 @@
     } else {
       if (D.pet) D.pet.hidden = true;
       if (D.ball) D.ball.hidden = true;
+      closeBallMenu();
+      closeApiSubmenu();
     }
   }
 

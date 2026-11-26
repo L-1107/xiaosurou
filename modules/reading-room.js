@@ -509,9 +509,59 @@
     var fb = global.FloatingBall;
     if (!fb || typeof fb.handleMenuAction !== 'function') return;
     // ⚠️ 悬浮球的菜单动作全都在宿主那一层做 → 先把读书屋收掉, 用户才看得见结果
+    // ⚠️【2026-11-26 例外】"切换API预设" 不走这条路 ——
+    //   用户把悬浮球带进读书屋就是为了方便换预设, 为换预设把这一场踢掉本末倒置。
+    //   它改成沙盒就地换 (见 handleReadingSwitchApiPreset), 整个过程不退出读书屋。
     closeSandbox();
     try { fb.handleMenuAction(action); } catch (e) { /* noop */ }
     try { if (typeof fb.syncFromStorage === 'function') fb.syncFromStorage(); } catch (e) { /* noop */ }
+  }
+
+  /**
+   * 沙盒里的悬浮球要列 API 预设
+   * (沙盒够不着 db.apiPresets —— 见 modules/companion-layer.js 的说明)
+   */
+  function handleReadingApiPresets() {
+    var fb = global.FloatingBall;
+    if (!fb || typeof fb.listApiPresets !== 'function') return;
+    Promise.resolve(fb.listApiPresets()).then(function (res) {
+      if (!frame) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'reading:apiPresets',
+          ok: !!(res && res.ok),
+          presets: (res && res.presets) || [],
+          currentId: (res && res.currentId != null) ? res.currentId : null
+        }, '*');
+      } catch (e) { /* noop */ }
+    });
+  }
+
+  /**
+   * 沙盒里就地换 API 预设 → 宿主真的去换, 换完把新配置推回沙盒
+   *
+   * ⚠️【必须重推配置】沙盒那边 state.apiConfig 只是【启动时的快照】,
+   *   沙盒里没有 resolveApiSlotConfig → 不重推的话读书屋里的对话还在用旧预设。
+   */
+  function handleReadingSwitchApiPreset(d) {
+    var id = d && d.id;
+    var fb = global.FloatingBall;
+    if (!fb || typeof fb.switchApiPreset !== 'function') return;
+    Promise.resolve(fb.switchApiPreset(id, { silent: true })).then(function (res) {
+      var okFlag = !!(res && res.ok);
+      if (okFlag) {
+        _apiCfg = null;
+        pushApiConfig();
+      }
+      if (!frame) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'reading:apiPresetSwitched',
+          ok: okFlag,
+          name: (res && res.name) || ''
+        }, '*');
+      } catch (e) { /* noop */ }
+    });
   }
 
   // ============================================================
@@ -1192,6 +1242,13 @@
       case 'reading:ballAction':
         handleReadingBallAction(d);
         break;
+      // 🔴 2026-11-26: 沙盒里就地换 API 预设 (不退出读书屋)
+      case 'reading:needApiPresets':
+        handleReadingApiPresets();
+        break;
+      case 'reading:switchApiPreset':
+        handleReadingSwitchApiPreset(d);
+        break;
       default:
         break;
     }
@@ -1214,7 +1271,7 @@
     frame.id = 'reading-sandbox-frame';
     // ⚠️ 必须带 ?v=: 沙盒页会被 SW 的 '/index.html' 白名单命中 → 不带 ?v= 就是
     //   cache-first, 改了沙盒也不生效。带 ?v= 走 network-first, 断网回落到预缓存。
-    frame.src = 'reading-sandbox/index.html?v=0.1.3';
+    frame.src = 'reading-sandbox/index.html?v=0.1.4';
     frame.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
     frame.style.cssText =
       'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;' +

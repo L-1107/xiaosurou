@@ -1658,7 +1658,25 @@
 //              modules/reading-room.js 的 iframe src ?v= 0.1.2→0.1.3。
 //   新增回归: tests/companion-in-sandbox.test.cjs (57 条)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.139.0';
+//
+// v0.2.140.0 (2026-11-26): 悬浮球在影院/读书屋里【就地换 API 预设】, 不再退出影院。
+//   【用户原话】「悬浮球弄进影院就是为了方便切换API预设的, 不然都弹出去了我还弄它进来干啥呢」
+//   【原来】沙盒点「切换API预设」→ 转发 ballAction → 宿主先 closeSandbox() 再执行
+//         → 影院当场关掉, 用户被弹回主页面去选预设 (本末倒置)。
+//   【现在】沙盒就地画二级菜单 → 选完沙盒发 'xx:switchApiPreset' → 宿主真的去切
+//         → 宿主把新配置重推回沙盒 (沙盒那份只是快照, 不推它还在用旧预设)。
+//   改动文件：modules/floating-ball.js (导出 listApiPresets/switchApiPreset)、
+//             modules/cinema-room.js、modules/reading-room.js (宿主侧收发 + 重推配置)、
+//             modules/companion-layer.js (沙盒二级菜单)、css/companion-layer.css (样式)。
+//   index.html 的 ?v=：modules/floating-ball.js 0.0.41→0.0.42、
+//                    modules/cinema-room.js 0.35.2→0.35.3、
+//                    modules/reading-room.js 0.1.8→0.1.9。
+//   沙盒页同步：companion-layer.js / companion-layer.css 0.1.0→0.2.0 (两个沙盒都要)；
+//              cinema-sandbox 里 cinema-room.js 0.35.2→0.35.3；
+//              modules/reading-room.js 的 iframe src ?v= 0.1.3→0.1.4。
+//   新增回归: tests/companion-api-preset.test.cjs。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.140.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
