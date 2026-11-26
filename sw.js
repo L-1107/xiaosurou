@@ -1607,7 +1607,58 @@
 //              reading-sandbox/index.html 里 reading-sandbox.js/css 0.1.5→0.1.6，
 //              modules/reading-room.js 的 iframe src ?v= 0.1.1→0.1.2。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.137.0';
+// v0.2.138.0 (2026-11-26): 宠物屋「装扮提示词」重写 —— 句子终于通顺了。
+//   用户原话: 「什么叫奶咖一串小音符，头顶小行星？句子都不通顺，
+//     如果音符是道具，那应该描述道具怎么拿，后面小行星感觉属于服饰类，
+//     服饰就全部用衣服，不要再搞乱七八糟的东西」
+//   → 名册那句话原来是【配色】+【道具】+【衣服】直接首尾相接拼出来的
+//     → 「奶咖一串小音符、头顶小行星的霸下」: 配色粘在道具上读不出来,
+//       道具只有名字没有动作, 服饰位里混着"顶着小行星"这种抽象玩意儿。
+//   改造（只动 modules/pet-nest.js）:
+//   · 道具加 hold(怎么拿): 「头顶飘着一串小音符」「小爪里捧着一枚香囊」;
+//     英文画面描述同步加动词 + 位置(holding/carrying/wearing…),
+//     以前 45 件道具的英文里根本没说东西在哪儿 → 图上位置随机, 名册和图对不上。
+//   · 名册/AI 上下文改成【主体在前】: 「奶咖色霸下，头顶飘着一串小音符，穿着草莓裙」,
+//     跟生图提示词一个顺序(主体+配色 → 拿/背/戴道具 → 穿衣服)。
+//   · 服饰库只放【穿在身上的衣服】: 19 件手持道具(捧着马卡龙盘/举着月牙灯/头顶小行星…)
+//     全换成衣物; 另外把"彗星光环/行星光环"这种抽象装饰也换成衣服。
+//   · 服饰每条都是【一整套】(二次反馈:「小手套、小腰带这些不叫衣服吧?
+//     把单品剔除去, 都能整件搭配的要」): 幻兽 96 套 + 鹦鹉 28 套,
+//     每条 = 一件整件衣服(裙/连体衣/上衣/汉服…) + 一两件配件(手套/腰带/发夹/项链只当搭配里的一件)。
+//   · 鹦鹉的中文道具说法改成「喙里叼着」(鸟没有爪子, 英文那支早就换成 beak 了)。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.37→0.0.38。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.139.0 (2026-11-26): 桌宠 + 悬浮球 跟着用户进影院 / 读书屋。
+//   用户原话: 「那个宠物桌宠哦还有外面的悬浮球能也一起放进影院和图书馆吗, 跟用户一起」
+//              「本来隐藏宿主页是为了避免影院和图书馆发烫, 只把这两放进来会不会发烫?」
+//              「宿主的任何东西都进不来, 所以在沙盒里复刻这两样是吗?
+//                那宠物被摸回话的时候收到的上文要和外面一样哦」
+//   【为什么不放宿主那一层】宿主在影院/读书屋底下是【彻底静默】的
+//     (2026-11-05 / 11-19 为了不发烫做的): #phone-screen / #pn-desktop-pet /
+//     #floating-ball 全 display:none, 动画全停, iframe 又是 z-index:2147483647
+//     (int32 上限) → 宿主里的东西【进不来】, 浮也浮不上去。
+//   【怎么做的】新增 modules/companion-layer.js + css/companion-layer.css ——
+//     沙盒这一侧【再画一份】同一只宠物和同一个悬浮球 (cx- 前缀的独立 id,
+//     不碰宿主那两个 id, 免得被宿主静默规则直接藏掉)。
+//   【宠物的话还是宿主说的】沙盒只负责"演出": 点了「摸摸」→ 宿主 care() →
+//     petSpeak() (上文 = 宿主那条会话的真实聊天记录) → 广播 pet:spoke →
+//     宿主桥转发进沙盒 → 沙盒冒气泡 + 聊天框一条。
+//     ⇒ 宠物收到的上文跟在外面【完全一样】。
+//   【不发烫】陪伴件画在【已经在渲染的 iframe 里面】, 不新增合成图层;
+//     桌宠空闲 = 1 条 transform 动画 + 1 个 5200ms 换帧定时器;
+//     悬浮球空闲 = 0 (没有 setInterval / requestAnimationFrame);
+//     宿主静默那一段一个字没动。
+//   index.html 的 ?v=：modules/pet-nest.js 0.0.38→0.0.39、
+//                    modules/pet-speech.js 0.0.5→0.0.6、
+//                    modules/floating-ball.js 0.0.40→0.0.41、
+//                    modules/cinema-room.js 0.35.1→0.35.2、
+//                    modules/reading-room.js 0.1.7→0.1.8。
+//   沙盒页同步：cinema-sandbox/index.html 里 cinema-room.js 0.35.1→0.35.2；
+//              reading-sandbox/index.html 里 reading-sandbox.js 0.1.6→0.1.7；
+//              modules/reading-room.js 的 iframe src ?v= 0.1.2→0.1.3。
+//   新增回归: tests/companion-in-sandbox.test.cjs (57 条)。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.139.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1670,6 +1721,11 @@ const URLS_TO_CACHE = [
   // 2026-10-23 影院陪聊层 (陪聊改走主 API)。跟上面三个一样必须预缓存 ——
   // SW 缓存了旧 index.html 就会漏掉这个新 script 标签, 手机上影院聊天直接报错。
   './modules/cinema-chat.js',
+  // 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进影院/读书屋。
+  //   这两个文件是【沙盒页】要引的 —— 不预缓存的话断网进影院,
+  //   桌宠和悬浮球直接消失 (读书屋沙盒页在预缓存里, 断网进得去, 却少了宠物)。
+  './modules/companion-layer.js',
+  './css/companion-layer.css',
   // 房间背景图 93KB, 预缓存是为了离线也能开房间 + 首屏不闪白。
   // jpg 兜底不预缓存 —— 只给不认 webp 的老 WebView 用, 按需拉就行。
   './assets/cinema-room-bg.webp',

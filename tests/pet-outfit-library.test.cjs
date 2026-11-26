@@ -80,7 +80,7 @@ function loadRules() {
 const day = '2026-10-28';
 const todayLookCn = (lk) => {
   const parts = [];
-  for (const i of (lk && lk.icons) || []) parts.push(i.cn);
+  for (const i of (lk && lk.icons) || []) parts.push((i.hold || '') + i.cn);
   for (const f of (lk && lk.features) || []) parts.push(f.cn);
   if (lk && lk.outfit) parts.push(lk.outfit.cn);
   if (!parts.length) return '';
@@ -238,9 +238,11 @@ section('⑤ 衣服和道具别撞同一件');
     dup2.length === 0, dup2.slice(0, 3).join(' | ') || '0 次');
 
   // sameItem 本身要能认出"同一件"（含中文不同名的）
-  const outfit = R.BEAST_OUTFITS.find(o => o.cn === '提着水晶鞋的');
+  // ⚠️【2026-11-26】服饰改成【整套】后，水晶鞋那一条的写法变成
+  //   「穿着水晶鞋、披着蕾丝小披肩和戴着小圆帽的」
+  const outfit = R.BEAST_OUTFITS.find(o => o.cn.indexOf('穿着水晶鞋、') === 0);
   const icon = R.ICON_LIBRARY.find(x => x.cn === '一双水晶鞋');
-  check('sameItem 能认出"提着水晶鞋"和"一双水晶鞋"是同一件',
+  check('sameItem 能认出"穿着水晶鞋"和"一双水晶鞋"是同一件',
     !!(outfit && icon && R.sameItem(outfit, icon)));
 }
 
@@ -291,15 +293,17 @@ section('⑦ 源码接线');
   check('记忆匹配优先那段没被改掉',
     /let icons = pickIconsFromText\(/.test(src));
   const R2 = loadRules();
-  check('衣服库是 72 件（不是 20）', R2.BEAST_OUTFITS.length === 72, R2.BEAST_OUTFITS.length + ' 件');
-  // ⚠️【2026-10-29】鹦鹉有自己的一套 (PARROT_OUTFITS 24 件) → 总数 112 → 136
+  // ⚠️【2026-11-26 用户提】「衣服你扩充一些适合小朋友穿的服装」
+  //   → 幻兽衣服 72 → 96（6 系列各 16 件），鹦鹉衣橱 24 → 28
+  check('衣服库是 96 件（娃衣扩充，2026-11-26）', R2.BEAST_OUTFITS.length === 96, R2.BEAST_OUTFITS.length + ' 件');
+  // ⚠️【2026-10-29】鹦鹉有自己的一套 (PARROT_OUTFITS 28 件) → 总数 124 → 164
   const seriesCount = (src.match(/series: '(sweet|fairy|galaxy|oriental|ocean|magic)'/g) || []).length;
-  const expectTotal = 72 + (R2.PARROT_OUTFITS ? R2.PARROT_OUTFITS.length : 0) + 40;
-  check('带系列标记的共 72 衣服 + ' + (R2.PARROT_OUTFITS ? R2.PARROT_OUTFITS.length : 0) +
+  const expectTotal = 96 + (R2.PARROT_OUTFITS ? R2.PARROT_OUTFITS.length : 0) + 40;
+  check('带系列标记的共 96 衣服 + ' + (R2.PARROT_OUTFITS ? R2.PARROT_OUTFITS.length : 0) +
     ' 鹦鹉衣服 + 40 道具 = ' + expectTotal + ' 条',
     seriesCount === expectTotal, seriesCount + ' 条');
-  check('鹦鹉衣橱是 24 件（鸟穿得上的衣服）',
-    (R2.PARROT_OUTFITS || []).length === 24,
+  check('鹦鹉衣橱是 28 件（鸟穿得上的衣服）',
+    (R2.PARROT_OUTFITS || []).length === 28,
     (R2.PARROT_OUTFITS || []).length + ' 件');
 }
 
@@ -358,6 +362,146 @@ section('⑧ 生图配色：有参考图就跟参考图走');
   check('beastPrompt 里真的按 keepColors 分支写配色（不是只挂了个参数）',
     fnBody.indexOf('keepColors') >= 0
     && fnBody.indexOf('same colours as the reference image') >= 0);
+}
+
+// ============================================================
+// ⑨ 句子通顺（用户 2026-11-26 反馈）
+//   原话：「什么叫奶咖一串小音符，头顶小行星？句子都不通顺，
+//     如果音符是道具，那应该描述道具怎么拿，后面小行星感觉属于服饰类，
+//     服饰就全部用衣服，不要搞乱七八糟的东西」
+//   守三件事：
+//     ① 服饰里只放【穿在身上的衣服】——不许再有"举着月牙灯""头顶小行星"
+//     ② 每件道具都要说清【怎么拿】（"头顶飘着一串小音符"）
+//     ③ 配色跟【物种】走，不能跟道具粘一起（"奶咖一串小音符"）
+// ============================================================
+section('⑨ 句子通顺：衣服是衣服，道具说清怎么拿，配色跟物种走');
+{
+  const R = loadRules();
+  const O = R.BEAST_OUTFITS.concat(R.PARROT_OUTFITS || []);
+
+  // ① 服饰里不许有"手里拿着的东西"
+  const HOLD_VERBS = ['捧着', '抱着', '提着', '举着', '撑着', '端着', '拎着', '攥着'];
+  const held = O.filter(o => HOLD_VERBS.some(v => o.cn.indexOf(v) >= 0));
+  check('服饰里没有「手里拿着的东西」（捧着/抱着/提着/举着…）',
+    held.length === 0, held.map(o => o.cn).join('/') || (O.length + ' 件全是穿在身上的'));
+
+  // ① 每件服饰都得是"穿戴类"的动词
+  const WORN = ['穿', '戴', '披', '系', '围', '套', '着', '裹', '簪', '背', '顶', '拖', '别', '肩', '挂'];
+  const notWorn = O.filter(o => !WORN.some(v => o.cn.indexOf(v) >= 0));
+  check('每件服饰都是穿戴类的（衣/帽/围巾/斗篷/连体衣…）',
+    notWorn.length === 0, notWorn.map(o => o.cn).join('/') || '全部合格');
+
+  // ② 道具必须说清怎么拿
+  const icons = {};
+  for (const x of (R.ICON_LIBRARY || [])) icons[x.cn] = x;
+  for (const x of (R.DAILY_ICONS || [])) icons[x.cn] = x;
+  const noHold = Object.keys(icons).filter(cn => !icons[cn].hold);
+  check('每件道具都写了「怎么拿」（hold）',
+    noHold.length === 0, noHold.join('/') || (Object.keys(icons).length + ' 件全有'));
+
+  const lk = R.dailyLookFor([], day, 'seed-look-cn', ['今天听了一首歌']);
+  const lookCn = R.todayLookCn(lk);
+  check('道具的说法带上了动作（不是光秃秃一个名字）',
+    lookCn.indexOf(R.iconCn(lk.icons[0])) >= 0 && R.iconCn(lk.icons[0]) !== lk.icons[0].cn,
+    lookCn);
+
+  // ③ 配色跟物种走，不能跟道具粘一起
+  const name = R.beastDisplayName(
+    { beastSpecies: '霸下', palette: '奶咖' },
+    { features: [], icons: [{ cn: '一串小音符', hold: '头顶飘着' }], outfit: { cn: '穿着草莓裙的' } }
+  );
+  check('配色跟物种走，不再出现「奶咖一串小音符」',
+    name.indexOf('奶咖色霸下') >= 0 && name.indexOf('奶咖一串') < 0, name);
+  check('整句话读得通（主体 → 拿/背/戴道具 → 穿衣服）',
+    name === '奶咖色霸下，头顶飘着一串小音符，穿着草莓裙', name);
+
+  // ④ 生图提示词的结构：主体+配色 → 动词道具 → 穿着衣服
+  const app = {
+    beastSpecies: '霸下', beastSpeciesEn: 'a stout baby turtle-dragon',
+    beastPaletteEn: 'milky coffee brown'
+  };
+  const lk2 = { features: [], icons: [{ cn: '一串小音符', hold: '头顶飘着', en: 'a few tiny music notes floating above its head' }], outfit: { cn: '穿着草莓裙的', en: 'wearing a red strawberry dress' } };
+  const prompt = R.beastPrompt(app, lk2, '', false);
+  check('生图提示词：主体和配色在前面',
+    prompt.indexOf('a stout baby turtle-dragon with milky coffee brown fur') >= 0, prompt);
+  check('生图提示词：道具带着动作（拿/背/戴）',
+    prompt.indexOf('a few tiny music notes floating above its head') >= 0, prompt);
+  check('生图提示词：衣服用 wearing',
+    prompt.indexOf('wearing a red strawberry dress') >= 0, prompt);
+  check('生图提示词：道具在衣服前面',
+    prompt.indexOf('floating above its head') < prompt.indexOf('wearing a red strawberry dress'), prompt);
+
+  // ⑤ 衣服库里不许再有「小行星」这类抽象装饰（用户 2026-11-26：「不要小行星之类的抽象玩意儿」）
+  const ABSTRACT = ['小行星', '行星', '彗星', '光环', '光球', '光晕', '流星徽章', '水母灯', '陨石', '许愿星', '粉钻'];
+  const abstractOnes = O.filter(o => ABSTRACT.some(w => o.cn.indexOf(w) >= 0));
+  check('衣服里没有抽象装饰（小行星/彗星/光环…）',
+    abstractOnes.length === 0, abstractOnes.map(o => o.cn).join('/') || '96 件全是真衣服');
+
+  // ⑥ 每件衣服的英文都要以【穿戴动词】开头（wearing/carrying/draped/wrapped）
+  const WRON = ['wearing', 'carrying', 'draped', 'wrapped'];
+  const noVerb = O.filter(o => !WRON.some(v => o.en.indexOf(v) === 0));
+  check('每件衣服的英文都以穿戴动词开头',
+    noVerb.length === 0, noVerb.map(o => o.cn + '→' + o.en).join('/') || '全部合格');
+
+  // ⑦ 娃衣扩充：每个系列都该有「小朋友穿」的款（背带裤/围兜/小衬衫/睡衣…）
+  const KID = ['背带', '围兜', '衬衫', '睡衣', '围裙', '背带裤', '小雨衣', '棉袄', '小肚兜', '凉鞋', '背心', '雨衣'];
+  const kidCount = O.filter(o => KID.some(w => o.cn.indexOf(w) >= 0)).length;
+  check('衣服库里有成套的「小朋友款」（背带裤/围兜/小衬衫/睡衣…）',
+    kidCount >= 12, kidCount + ' 件');
+}
+
+// ============================================================
+// ⑩ 服饰必须是【一整套】，不是单品（用户 2026-11-26 二次反馈）
+//   原话：「小手套，小腰带这些不叫衣服吧？把单品剔除去，都能整件搭配的要」
+//   守三件事：
+//     ① 每条服饰都是【整套】（至少 2 件）—— 单品（小手套/小腰带）不准单独成条
+//     ② 幻兽每条里都得有一件【整件衣服】（裙/连体衣/上衣…），不能全是小配件
+//     ③ 衣服仍然不许是"手里拿着的东西"、不许是抽象装饰
+// ============================================================
+section('⑩ 服饰是整套，不是单品');
+{
+  const R = loadRules();
+  const O = R.BEAST_OUTFITS.concat(R.PARROT_OUTFITS || []);
+  const BEAST = R.BEAST_OUTFITS || [];
+
+  // ① 整套 = 至少 2 件
+  const single = O.filter(o => (o.cn.match(/、/g) || []).length < 1);
+  check('每条服饰都是一整套（至少 2 件，不许只有一个小配件）',
+    single.length === 0, single.map(o => o.cn).join('/') || (O.length + ' 条全是整套'));
+
+  // ② 幻兽每条里要有一件【整件衣服】
+  const GARMENT = ['裙', '连体', '裤', '毛衣', '衬衫', '卫衣', '背心', '开衫', '小褂', '马甲',
+    '棉袄', '睡衣', '浴袍', '雨衣', '泳衣', '汉服', '旗袍', '斗篷', '披肩', '披帛', '罩衫',
+    '大褂', '围裙', '围兜', '肚兜', '上衣', '外套', '披风', '洋装', '小衫', '对襟', '袍',
+    '褙子', '袄', '套装', '背心裙'];
+  const noGarment = BEAST.filter(o => !GARMENT.some(w => o.cn.indexOf(w) >= 0));
+  check('幻兽每条服饰里都有一件整件衣服（不能全是小配件）',
+    noGarment.length === 0, noGarment.map(o => o.cn).join('/') || '96 条都带整件衣服');
+
+  // ③ 单品词不许【单独】当一身：手套/腰带/发夹/项链/耳环/胸针/手镯/发箍 不能当主体
+  const ONLY_ACC = ['手套', '腰带', '发夹', '项链', '耳环', '胸针', '手镯', '发箍', '发带', '戒指'];
+  const accOnly = BEAST.filter(o => {
+    const hasGarment = GARMENT.some(w => o.cn.indexOf(w) >= 0);
+    return !hasGarment && ONLY_ACC.some(w => o.cn.indexOf(w) >= 0);
+  });
+  check('手套/腰带/发夹这类单品不会再单独当一身衣服',
+    accOnly.length === 0, accOnly.map(o => o.cn).join('/') || '没有单品成条');
+
+  // ④ 英文描述也要是整套（逗号分隔的 2~3 件）
+  const onePiece = O.filter(o => (o.en.match(/,/g) || []).length < 1);
+  check('英文描述也是整套（2~3 件，不是单件）',
+    onePiece.length === 0, onePiece.map(o => o.cn).join('/') || '全部是整套');
+
+  // ⑤ 整句只能有一个「的」，而且必须收在最后
+  //    （踩过：「套着白色小袜子的和穿着小黄靴的」——「的」跑到中间，读着断气）
+  const deBad = O.filter(o => o.cn.split('的').length - 1 !== 1 || !/的$/.test(o.cn));
+  check('每条服饰整句只有一个「的」且收在最后',
+    deBad.length === 0, deBad.map(o => o.cn).join('/') || '124 条全合格');
+
+  // ⑥ 鹦鹉没有爪子 → 中文道具说法也得用喙（英文那支早就换成 beak 了）
+  const pawLeft = (R.ICON_LIBRARY || []).filter(x => R.iconCn(x, 'parrot').indexOf('爪') >= 0);
+  check('鹦鹉的道具说法里没有爪子（改成喙）',
+    pawLeft.length === 0, pawLeft.map(x => x.cn).join('/') || '83 件全是喙/头/身/尾');
 }
 
 console.log('\n通过 ' + passed + ' / 失败 ' + failed);

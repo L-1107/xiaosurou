@@ -438,7 +438,20 @@
     try {
       const wrap = document.getElementById('pn-desktop-pet');
       if (!wrap) return false;
-      return !wrap.hidden;
+      if (wrap.hidden) return false;
+      // 🔴 2026-11-26 修一个真 bug: 光看 hidden 属性【不够】。
+      //   宿主进影院/读书屋时, 桌宠是被 CSS display:none 掉的 (宿主静默,
+      //   见 css/main-ui.css 的「读书屋宿主静默」段) —— 但 hidden 属性仍然是 false
+      //   → 这里会误判成"桌宠看得见" → 下面那句 toast 兜底就不触发
+      //   → 宠物的话既没气泡也没提示, 等于对着空气说了 (用户实测「宠物没说话」)。
+      //   → 补一条计算样式判断 (每次开口只查一次, 不心疼)。
+      try {
+        const cs = (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function')
+          ? window.getComputedStyle(wrap)
+          : null;
+        if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+      } catch (e) { /* 查不到就按老规矩走 */ }
+      return true;
     } catch (e) {
       return false;
     }

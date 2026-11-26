@@ -3248,8 +3248,11 @@
       var d = e.data || {};
       if (e.source !== frame.contentWindow) return;
       if (d.type === 'cinema:needChat') sendChat();
-      else if (d.type === 'cinema:ready') { ready = true; sendChat(); pushViewport(); }
+      else if (d.type === 'cinema:ready') { ready = true; sendChat(); pushViewport(); sendCompanion(); }
       else if (d.type === 'cinema:closed') closeSandbox();
+      // 🔴 2026-11-26: 沙盒里的桌宠/悬浮球把动作交回宿主做
+      else if (d.type === 'cinema:petAction') handleCinemaPetAction(d);
+      else if (d.type === 'cinema:ballAction') handleCinemaBallAction(d);
       // 🔴 2026-10-28: 陪聊要最新的上下文 (外面聊天框的历史 + 长期记忆 + 提示词)。
       //   沙盒算不了这些 → 宿主算, 按 query 取 (向量记忆按 query 检索)。
       else if (d.type === 'cinema:needContext') {
@@ -3351,6 +3354,88 @@
     }
     try { window.addEventListener('pet:spoke', handlePetSpoke); } catch (e) { /* noop */ }
 
+    // =========================================================================
+    // 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进影院
+    //
+    // 【为什么宿主这边给不了】宿主在影院底下是【彻底静默】的 (见 pauseHostTimers:
+    //   #phone-screen / #pn-desktop-pet / #floating-ball 全 display:none, 动画全停),
+    //   宿主那份桌宠和悬浮球【进不来】。
+    //   → 宿主把"这只宠物长什么样"下发下去, 由沙盒自己画一份
+    //     (沙盒那边是 modules/companion-layer.js)。
+    //
+    // 【宠物的话还是宿主说的 —— 上文跟外面一模一样】
+    //   沙盒只负责"演出": 点了「摸摸」→ 宿主 care() → petSpeak()
+    //   (上文 = 宿主那条会话的真实聊天记录 messageStore.getRecentMessages)
+    //   → 宿主广播 pet:spoke → 这里转发进沙盒 (cinema:petSay)
+    //   → 沙盒冒气泡 + 聊天框一条。
+    //   ⇒ 宠物在影院里收到的上文跟在外面【完全一样】;
+    //     而且影院里说的话本来就会写回主聊天历史 (cinema:chatMessage),
+    //     所以它还能听见刚刚这段对话。
+    //
+    // 【发烫吗】不发热: 桌宠和悬浮球是画在【已经在渲染的 iframe 里面】的,
+    //   不新增合成图层; 宿主那边该藏还是藏 (静默那一段一个字没动)。
+    //   桌宠空闲 = 1 条 transform/opacity 动画 + 1 个 5200ms 换帧定时器;
+    //   悬浮球空闲 = 0 (没有 setInterval / requestAnimationFrame)。
+    // =========================================================================
+    function sendCompanion() {
+      if (!frame) return;
+      try {
+        var pn = window.PetNest;
+        var pet = (pn && typeof pn.desktopPetInfo === 'function') ? pn.desktopPetInfo() : null;
+        frame.contentWindow.postMessage({
+          type: 'cinema:companion',
+          pet: pet || null
+        }, '*');
+      } catch (e) { /* noop */ }
+    }
+
+    /** 沙盒里的桌宠点了「摸摸/喂食/陪玩」→ 宿主这边真的去做 */
+    async function handleCinemaPetAction(d) {
+      var action = String((d && d.action) || '').trim();
+      if (!action) return;
+      var pn = window.PetNest;
+      if (!pn || typeof pn.quickCare !== 'function') return;
+
+      if (action === 'enter') {
+        // 「进入小屋」是把宠物屋开到宿主那一层 → 先把影院收掉, 否则用户看不到
+        closeSandbox();
+        try { if (typeof window.openPetNest === 'function') window.openPetNest(); } catch (e) { /* noop */ }
+        return;
+      }
+      if (action !== 'feed' && action !== 'comfort' && action !== 'play') return;
+
+      var result = null;
+      try {
+        // ⚠️ silent: true —— 宿主那条 toast 在 iframe 底下, 用户根本看不见,
+        //   结果消息回传给沙盒, 由沙盒自己的提示条显示。
+        result = await pn.quickCare(action, { silent: true });
+      } catch (e) {
+        result = { ok: false, message: '照顾失败：' + ((e && e.message) || e) };
+      }
+      if (!frame) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'cinema:petActionResult',
+          action: action,
+          ok: !!(result && result.ok),
+          message: (result && result.message) || ''
+        }, '*');
+      } catch (e) { /* noop */ }
+    }
+
+    /** 沙盒里的悬浮球点了菜单 → 宿主这边真的去做 */
+    function handleCinemaBallAction(d) {
+      var action = String((d && d.action) || '').trim();
+      if (!action) return;
+      var fb = window.FloatingBall;
+      if (!fb || typeof fb.handleMenuAction !== 'function') return;
+      // ⚠️ 悬浮球的菜单动作全都在宿主那一层做 (开弹窗/切预设/清聊天记录…),
+      //   宿主被 iframe 整屏盖着 → 先把影院收掉, 用户才看得见结果。
+      closeSandbox();
+      try { fb.handleMenuAction(action); } catch (e) { /* noop */ }
+      try { if (typeof fb.syncFromStorage === 'function') fb.syncFromStorage(); } catch (e) { /* noop */ }
+    }
+
     sbtn.addEventListener('click', function () {
       if (frame) { closeSandbox(); return; }   // 再点一次 = 退出沙盒
       if (document.body) document.body.classList.add('cinema-room-active');
@@ -3364,7 +3449,7 @@
         'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;' +
         'background:#16111a;';
       document.body.appendChild(frame);
-      frame.addEventListener('load', function () { sendChat(); pushViewport(); });
+      frame.addEventListener('load', function () { sendChat(); pushViewport(); sendCompanion(); });
       startSandboxWatch();
     });
   }

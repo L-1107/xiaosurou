@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>读书屋</title>
 <link rel="stylesheet" href="../modules/reading-sandbox.css?v=0.1.6">
+<!-- 🔴 2026-11-26: 沙盒里的桌宠 + 悬浮球 (宿主在 iframe 底下是静默的, 进不来) -->
+<link rel="stylesheet" href="../css/companion-layer.css?v=0.1.0">
 <!--
   ============================================================================
   读书屋 · iframe 沙盒 (2026-11-01)
@@ -162,6 +164,24 @@
   <div class="s" id="rr-import-sub">正在切页…</div>
 </div>
 
-<script src="../modules/reading-sandbox.js?v=0.1.6"></script>
+<script src="../modules/reading-sandbox.js?v=0.1.7"></script>
+<!-- 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进读书屋 -->
+<script src="../modules/companion-layer.js?v=0.1.0"></script>
+<script>
+  // 沙盒这一侧只负责"演出": 点了「摸摸」把动作交回宿主做,
+  // 宠物的话也由宿主生成 (上下文跟外面一模一样), 这里只负责把气泡冒出来。
+  (function () {
+    if (!window.CompanionLayer) return;
+    window.CompanionLayer.init({
+      ns: 'reading',
+      onPetAction: function (action) {
+        try { window.parent.postMessage({ type: 'reading:petAction', action: action }, '*'); } catch (e) { /* noop */ }
+      },
+      onBallAction: function (action) {
+        try { window.parent.postMessage({ type: 'reading:ballAction', action: action }, '*'); } catch (e) { /* noop */ }
+      }
+    });
+  })();
+</script>
 </body>
 </html>

@@ -752,6 +752,26 @@
     if (el.rrChatToggle) {
       el.rrChatToggle.style.transform = want ? 'rotate(180deg)' : '';
     }
+    syncCompanionOffset();
+  }
+
+  /**
+   * 桌宠别压住聊天框 (2026-11-26)
+   *
+   * 读书屋的聊天面板在底部, 展开时会把桌宠的默认位置 (bottom: 92px) 盖住
+   * → 聊天展开时把桌宠顶到面板上面 (CSS 变量 --cx-pet-bottom)。
+   */
+  function syncCompanionOffset() {
+    try {
+      var chat = el.rrChat;
+      var collapsed = !chat || chat.classList.contains('collapsed');
+      var bottom = 92;
+      if (!collapsed && chat) {
+        var h = Math.round(chat.getBoundingClientRect().height || 0);
+        if (h > 0) bottom = h + 14;
+      }
+      document.documentElement.style.setProperty('--cx-pet-bottom', bottom + 'px');
+    } catch (e) { /* noop */ }
   }
 
   // ---- 分隔条拖动 ----
@@ -777,6 +797,7 @@
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
       document.removeEventListener('touchend', onEnd);
+      syncCompanionOffset();   // 2026-11-26: 聊天面板高度变了 → 桌宠跟着挪
     }
 
     function onStart(e) {
@@ -904,6 +925,24 @@
       // 🔴 2026-11-25: 外面的宠物说话了 → 刷一条气泡进读书屋聊天框
       case 'reading:petSay':
         appendPetMsg(d);
+        // 🔴 2026-11-26: 同时在沙盒这只桌宠头顶冒个气泡 (用户要"看得见它在说话")
+        if (window.CompanionLayer && typeof window.CompanionLayer.say === 'function') {
+          window.CompanionLayer.say(d.petName, d.text);
+        }
+        break;
+
+      // 🔴 2026-11-26: 宿主把桌宠信息下发下来了 → 沙盒画同一只宠物
+      case 'reading:companion':
+        if (window.CompanionLayer && typeof window.CompanionLayer.setPet === 'function') {
+          window.CompanionLayer.setPet(d.pet || null);
+        }
+        break;
+
+      // 宿主那边照顾完了 → 沙盒自己提示 (宿主那条 toast 在 iframe 底下, 用户看不见)
+      case 'reading:petActionResult':
+        if (window.CompanionLayer && typeof window.CompanionLayer.toast === 'function') {
+          window.CompanionLayer.toast(d.message || '');
+        }
         break;
 
       // 换封面 (2026-11-02)
@@ -1077,6 +1116,8 @@
     grab();
     bindUi();
     showView('hall');
+    syncCompanionOffset();                              // 2026-11-26: 桌宠别压住聊天框
+    window.addEventListener('resize', syncCompanionOffset);
     if (!IN_IFRAME) {
       // 单独在浏览器里打开这一页 → 本地兜底 (方便开发时调试)
       if (el.rrBoot) el.rrBoot.classList.add('hide');

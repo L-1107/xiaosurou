@@ -576,15 +576,17 @@ section('每日换装: 所有宠物都参与 + 衣服道具都进提示词（202
       marking: '心形胸羽'
     }
   });
+  // ⚠️【2026-11-26】穿搭名自带结尾的「的」（"套着救生圈的"）→ 排在句尾时要去掉，
+  //   不然一句话结尾挂个孤零零的「的」（用户说的"句子都不通顺"）。
   check('鹦鹉的说明里有今天这身（用户说「鹦鹉没看见换装文字说明」）',
-    parrotCn.indexOf(todayParrotLook.outfit.cn) >= 0, parrotCn);
+    parrotCn.indexOf(todayParrotLook.outfit.cn.replace(/的$/, '')) >= 0, parrotCn);
   check('鹦鹉说明里的衣服是鹦鹉衣橱里的那件',
     (R.PARROT_OUTFITS || []).some(o => o.cn === todayParrotLook.outfit.cn), todayParrotLook.outfit.cn);
   const catCn = R.formatPetAppearance({
     kind: 'cat', stage: 1, seed: 'seed-A',
     appearance: { kind: 'starter', identity: '小猫', palette: '', marking: '' }
   });
-  check('猫狗的说明里也有今天这身', catCn.indexOf(todayLook.outfit.cn) >= 0, catCn);
+  check('猫狗的说明里也有今天这身', catCn.indexOf(todayLook.outfit.cn.replace(/的$/, '')) >= 0, catCn);
 
   // --- ⑤ 道具兜底：今天聊不到东西也要有道具（衣服 + 道具一起换）---
   const noText = R.dailyLookFor([], '2026-01-01', 'seed-A', []);
@@ -681,7 +683,10 @@ section('鹦鹉换装: 鸟的姿态 + 鸟穿得上的衣服 (2026-10-29)');
   check('鹦鹉提示词里道具改成了喙', /in its beak/i.test(parrotSubject), parrotSubject);
   check('鹦鹉提示词里今天那件衣服在', parrotSubject.indexOf(plkBeak.outfit.en) >= 0, parrotSubject);
   const catSubject = R.subjectForPet({ kind: 'cat', stage: 1, seed: 'seed-A', appearance: null }, clk);
-  check('猫的提示词还是爪子（猫有爪子，不许被改坏）', /in its paws/.test(catSubject) || !/in its paw/.test(catSubject), catSubject);
+  // ⚠️【2026-11-26】道具的英文现在会写清【拿在哪儿】（in its paw / in its paws），
+  //   所以不能再靠"有没有 paws(复数)"来判断有没有爪子 → 改成真正的红线：猫绝不能变成喙。
+  check('猫的提示词还是爪子（猫有爪子，不许被改坏）',
+    !/in its beak/i.test(catSubject), catSubject);
 
   // --- ④ kind 得传到生图入口（不然姿态换不了）---
   check('生图入口带着宠物的种类（鹦鹉要鸟的姿态）',

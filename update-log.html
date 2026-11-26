@@ -166,11 +166,61 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.63 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.63</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">桌宠和悬浮球，现在跟着你一起进影院和读书屋</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「那个宠物桌宠哦还有外面的悬浮球能也一起放进影院和图书馆吗，跟用户一起，用户进影院，这两个也进」；还有一句更要紧的：「<strong>那宠物被摸回话的时候收到的上文要和外面一样哦</strong>」。</li>
+          <li><strong>为什么它俩以前进不去</strong> —— 影院和读书屋是<strong>整个屏幕盖住</strong>的独立页面，而为了不让手机发烫，宿主那一层进房间时会<strong>彻底停掉</strong>：54 个面板全隐藏、58 条动画全停、桌宠和悬浮球也一起藏掉。所以宿主里的东西<strong>进不去</strong>。</li>
+          <li><strong>现在怎么办</strong> —— 在<strong>影院/读书屋这一侧</strong>把同一只宠物、同一个悬浮球<strong>再画一份</strong>。画的是同一只：同一个名字、同一张图、同样会呼吸会换姿势、能拖、能点。</li>
+          <li><strong>摸它回话，上文跟外面完全一样</strong> —— 这条是重点。<strong>沙盒里那只只是"演出"</strong>：你点了「摸摸」，动作交回宿主去做，<strong>宠物的话是宿主那边生成的</strong>，用的就是宿主那条会话的<strong>真实聊天记录</strong>。所以它在影院里开口，拿到的是跟你一模一样的上文；而<strong>影院里说的话本来就会写回主聊天记录</strong>，它还听得见你们刚才在聊什么。</li>
+          <li><strong>它说话你看得见了</strong> —— 以前它开口时气泡在宿主那边，被整屏盖着；现在气泡在<strong>影院/读书屋里它头顶</strong>冒出来，聊天框里也同步多一条它的话。</li>
+          <li><strong>菜单还是能用的</strong> —— 桌宠菜单里「喂食 / 摸摸 / 陪玩 / 进入小屋」照样能点；悬浮球的菜单也带过来了。悬浮球里那些要开窗的动作（切 API 预设、角色 API 配置、样式设置、清聊天记录……）会在<strong>宿主那边执行</strong>——它需要你看得见结果，所以会先把影院/读书屋收掉再执行。</li>
+          <li><strong>顺便修了一个真 bug</strong> —— 你上次试的时候「宠物没说话」：其实<strong>它有在说</strong>，只是宿主判断「桌宠看得见吗」时只看有没有 <code>hidden</code> 属性，而进房间时桌宠是被 CSS 藏起来的 → 判断成看得见 → <strong>兜底的那句提示也就没弹出来</strong>。现在改成也看计算样式，兜底提示该弹就弹。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">会不会让手机更烫？—— 不会，账给你算清楚</div>
+        <ul class="item-list">
+          <li><strong>你问的</strong> —— 「本来隐藏宿主页是为了避免影院和图书馆发烫，只把这两放进来会不会导致发烫呢」。</li>
+          <li><strong>先把发烫的成因说清楚</strong> —— 你 2026-11-05 那次真机 A/B/C 实测已经证明：<strong>宿主单独开着不烫，影院单独看也不烫，两者叠在一起才烫</strong>。所以关键不是"多两个小东西"，而是<strong>让不让宿主那一层继续在底下全速渲染</strong>。</li>
+          <li><strong>我们没动宿主静默那一段</strong> —— 宿主在影院/读书屋底下<strong>还是一个像素都不渲染</strong>，54 个面板、58 条动画、毛玻璃顶栏该藏还是藏。这条防线一个字没动。</li>
+          <li><strong>那为什么不浮在宿主上面、偏要画在影院里面？</strong> —— 两个原因：① 影院的整屏盖层是 <code>z-index: 2147483647</code>（int32 上限），<strong>宿主任何元素都压不过它</strong>，要浮上去就得把盖层降级，那会引出新的层级 bug；② 降级后宿主那层就"活了"，等于把当年实测会发烫的那个组合<strong>请回来</strong>。</li>
+          <li><strong>画在影院里面的开销</strong> —— 桌宠空闲时 = 1 条 <code>transform</code> 呼吸动画（GPU 合成，不触发重排重绘）+ 1 个 <strong>5.2 秒</strong>换一次的姿势；悬浮球空闲时 = <strong>0</strong>（它没有定时器，动画都是点开才跑、跑完自己消失）。而且它们是<strong>加在本来就在渲染的那一层里</strong>，<strong>不新增任何合成图层</strong>。</li>
+          <li><strong>唯一要如实说的</strong> —— 孵化中/神兽阶段的宠物会有一层<strong>光晕动画在动 <code>filter</code></strong>，这个不像位移那样能纯 GPU 合成，会每帧重绘那个 98px 的小方块。跟影院自己播 HLS 视频的解码开销比，是可以忽略的量级，但这一条我不藏着。</li>
+          <li><strong>结论</strong> —— <strong>不会更烫</strong>。真正决定烫不烫的是"宿主那层有没有继续渲染"，那一层我们一点没放松；新增的两个小挂件是白捡的。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.62 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.62</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">宠物屋的装扮提示词重写：那句话终于通顺了</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「什么叫奶咖一串小音符，头顶小行星？句子都不通顺，如果音符是道具，那应该描述道具怎么拿，后面小行星感觉属于服饰类，服饰就全部用衣服，不要再搞乱七八糟的东西」。</li>
+          <li><strong>原来那句话是怎么拼出来的</strong> —— 名册上那句是<strong>三段直接首尾相接</strong>拼的：<strong>配色</strong> + <strong>道具</strong> + <strong>衣服</strong>。所以「奶咖」（毛色）会<strong>粘在道具前面</strong>变成「奶咖一串小音符」；道具又只有名字没有动作，不知道是顶着还是捧着；而衣服那一格里还混着「顶着小行星」这种根本不是衣服的东西。</li>
+          <li><strong>现在改成跟画图提示词一个顺序</strong> —— <strong>主体在前 → 拿/背/戴什么道具 → 穿什么衣服</strong>：「<strong>奶咖色霸下，头顶飘着一串小音符、穿着草莓裙</strong>」。</li>
+          <li><strong>道具会说清怎么拿</strong> —— 83 件道具每件都配了动作：头顶飘着、两只小爪捧着、小爪里握着、尾巴上系着……画图用的英文也一起加了动词和位置（holding / carrying / wearing）。以前有 45 件道具的英文<strong>根本没说东西在哪儿</strong>，模型随便放 → 名册写「捧着香囊」，图上香囊可能长在屁股上。</li>
+          <li><strong>衣服只放衣服</strong> —— 19 件「手里拿着东西」的（捧着马卡龙盘、举着月牙灯、提着红灯笼、头顶小行星……）全部换成真正穿在身上的衣服；「彗星光环」「行星光环」这种抽象装饰也一并换掉了。</li>
+          <li><strong>而且每条都是一整套</strong> —— 你说「小手套、小腰带这些不叫衣服吧，把单品剔除去，都要能整件搭配的」：现在<strong>小手套、小腰带、发夹、项链这些不再单独当一身衣服</strong>，它们只能当搭配里的一件。每条服饰都是<strong>「一件整件衣服 + 一两件配件」</strong>，比如「穿着草莓背带裙、系着奶油蝴蝶结和套着奶泡长袜的」。</li>
+          <li><strong>娃衣扩充</strong> —— 幻兽衣服 72 → <strong>96</strong> 套（6 个系列各 16），鹦鹉衣橱 24 → <strong>28</strong> 套，补进来的都是小朋友穿的那种：背带裙、背带裤、围兜、小衬衫、睡衣、小雨衣、小棉袄、小肚兜、虎头鞋、粉纱凉鞋……</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.61 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.61</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-03</span>
       </div>
       <div class="section">
         <div class="section-title feat">AI 回复：要求它分段、不要时间戳、不要名字前缀</div>
