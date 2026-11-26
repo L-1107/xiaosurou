@@ -554,7 +554,68 @@
         });
       }
 
+      // ---- 池成员：多选下拉（触发按钮 + 浮层勾选框） ----
+      const trigger = document.getElementById('gemini-pool-preset-trigger');
+      if (trigger) {
+        trigger.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.togglePanel();
+        });
+      }
+      document.addEventListener('click', (e) => {
+        const panel = document.getElementById('gemini-pool-preset-panel');
+        if (!panel || panel.style.display === 'none' || !panel.style.display) return;
+        const multi = document.getElementById('gemini-pool-multi');
+        if (multi && multi.contains(e.target)) return;
+        this.togglePanel(false);
+      });
+
+      const allBtn = document.getElementById('gemini-pool-select-all');
+      if (allBtn) {
+        allBtn.addEventListener('click', () => {
+          saveConfig({ presetIds: (this._nativeIds || []).slice() });
+          this.renderPresetList(loadConfig());
+          this.renderStatus(loadConfig());
+        });
+      }
+      const noneBtn = document.getElementById('gemini-pool-select-none');
+      if (noneBtn) {
+        noneBtn.addEventListener('click', () => {
+          saveConfig({ presetIds: [] });
+          this.renderPresetList(loadConfig());
+          this.renderStatus(loadConfig());
+        });
+      }
+
       this.refresh();
+    },
+
+    togglePanel(force) {
+      const panel = document.getElementById('gemini-pool-preset-panel');
+      const trigger = document.getElementById('gemini-pool-preset-trigger');
+      if (!panel) return;
+      const isOpen = !(panel.style.display === 'none' || !panel.style.display);
+      const open = (typeof force === 'boolean') ? force : !isOpen;
+      panel.style.display = open ? 'block' : 'none';
+      if (trigger) trigger.classList.toggle('open', open);
+    },
+
+    updateSummary() {
+      const el = document.getElementById('gemini-pool-preset-summary');
+      if (!el) return;
+      const ids = loadConfig().presetIds.map(Number);
+      const map = this._presetNameMap || {};
+      const names = ids.map(id => map[id] || ('#' + id));
+      if (!names.length) {
+        el.textContent = '未选择预设（点开挑）';
+        el.title = '';
+        return;
+      }
+      const short = names.length <= 3
+        ? names.join('、')
+        : (names.slice(0, 2).join('、') + '…');
+      el.textContent = '已选 ' + names.length + ' 个预设（' + short + '）';
+      el.title = names.join('、');
     },
 
     async refresh() {
@@ -607,12 +668,20 @@
         .filter(p => p.proxyUrl && p.apiKey)
         .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 
+      this._presetNameMap = {};
+      this._nativeIds = [];
+      usable.forEach(p => {
+        this._presetNameMap[Number(p.id)] = p.name || ('预设 #' + p.id);
+        if (isGeminiNativeUrl(p.proxyUrl)) this._nativeIds.push(Number(p.id));
+      });
+
+      const selected = new Set((cfg.presetIds || []).map(Number));
       if (!usable.length) {
         box.textContent = '还没有可用的 API 预设。请先在上面「API 站点预设库」里新建几个（每个预设填一个谷歌直连地址和一个 Key）。';
+        this.updateSummary();
         return;
       }
 
-      const selected = new Set((cfg.presetIds || []).map(Number));
       usable.forEach(p => {
         const row = document.createElement('label');
         row.className = 'gemini-pool-preset-row';
@@ -627,6 +696,7 @@
           if (cb.checked) next.add(Number(p.id));
           else next.delete(Number(p.id));
           saveConfig({ presetIds: Array.from(next) });
+          this.updateSummary();
           this.renderStatus(loadConfig());
         });
 
@@ -645,6 +715,7 @@
         row.appendChild(info);
         box.appendChild(row);
       });
+      this.updateSummary();
     },
 
     renderStatus(cfg) {

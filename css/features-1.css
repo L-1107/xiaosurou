@@ -4717,13 +4717,97 @@
            /* ============================================================
               [2026-11-26] 谷歌直连 Key 池（设置页）
               ============================================================ */
+           /* 池成员：多选下拉（触发按钮 + 浮层勾选框） */
+           /* ⚠️ .settings-item 有 flex-direction: row !important（features-1.css:2201），
+              行内样式压不过它 → 必须用独立 class + 放在后面，靠「同优先级后来居上」赢。 */
+           .gemini-pool-member-item {
+               flex-direction: column !important;
+               align-items: stretch !important;
+               justify-content: flex-start !important;
+               gap: 8px;
+           }
+           .gemini-pool-multi {
+               position: relative;
+               width: 100%;
+           }
+           .gemini-pool-trigger {
+               width: 100%;
+               display: flex;
+               align-items: center;
+               justify-content: space-between;
+               gap: 8px;
+               border: 1px solid #d9dee4;
+               background: #fff;
+               border-radius: 10px;
+               padding: 9px 12px;
+               font-size: 14px;
+               color: #333;
+               text-align: left;
+               cursor: pointer;
+               transition: border-color .2s, background-color .2s;
+           }
+           .gemini-pool-trigger:hover {
+               border-color: #b6c0cb;
+           }
+           .gemini-pool-trigger .gemini-pool-caret {
+               flex: 0 0 auto;
+               color: #9aa3ad;
+               font-size: 11px;
+               transition: transform .2s;
+           }
+           .gemini-pool-summary {
+               flex: 1 1 auto;
+               min-width: 0;
+               overflow: hidden;
+               text-overflow: ellipsis;
+               white-space: nowrap;
+           }
+           .gemini-pool-trigger.open .gemini-pool-caret {
+               transform: rotate(180deg);
+           }
+           .gemini-pool-panel {
+               position: absolute;
+               top: calc(100% + 5px);
+               left: 0;
+               right: 0;
+               z-index: 60;
+               background: #fff;
+               border: 1px solid #e2e6ea;
+               border-radius: 10px;
+               box-shadow: 0 10px 28px rgba(0, 0, 0, .16);
+               max-height: 280px;
+               display: flex;
+               flex-direction: column;
+               overflow: hidden;
+           }
+           .gemini-pool-list {
+               overflow: auto;
+               padding: 4px 6px;
+           }
+           .gemini-pool-panel-foot {
+               display: flex;
+               gap: 8px;
+               justify-content: flex-end;
+               flex-wrap: wrap;
+               padding: 6px 8px;
+               border-top: 1px solid #f0f2f5;
+               background: #fafbfc;
+           }
+           .gemini-pool-panel-foot .settings-mini-btn {
+               flex: 0 0 auto;
+           }
            .gemini-pool-preset-row {
                display: flex;
                align-items: center;
                gap: 8px;
-               padding: 6px 0;
+               padding: 8px 6px;
                font-size: 13px;
                line-height: 1.4;
+               border-radius: 8px;
+               cursor: pointer;
+           }
+           .gemini-pool-preset-row:hover {
+               background: #f3f7fb;
            }
            .gemini-pool-preset-row input[type="checkbox"] {
                flex: 0 0 auto;
@@ -4756,4 +4840,24 @@
                font-family: ui-monospace, Menlo, Consolas, monospace;
                color: #c0392b;
                word-break: break-all;
+           }
+           /* 暗黑模式 */
+           #phone-screen.dark-mode .gemini-pool-trigger,
+           #phone-screen.dark-mode .gemini-pool-panel {
+               background: #1c1c1e;
+               border-color: #3a3a3c;
+               color: #f2f2f7;
+           }
+           #phone-screen.dark-mode .gemini-pool-panel-foot {
+               background: #161618;
+               border-top-color: #3a3a3c;
+           }
+           #phone-screen.dark-mode .gemini-pool-preset-row:hover {
+               background: #2c2c2e;
+           }
+           #phone-screen.dark-mode .gemini-pool-preset-name {
+               color: #f2f2f7;
+           }
+           #phone-screen.dark-mode .gemini-pool-preset-info {
+               color: #98989f;
            }

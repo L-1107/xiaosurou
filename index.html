@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.40">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.41">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -238,7 +238,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- v0.5.0 P11: 通话舞台背景管理页 (依赖 live2d-call-prep.js / live2d-ui.js) -->
   <script src="modules/live2d-bg-manager.js?v=0.0.3" defer></script>
   <script src="modules/api-endpoint-presets.js?v=0.0.38" defer></script>
-<script src="modules/gemini-key-pool.js?v=0.1.0" defer></script>
+<script src="modules/gemini-key-pool.js?v=0.1.1" defer></script>
   <!-- 死锁状态修复（F5 启动时清残留 isGenerating 状态） -->
   <script src="modules/chat-stuck-state-repair.js?v=0.0.36" defer></script>
   <script src="modules/openai-compatible-image-settings.js?v=0.0.36" defer></script>
@@ -2109,10 +2109,20 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     <span class="slider"></span>
                 </label>
             </div>
-            <div class="settings-item">
+            <div class="settings-item gemini-pool-member-item">
                 <label>池成员（勾选站点预设）</label>
-                <div class="settings-right" style="flex-wrap: wrap; gap: 8px; width: 100%;">
-                    <div id="gemini-pool-preset-list" class="settings-description" style="width: 100%;"></div>
+                <div class="gemini-pool-multi" id="gemini-pool-multi">
+                    <button type="button" class="gemini-pool-trigger" id="gemini-pool-preset-trigger">
+                        <span id="gemini-pool-preset-summary" class="gemini-pool-summary">未选择预设（点开挑）</span>
+                        <span class="gemini-pool-caret">▾</span>
+                    </button>
+                    <div class="gemini-pool-panel" id="gemini-pool-preset-panel" style="display: none;">
+                        <div id="gemini-pool-preset-list" class="gemini-pool-list"></div>
+                        <div class="gemini-pool-panel-foot">
+                            <button type="button" class="settings-mini-btn" id="gemini-pool-select-all">全选直连</button>
+                            <button type="button" class="settings-mini-btn" id="gemini-pool-select-none">清空</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="settings-item">
