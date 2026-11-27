@@ -8,7 +8,7 @@
   <meta http-equiv="Expires" content="0">
   <title>EPhone</title>
   <!-- 从 style.css 拆分出的模块（共13块） -->
-  <link rel="stylesheet" href="css/base.css?v=0.0.41">
+  <link rel="stylesheet" href="css/base.css?v=0.0.42">
   <link rel="stylesheet" href="css/chat-ui.css?v=0.0.38">
   <link rel="stylesheet" href="css/image-nai.css?v=0.0.36">
   <link rel="stylesheet" href="css/memory.css?v=0.0.36">
@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.39">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.43">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -149,7 +149,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/message-store.js?v=0.0.38" defer></script>
   <!-- 第三层：核心聊天功能 -->
   <script src="modules/chat-list.js?v=0.0.37" defer></script>
-  <script src="modules/chat-interface.js?v=0.0.37" defer></script>
+  <script src="modules/chat-interface.js?v=0.0.38" defer></script>
   <script src="modules/chat-input.js?v=0.0.36" defer></script>
   <!-- 第四层：AI 核心 -->
   <script src="modules/ai-response.js?v=0.0.59" defer></script>
@@ -169,7 +169,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/live2d-loader.js?v=0.4.0" defer></script>
   <!-- v0.5.0 P12/P13: 视频通话 AI 说话口型 + 元音嘴型 (独立模块, 无外部依赖; 必须在 tts-audio.js 之前加载) -->
   <script src="modules/call-lip-sync.js?v=0.0.2" defer></script>
-  <script src="modules/video-voice-call.js?v=0.0.89" defer></script>
+  <script src="modules/video-voice-call.js?v=0.0.91" defer></script>
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
   <script src="modules/nai-imagen.js?v=0.0.36" defer></script>
   <script src="modules/backup-import-export.js?v=0.0.40" defer></script>
@@ -189,7 +189,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/werewolf.js?v=0.0.37" defer></script>
   <!-- 读书屋 (2026-11-01): 存储层 + 宿主桥接。阅读室本体在 reading-sandbox/ 沙盒里。 -->
   <script src="modules/reading-storage.js?v=0.1.3" defer></script>
-  <script src="modules/reading-room.js?v=0.1.6" defer></script>
+  <script src="modules/reading-room.js?v=0.1.9" defer></script>
 
   <!-- 第七层：其余功能 -->
   <script src="api-config.js?v=0.0.36" defer></script>
@@ -237,7 +237,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/live2d-manager.js?v=0.0.8" defer></script>
   <!-- v0.5.0 P11: 通话舞台背景管理页 (依赖 live2d-call-prep.js / live2d-ui.js) -->
   <script src="modules/live2d-bg-manager.js?v=0.0.3" defer></script>
-  <script src="modules/api-endpoint-presets.js?v=0.0.37" defer></script>
+  <script src="modules/api-endpoint-presets.js?v=0.0.39" defer></script>
+<script src="modules/gemini-key-pool.js?v=0.2.0" defer></script>
   <!-- 死锁状态修复（F5 启动时清残留 isGenerating 状态） -->
   <script src="modules/chat-stuck-state-repair.js?v=0.0.36" defer></script>
   <script src="modules/openai-compatible-image-settings.js?v=0.0.36" defer></script>
@@ -248,7 +249,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- PIN/城市（依赖 DOM） -->
   <script src="modules/init-pin-city.js?v=0.0.37" defer></script>
   <!-- 事件绑定和功能（依赖 state, db） -->
-  <script src="modules/init-event-bindingsA.js?v=0.0.50" defer></script>
+  <script src="modules/init-event-bindingsA.js?v=0.0.51" defer></script>
   <script src="modules/init-event-bindingsB.js?v=0.0.43" defer></script>
   <script src="modules/init-features.js?v=0.0.47" defer></script>
   <!-- Cinema Room (v0.1.0, 2026-10-04 第一阶段): 家庭影院模块。
@@ -259,11 +260,11 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 图片压缩 (2026-10-05): 上传房间背景时把 3~5MB 的 iPhone 照片压到 ~100KB。
        必须在 cinema-room.js 之前 —— 它在加载时就要拿到 window.CinemaImage。 -->
   <script src="modules/cinema-img.js?v=1.0.1" defer></script>
-  <script src="modules/cinema-room.js?v=0.35.0" defer></script>
-  <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.0">
+  <script src="modules/cinema-room.js?v=0.35.3" defer></script>
+  <link rel="stylesheet" href="modules/cinema-room.css?v=0.39.2">
   <!-- Cinema Room 的 Gemini 3.8 Live 桥接层 (协议层仍是 live-client.js)。
        必须在 cinema-room.js 之后加载 —— cinema-room.js 打开房间时才会调它。 -->
-  <script src="modules/cinema-live.js?v=2.5.0" defer></script>
+  <script src="modules/cinema-live.js?v=2.5.2" defer></script>
   <!-- Cinema Room 的【陪聊】层 (2026-10-23)。
        陪聊改走【主聊天的主 API】: 人设 / 长期记忆 / 主聊天历史 / 影院剧情记忆,
        性格跟外面聊天一致。Live 只负责看画面 + 写剧情记忆。
@@ -309,13 +310,86 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
              没有参考图(首次生成) → 照旧写盲盒配色。羽化(终形态)例外，本就该换配色。
        index.html 的 ?v=：modules/pet-nest.js 0.0.25 → 0.0.26。
        ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
-  <script src="modules/pet-nest.js?v=0.0.37" defer></script>
+  <!-- 2026-11-26: 宠物屋「装扮提示词」重写 —— 句子通顺 + 娃衣扩充
+       用户原话:「什么叫奶咖一串小音符，头顶小行星？句子都不通顺，
+       如果音符是道具，那应该描述道具怎么拿，后面小行星感觉属于服饰类，
+       服饰就全部用衣服，不要再搞乱七八糟的东西」
+       ① 名册那句话原来是【配色】+【道具】+【衣服】首尾相接拼的 → 「奶咖一串小音符、头顶小行星的霸下」:
+          配色粘在道具上、道具只有名字没动作、服饰位里混着"顶着小行星"。
+          现在改成【主体在前】:「奶咖色霸下，头顶飘着一串小音符，穿着草莓裙」,
+          跟生图提示词一个顺序（主体+配色 → 拿/背/戴道具 → 穿衣服）。
+       ② 道具加 hold(怎么拿) + 英文加动词和位置:「小爪里捧着一枚香囊」/「holding a tiny embroidered silk sachet in its paws」。
+          以前 45 件道具的英文里根本没说东西在哪儿 → 图上位置随机, 名册和图对不上。
+       ③ 服饰只放真衣服: 19 件手持道具(捧着马卡龙盘/举着月牙灯/头顶小行星…)全换成衣物,
+          "彗星光环/行星光环"这种抽象装饰也换掉。
+       ④ 服饰每条都是【一整套】(二次反馈:「小手套、小腰带这些不叫衣服吧? 把单品剔除去,
+          都能整件搭配的要」): 小手套/小腰带/发夹/项链不再单独成条, 只当搭配里的一件;
+          每条 = 一件整件衣服(裙/连体衣/上衣/汉服…) + 一两件配件。
+          幻兽 96 套 + 鹦鹉 28 套, 补的都是小朋友穿的那种(背带裙/围兜/小衬衫/睡衣/小雨衣/小肚兜/虎头鞋…)。
+       ⑤ 鹦鹉的中文道具说法改成「喙里叼着」(鸟没有爪子, 英文那支早就换成 beak 了)。
+       index.html 的 ?v=：modules/pet-nest.js 0.0.37 → 0.0.38。
+       ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       🔴 2026-11-26 桌宠 + 悬浮球 跟着用户进影院 / 读书屋
+
+       用户原话:
+         「那个宠物桌宠哦还有外面的悬浮球能也一起放进影院和图书馆吗, 跟用户一起」
+         「本来隐藏宿主页是为了避免影院和图书馆发烫, 只把这两放进来会不会发烫?」
+         「宿主的任何东西都进不来, 所以在沙盒里复刻这两样是吗?
+           那宠物被摸回话的时候收到的上文要和外面一样哦」
+
+       【为什么宿主那份进不来】
+         宿主在影院/读书屋底下是【彻底静默】的 (2026-11-05 / 11-19 为了不发烫):
+         #phone-screen / #pn-desktop-pet / #floating-ball 全 display:none, 动画全停;
+         宿主自己也是 z-index:2147483647 (int32 上限) → 宿主里的东西浮也浮不上去。
+
+       【怎么做的】
+         新增 modules/companion-layer.js + css/companion-layer.css ——
+         沙盒这一侧【再画一份】同一只宠物和同一个悬浮球 (cx- 前缀的独立 id,
+         不碰宿主那两个 id, 免得被宿主静默规则直接藏掉)。
+         宿主用 PetNest.desktopPetInfo() 把「这只宠物长什么样」下发给沙盒。
+
+       【宠物的话还是宿主说的 —— 上文跟外面一样】
+         沙盒只负责"演出": 点了「摸摸」→ postMessage 给宿主 → 宿主 care() →
+         petSpeak() (上文 = 宿主那条会话的真实聊天记录 messageStore.getRecentMessages)
+         → 广播 pet:spoke → 宿主桥转发进沙盒 → 沙盒冒气泡 + 聊天框一条。
+         ⇒ 宠物收到的上文跟在外面【完全一样】。
+
+       【不发烫】
+         陪伴件画在【已经在渲染的 iframe 里面】, 不新增合成图层;
+         桌宠空闲 = 1 条 transform 动画 + 1 个 5200ms 换帧定时器;
+         悬浮球空闲 = 0 (没有 setInterval / requestAnimationFrame);
+         宿主静默那一段一个字没动。
+
+       index.html 的 ?v=：modules/pet-nest.js 0.0.38 → 0.0.39、
+                        modules/pet-speech.js 0.0.5 → 0.0.6、
+                        modules/floating-ball.js 0.0.40 → 0.0.41、
+                        modules/cinema-room.js 0.35.1 → 0.35.2、
+                        modules/reading-room.js 0.1.7 → 0.1.8。
+       新增回归: tests/companion-in-sandbox.test.cjs (57 条)。
+       ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
+  <!-- 🔴 2026-11-26: 悬浮球在影院/读书屋里【就地换 API 预设】, 不再退出影院
+       【用户原话】「悬浮球弄进影院就是为了方便切换API预设的, 不然都弹出去了我还弄它进来干啥呢」
+
+       【原来】沙盒点「切换API预设」→ 转发 ballAction → 宿主那边先 closeSandbox() 再执行
+               → 影院当场关掉, 用户被弹回主页面去选预设 (本末倒置)。
+       【现在】沙盒就地画二级菜单 → 选完沙盒发 'xx:switchApiPreset' → 宿主真的去切
+               → 宿主把新配置重推回沙盒 (沙盒那份只是启动时的快照,
+                 不重推的话影院里的陪聊还在用旧预设, 等于白切)。
+
+       index.html 的 ?v=：modules/floating-ball.js 0.0.41 → 0.0.42、
+                        modules/cinema-room.js 0.35.2 → 0.35.3、
+                        modules/reading-room.js 0.1.8 → 0.1.9。
+       新增回归: tests/companion-api-preset.test.cjs。
+       ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。 -->
+  <script src="modules/pet-nest.js?v=0.0.39" defer></script>
   <!-- 宠物屋的生图模块 (可选, 没有生图通道时宠物照样长大, 只是不换模样)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.getDb() 往同一个库存资产。 -->
   <script src="modules/pet-image.js?v=0.0.9" defer></script>
   <!-- 宠物说话系统 (宠物自己开口)
        必须在 pet-nest.js 之后 —— 它要拿 PetNest.listPets() 和 rules.dimensionScores()。 -->
-  <script src="modules/pet-speech.js?v=0.0.4" defer></script>
+  <script src="modules/pet-speech.js?v=0.0.6" defer></script>
   <link rel="stylesheet" href="css/pet-nest.css?v=0.0.20">
   <!-- 主入口（最后加载，调用 init） -->
   <script src="modules/init-and-state.js?v=0.0.85" defer></script>
@@ -328,7 +402,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 情侣空间（从内联 script 拆分） -->
   <script src="couple-space.js?v=0.0.39"></script>
   <script src="force-update.js?v=0.0.36" defer></script>
-  <script src="modules/floating-ball.js?v=0.0.40" defer></script>
+  <script src="modules/floating-ball.js?v=0.0.42" defer></script>
   
   <!-- 后台保活音频播放器样式（保持上传弹窗的玻璃面板/装饰条样式） -->
   <link rel="stylesheet" href="css/keep-alive-player.css?v=0.0.41">
@@ -2018,6 +2092,79 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <div class="settings-right">
                     <select id="model-select" class="settings-select" style="flex-grow: 1; width: auto;"></select>
                     <button id="fetch-models-btn" class="settings-mini-btn">拉取</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- [2026-11-26] 谷歌直连 Key 池：多 Key 轮询 + 失败自动换 Key -->
+        <div class="settings-header">🔑 谷歌直连 Key 池（多 Key 自动切换）</div>
+        <div class="settings-section" id="gemini-key-pool-section">
+            <div class="settings-item">
+                <div>
+                    <label>启用 Key 池</label>
+                    <div class="settings-desc"><b>打开 = 主聊天直接走谷歌直连轮询</b>：池里勾选的站点预设各带一个 Key，挨个轮着来；报错（503 / 429 / 超时）自动换下一个，坏 Key 冷却一阵不再用。<b>关闭 = 主 API 走你自己选的渠道</b>，行为跟以前一模一样。</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="gemini-pool-enabled">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="settings-item gemini-pool-stacked-item">
+                <label>池成员（勾选站点预设）</label>
+                <div class="gemini-pool-multi" id="gemini-pool-multi">
+                    <button type="button" class="gemini-pool-trigger" id="gemini-pool-preset-trigger">
+                        <span id="gemini-pool-preset-summary" class="gemini-pool-summary">未选择预设（点开挑）</span>
+                        <span class="gemini-pool-caret">▾</span>
+                    </button>
+                    <div class="gemini-pool-panel" id="gemini-pool-preset-panel" style="display: none;">
+                        <div id="gemini-pool-preset-list" class="gemini-pool-list"></div>
+                        <div class="gemini-pool-panel-foot">
+                            <button type="button" class="settings-mini-btn" id="gemini-pool-select-all">全选直连</button>
+                            <button type="button" class="settings-mini-btn" id="gemini-pool-select-none">清空</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-item gemini-pool-stacked-item">
+                <label>生效范围</label>
+                <div id="gemini-pool-scope" class="settings-description gemini-pool-scope" style="width: 100%;"></div>
+            </div>
+            <div class="settings-item">
+                <label>轮询模型（只管池）</label>
+                <div class="settings-right" style="flex-wrap: wrap; gap: 8px;">
+                    <select id="gemini-pool-model-select" class="settings-select" style="flex-grow: 1; width: auto;"></select>
+                    <button type="button" id="gemini-pool-fetch-models-btn" class="settings-mini-btn">拉取模型</button>
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>单个 Key 超时（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-attempt-timeout" class="settings-num-input" min="5" max="300" step="5">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>整轮上限（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-total-timeout" class="settings-num-input" min="10" max="1800" step="10">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>失败冷却（秒）</label>
+                <div class="settings-right">
+                    <input type="number" id="gemini-pool-cooldown" class="settings-num-input" min="5" max="3600" step="5">
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>Key 状态</label>
+                <div class="settings-right" style="width: 100%;">
+                    <div id="gemini-pool-status-list" class="settings-description" style="width: 100%;"></div>
+                </div>
+            </div>
+            <div class="settings-item">
+                <label>最近错误</label>
+                <div class="settings-right" style="width: 100%;">
+                    <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn">展开 / 收起</button>
+                    <div id="gemini-pool-error-log" class="settings-description" style="display: none; width: 100%; max-height: 220px; overflow: auto;"></div>
                 </div>
             </div>
         </div>
@@ -8737,7 +8884,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
      顺序: 通用 client → Tool Bridge (依赖 client) → UI 列表 (依赖 client)
      同步加载, 确保 McpBridge 在主代码里可用 -->
 <script src="js/mcp-generic-client.js?v=1.0.0"></script>
-<script src="js/mcp-tool-bridge.js?v=1.0.10"></script>
+<script src="js/mcp-tool-bridge.js?v=1.0.11"></script>
 <script src="js/mcp-ui-list.js?v=1.0.0"></script>
 <script src="js/mcp-menu-card.js?v=1.0.0"></script>
 <script src="js/mcp-pay-card.js?v=1.0.0"></script>

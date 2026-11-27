@@ -133,28 +133,63 @@
       preset = await db.apiPresets.get(presetId);
     }
 
+    let proxyUrl = '';
+    let apiKey = '';
+    let model = '';
+    let outPresetId = presetId;
+    let outPreset = preset;
+
     if (preset && (preset.proxyUrl || '').trim() && (preset.apiKey || '').trim()) {
-      return {
-        slot: slotName,
-        presetId,
-        preset,
-        proxyUrl: (preset.proxyUrl || '').trim(),
-        apiKey: preset.apiKey || '',
-        model: (cfg[def.modelKey] || getApiPresetDefaultModel(preset) || '').trim()
-      };
+      proxyUrl = (preset.proxyUrl || '').trim();
+      apiKey = preset.apiKey || '';
+      model = (cfg[def.modelKey] || getApiPresetDefaultModel(preset) || '').trim();
+    } else {
+      if (presetId) {
+        console.warn(`[API 设置] ${slotName} API 引用的预设不存在或缺少地址/API Key，已回退旧字段：`, presetId);
+      }
+      proxyUrl = (cfg[def.proxyUrlKey] || '').trim();
+      apiKey = cfg[def.apiKeyKey] || '';
+      model = (cfg[def.modelKey] || '').trim();
+      outPresetId = null;
+      outPreset = null;
     }
 
-    if (presetId) {
-      console.warn(`[API 设置] ${slotName} API 引用的预设不存在或缺少地址/API Key，已回退旧字段：`, presetId);
+    // [2026-11-26 谷歌直连 Key 池] 池的接管。
+    // 语义（用户拍板）：开关打开 → 主聊天【强制】走谷歌直连轮询，不管主 API
+    //   原来选的是哪个渠道；开关关闭 → 主 API 走你选择的渠道（老行为一字未改）。
+    // 所以主槽位被接管时，地址和模型要一起换 —— 只换 Key 不换模型会 400。
+    // applyPool:false 用于「填 UI / 同步状态快照」这类场合：
+    //   既不消耗轮询游标，也不能把池强制出来的地址/模型写回 state.apiConfig
+    //   （写回去的话，池一关主 API 还停在谷歌，语义就乱了）。
+    const applyPool = !(options && options.applyPool === false);
+    let poolForced = false;
+    if (applyPool && typeof window !== 'undefined' && window.GeminiKeyPool && typeof window.GeminiKeyPool.getSlotKeyOverride === 'function') {
+      try {
+        const override = await window.GeminiKeyPool.getSlotKeyOverride({
+          slot: slotName,
+          presetId: presetId,
+          ownApiKey: apiKey,
+          proxyUrl: proxyUrl,
+          currentModel: model
+        });
+        if (override && override.key) {
+          apiKey = override.key;
+          if (override.proxyUrl) { proxyUrl = override.proxyUrl; poolForced = true; }
+          if (override.model) model = override.model;
+        }
+      } catch (e) {
+        console.warn('[Key池] 取轮询 Key 失败，回退预设原 Key：', e);
+      }
     }
 
     return {
       slot: slotName,
-      presetId: null,
-      preset: null,
-      proxyUrl: (cfg[def.proxyUrlKey] || '').trim(),
-      apiKey: cfg[def.apiKeyKey] || '',
-      model: (cfg[def.modelKey] || '').trim()
+      presetId: outPresetId,
+      preset: outPreset,
+      proxyUrl: proxyUrl,
+      apiKey: apiKey,
+      model: model,
+      poolForced: poolForced
     };
   }
 
@@ -264,8 +299,17 @@
     for (const [id, meta] of Object.entries(endpointFieldMap)) {
       const el = document.getElementById(id);
       if (!el) continue;
-      const resolved = await resolveApiSlotConfig(meta.slot);
+      const resolved = await resolveApiSlotConfig(meta.slot, { applyPool: false });
       el.value = resolved && resolved.preset ? (resolved[meta.field.endsWith('ApiKey') || meta.field === 'apiKey' ? 'apiKey' : 'proxyUrl'] || '') : (state.apiConfig[meta.field] || '');
+    }
+
+    // [2026-11-26 谷歌直连 Key 池] 顺带刷新 Key 池面板（勾选状态 / Key 状态 / 错误日志）
+    if (window.GeminiKeyPoolUI && typeof window.GeminiKeyPoolUI.refresh === 'function') {
+      try {
+        await window.GeminiKeyPoolUI.refresh();
+      } catch (e) {
+        console.warn('[Key池] 面板刷新失败：', e);
+      }
     }
   }
 
@@ -426,7 +470,7 @@
       const def = API_SLOT_DEFS[slotName];
       let resolved = null;
       try {
-        resolved = await resolveApiSlotConfig(slotName);
+        resolved = await resolveApiSlotConfig(slotName, { applyPool: false });
       } catch (e) {
         console.warn(`[API 设置] 解析 ${slotName} 槽位预设失败:`, (e && e.message) || e);
         continue;

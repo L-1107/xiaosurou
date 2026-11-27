@@ -1373,6 +1373,24 @@ body.cinema-room-active #floating-ball * {
   word-break: break-word;
 }
 
+/* 🔴 2026-11-26 AI 气泡改走 parseMarkdown (跟主聊天同一套) 后,
+   ||剧透|| 会变成 <span class="spoiler">。主聊天里它是【藏起来, 鼠标移上去才显示】
+   (css/main-ui.css 的 .spoiler) —— 沙盒要一样, 不然剧透直接就露出来了。
+   .diary-highlight 那几个类在主聊天里本来就没样式 (只有日记页有), 沙盒也不用加。 */
+.cinema-chat-bubble .spoiler {
+  background-color: #333;
+  color: #333;
+  padding: 0 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+.cinema-chat-bubble .spoiler:hover,
+.cinema-chat-bubble .spoiler:active {
+  background-color: #e0e0e0;
+  color: inherit;
+}
+
 .cinema-chat-msg.assistant .cinema-chat-bubble {
   background: rgba(255, 255, 255, .07);
   border-top-left-radius: 4px;
@@ -1382,6 +1400,27 @@ body.cinema-room-active #floating-ball * {
   background: linear-gradient(180deg, rgba(216, 168, 116, .34), rgba(180, 128, 80, .24));
   border-top-right-radius: 4px;
   color: #fff3e2;
+}
+
+/* 宠物说话 (2026-11-25): 宿主转发进来的宠物发言。
+   跟用户 / AI 气泡区分开 —— 居中、虚线金边的小气泡 (跟主聊天 pet-say 一个观感)。
+   ⚠️ 名字是气泡里的一个 span, 所以颜色只能下到 .cinema-chat-pet-name, 别改气泡本体。 */
+.cinema-chat-msg.pet {
+  align-self: center;
+  max-width: 92%;
+}
+
+.cinema-chat-msg.pet .cinema-chat-bubble {
+  background: rgba(255, 246, 230, .10);
+  border: 1px dashed rgba(216, 168, 116, .55);
+  border-radius: 13px;
+  color: #f5e6d2;
+}
+
+.cinema-chat-msg.pet .cinema-chat-pet-name {
+  color: #e8c48a;
+  font-weight: 600;
+  margin-right: 2px;
 }
 
 /* 输入行 */

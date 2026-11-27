@@ -927,12 +927,90 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  /**
+   * 宠物说的话 → 影院聊天框里的一条气泡 (2026-11-25)
+   *
+   * 【为什么由这里渲染】影院是独立 iframe 页面, 宿主的桌宠气泡和聊天框
+   *   都被它整屏盖住。宠物开口时宿主把话转发过来 (cinema:petSay),
+   *   必须在沙盒自己的聊天框里补一条, 否则用户完全不知道宠物说话了
+   *   (用户原话: 「外面宠物说的话没办法刷新进影院的聊天框里」)。
+   *
+   * 【结构】跟用户 / AI 气泡一致: 外层 .cinema-chat-msg 套内层 .cinema-chat-bubble,
+   *   名字单独一个 span (.cinema-chat-pet-name), 跟主聊天 pet-say 的「名字：内容」一个观感。
+   */
+  function appendPetBubble(petName, text, timestamp) {
+    var box = getChatBox();
+    if (!box) return;
+    var body = String(text || '').trim();
+    if (!body) return;
+    var name = String(petName || '').trim() || '宠物';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'cinema-chat-msg pet';
+    if (timestamp) wrap.dataset.timestamp = String(timestamp);
+
+    var bubble = document.createElement('div');
+    bubble.className = 'cinema-chat-bubble';
+    var who = document.createElement('span');
+    who.className = 'cinema-chat-pet-name';
+    who.textContent = '🐾 ' + name + '：';
+    var txt = document.createElement('span');
+    txt.className = 'cinema-chat-pet-text';
+    txt.textContent = body;
+    bubble.appendChild(who);
+    bubble.appendChild(txt);
+    wrap.appendChild(bubble);
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+
+    // 聊天面板收着的时候用户看不到这条气泡 → 用沙盒自己的 toast 兜一下。
+    // ⚠️ 必须走沙盒的 window.showToast (cinema-sandbox/index.html 里那份):
+    //   宿主的 showToast 也在 iframe 底下, 用户同样看不见。
+    try {
+      var chatOpen = !window.CinemaRoom || typeof window.CinemaRoom.isChatOpen !== 'function'
+        ? true
+        : !!window.CinemaRoom.isChatOpen();
+      if (!chatOpen && typeof window.showToast === 'function') {
+        window.showToast('🐾 ' + name + '：' + body);
+      }
+    } catch (e) { /* 提示失败不影响气泡本身 */ }
+  }
+
   function getAvatarUrl() {
     try {
       var chat = getCurrentChat();
       if (chat && chat.settings && chat.settings.aiAvatar) return chat.settings.aiAvatar;
     } catch (e) { /* noop */ }
     return '';
+  }
+
+  /**
+   * AI 回复正文 → HTML (跟主聊天同一套 markdown, 2026-11-26)
+   *
+   * 【为什么要改】
+   *   主聊天: parseMarkdown(plainText) → innerHTML, 所以 **加粗** / *斜体* / ~~删除~~
+   *     会变成样式, !h{...} / ||剧透|| 的外层标记也会被吃掉。
+   *   影院这边原来是 textContent = 纯文本 → 这些标记原样显示成字面符号,
+   *     用户看到的就是"同一句回复在影院和主聊天里格式不一样"。
+   *
+   * 【怎么改】
+   *   parseMarkdown 来自 ../modules/ui-loaders.js (主聊天那份的唯一出处),
+   *   沙盒 HTML 里已经引入, 这里直接用。
+   *   ⚠️ 多了一步"先转义再解析": 沙盒是【同源 iframe】, AI 文本直接塞 innerHTML
+   *      等于给父页面开了个 XSS 口子。先把 & < > 转义掉, 再让 parseMarkdown
+   *      加回它自己的 <span>/<strong> 标签 —— 标签是我们自己的, 不是 AI 的。
+   *
+   * 换行不用管: 气泡 CSS 是 white-space: pre-wrap, \n 本来就会断行,
+   * 再补 <br> 反而会多空一行 (主聊天是 white-space:normal + <br>, 两条路各走各的)。
+   */
+  function renderAiHtml(text) {
+    var t = String(text == null ? '' : text);
+    if (!t) return '';
+    t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (typeof parseMarkdown === 'function') {
+      try { t = parseMarkdown(t); } catch (e) { /* 解析不了就用转义后的原文 */ }
+    }
+    return t;
   }
 
   /** 把 Gemini 的文字渲染成一个 assistant 气泡 (跨 turn 累加成整句) */
@@ -945,7 +1023,7 @@
     //    "新气泡", 一句话被拆成三五个字一行 (2026-10-04 用户反馈)。
     //    正确判断: 只要这个节点还在消息容器里, 就是同一个气泡, 继续更新它。
     if (S.bubbleEl && box.contains(S.bubbleEl)) {
-      S.bubbleEl.textContent = text;
+      S.bubbleEl.innerHTML = renderAiHtml(text);
     } else {
       var wrap = document.createElement('div');
       wrap.className = 'cinema-chat-msg assistant';
@@ -959,7 +1037,7 @@
       }
       var content = document.createElement('div');
       content.className = 'cinema-chat-bubble';
-      content.textContent = text;
+      content.innerHTML = renderAiHtml(text);
       wrap.appendChild(content);
       box.appendChild(wrap);
       S.bubbleEl = content;
@@ -1013,7 +1091,7 @@
       renderGeminiBubble(paras[0]);
       inner = S.bubbleEl;
     } else {
-      inner.textContent = paras[0];
+      inner.innerHTML = renderAiHtml(paras[0]);
     }
 
     // 后面几段各开一个 assistant 气泡, 紧跟在上一段后面
@@ -1031,7 +1109,7 @@
       }
       var b = document.createElement('div');
       b.className = 'cinema-chat-bubble';
-      b.textContent = paras[i];
+      b.innerHTML = renderAiHtml(paras[i]);
       wrap.appendChild(b);
 
       if (prevWrap && prevWrap.parentNode === box) {
@@ -4919,6 +4997,7 @@
     finalizeAssistantBubble: finalizeAssistantBubble,
     resetBubble: resetBubble,
     appendSystemLine: appendSystemLine,
+    appendPetBubble: appendPetBubble,
     recordAssistant: recordAssistantFinal,
 
     // 生命周期

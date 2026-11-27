@@ -118,7 +118,7 @@
     //   所以先按当天的内容挑；挑不到才走下面的兜底。
     let icons = pickIconsFromText((texts || []).join(' \n'), 1, seed);
     // ⚠️ 记忆匹配挑的那件，恰好跟今天这套衣服是【同一件东西】→ 丢掉，
-    //   走下面的兜底重挑（不然会拼出"一双水晶鞋、提着水晶鞋的"）。
+    //   走下面的兜底重挑（不然会拼出"一双水晶鞋、穿着水晶鞋的"）。
     if (icons.length && sameItem(outfit, icons[0])) icons = [];
     // ⚠️【2026-10-27 用户提】「换装最好是连道具和衣服一起换哈」
     // ⚠️【2026-10-28 用户提】「像奇迹暖暖那样的娃衣一堆堆，一天一个造型」
@@ -127,7 +127,7 @@
     //   → 而且兜底只从【华丽款】里挑 → 磨刀石/小砖头这种不会再出现在描述里。
     if (!icons.length) {
       const pool = DAILY_ICONS.filter(x => x.series === (outfit && outfit.series)
-        && !sameItem(outfit, x));
+        && !sameItem(outfit, x) && !motifClash(outfit, x));
       const hi = hash32(String(dayKeyStr || 'day') + ':iconseries:' + String(seed || ''));
       const picked = pool.length
         ? pool[hi % pool.length]
@@ -136,7 +136,7 @@
           : (ICON_LIBRARY.length ? ICON_LIBRARY[hi % ICON_LIBRARY.length] : null));
       if (picked) icons = [picked];
     }
-    return { features, icons, outfit, behaviors: list.slice() };
+    return { features, icons, outfit, behaviors: list.slice(), kind: kind || '' };
   }
 
   /**
@@ -185,18 +185,76 @@
   }
 
   /**
-   * 今日造型的中文说法：「一串小音符、抱着小水壶的」（道具 + 衣服一起）
-   * ⚠️ 20 件穿搭的中文名全都以「的」结尾（穿旗袍的 / 戴着白手套的…）
+   * 道具的中文说法：**带动作**，不能只有名字
+   *
+   * ⚠️【2026-11-26 用户反馈】「什么叫奶咖一串小音符？句子都不通顺，
+   *   如果音符是道具，那应该描述道具怎么拿」
+   *   → 光有名字不成句子（"一串小音符" 谁知道是顶着还是捧着）。
+   *   → 每件道具配一个动作/位置短语（icon.hold），拼成「头顶飘着一串小音符」。
+   *   ⚠️【别把动作写进 cn】cn 本身一个字都不动 ——
+   *   sameItem() 靠它去掉量词后比对（"水晶鞋" vs "水晶鞋"），
+   *   把动作写进 cn 会让"衣服和道具是同一件"的判断失效。
+   */
+  const DEFAULT_ICON_HOLD = '小爪里捧着';
+  /**
+   * 鹦鹉没有爪子 → 道具的说法改成用喙
+   * ⚠️【2026-11-26】英文那边早就把 'in its paws' 换成 'in its beak' 了
+   *   (生图提示词那支，见 subjectForPet)，中文这边却还写着「小爪里捧着」
+   *   → 名册说爪子、图里是喙，两边对不上。
+   */
+  const BEAK_HOLD = {
+    '小爪里捧着': '喙里叼着',
+    '两只小爪捧着': '喙里叼着',
+    '小爪里抱着': '喙里叼着',
+    '小爪里握着': '喙里叼着',
+    '小爪里攥着': '喙里叼着',
+    '小爪里提着': '喙里叼着',
+    '小爪里举着': '喙里举着',
+    '小爪里夹着': '喙里夹着',
+    '小爪里摊着': '小翅膀上摊着',
+    '小爪上托着': '翅膀上托着'
+  };
+  function iconCn(icon, kind) {
+    if (!icon) return '';
+    const cn = String(icon.cn || '');
+    if (!cn) return '';
+    let hold = String(icon.hold || DEFAULT_ICON_HOLD);
+    if (kind === 'parrot' && BEAK_HOLD[hold]) hold = BEAK_HOLD[hold];
+    return hold + cn;
+  }
+
+  /**
+   * 今日造型的中文说法：「头顶飘着一串小音符、穿着草莓裙的」（道具 + 衣服一起）
+   * ⚠️ 72 件穿搭的中文名全都以「的」结尾（穿旗袍的 / 戴着白手套的…）
    *   → 结尾没有「的」才补一个，别拼出「的的」
    */
   function todayLookCn(lk) {
-    const parts = [];
-    for (const i of (lk && lk.icons) || []) parts.push(i.cn);
-    for (const f of (lk && lk.features) || []) parts.push(f.cn);
-    if (lk && lk.outfit) parts.push(lk.outfit.cn);
-    if (!parts.length) return '';
-    const head = parts.join('、');
-    return /的$/.test(head) ? head : head + '的';
+    const head = todayLookPhrase(lk);
+    if (!head) return '';
+    return head + '的';
+  }
+
+  /**
+   * 今日造型的短语（【不带】结尾的「的」）
+   * ⚠️ 为什么单独留一个：带「的」那版是给「……的奶龙」这种结构用的；
+   *   排在句尾时（名册/说明）留个孤零零的「的」很奇怪 → 那儿用这版。
+   */
+  function todayLookPhrase(lk) {
+    const head = [];
+    for (const i of (lk && lk.icons) || []) {
+      const c = iconCn(i, (lk && lk.kind) || '');
+      if (c) head.push(c);
+    }
+    for (const f of (lk && lk.features) || []) head.push(f.cn);
+    const outfit = (lk && lk.outfit) ? String(lk.outfit.cn || '') : '';
+    // 穿搭名自带结尾的「的」（"穿着草莓裙的"）→ 现在主体在前，后面没有名词可绑了 → 去掉，
+    // 不然句子中间会挂一个孤零零的「的」（"…和穿着小黄靴的，流光肩纹"）。
+    const outfitPhrase = /的$/.test(outfit) ? outfit.slice(0, -1) : outfit;
+    const props = head.join('、');
+    // 道具和衣服之间用「，」分开 —— 衣服自己内部是「、」(一整套好几件)，
+    // 混在一个顿号里会看不出哪儿是道具哪儿是衣服。
+    if (props && outfitPhrase) return props + '，' + outfitPhrase;
+    return props || outfitPhrase;
   }
 
   /**
@@ -249,7 +307,7 @@
 
   /**
    * 这件衣服跟这个道具是不是【同一件东西】？
-   *   （同一件就重复了 —— "一双水晶鞋、提着水晶鞋的" 太蠢）
+   *   （同一件就重复了 —— "一双水晶鞋、穿着水晶鞋的" 太蠢）
    *   判据两条:
    *     ① 中文: 衣服名去掉动词和「的」= 物件名，道具名去掉量词 = 物件名，
    *             两个物件名相同或互相包含 → 同一件；
@@ -258,15 +316,40 @@
    */
   function sameItem(outfit, icon) {
     if (!outfit || !icon) return false;
-    const core = String(outfit.cn || '')
-      .replace(/的$/, '')
-      .replace(/^(提着|抱着|捧着|举着|挂着|戴着|穿着|套着|系着|围着|披着|背着|顶着|裹着|簪着|夹着|头顶|拖着|插着|别着|穿着)/, '');
-    const icn = String(icon.cn || '').replace(/^(一双|一把|一根|一枚|一颗|一块|一串|一台|一张|一朵|一面|一只|一支|一本|一顶|一条|一片|一盏|一盒)/, '');
+    const core = outfitCore(outfit);
+    const icn = iconNoun(icon);
     if (core && icn && (icn === core || icn.indexOf(core) >= 0 || core.indexOf(icn) >= 0)) return true;
     const ien = String(icon.en || '').toLowerCase();
     const oen = String(outfit.en || '').toLowerCase();
     if (ien && oen && (oen.indexOf(ien) >= 0 || ien.indexOf(oen) >= 0)) return true;
     return false;
+  }
+
+  /** 衣服名去掉动词和「的」= 物件名（"穿着草莓裙的" → "草莓裙"） */
+  function outfitCore(outfit) {
+    return String((outfit && outfit.cn) || '')
+      .replace(/的$/, '')
+      .replace(/^(提着|抱着|捧着|举着|挂着|戴着|穿着|套着|系着|围着|披着|背着|顶着|裹着|簪着|夹着|头顶|拖着|插着|别着|穿着)/, '');
+  }
+
+  /** 道具名去掉量词 = 物件名（"一双水晶鞋" → "水晶鞋"） */
+  function iconNoun(icon) {
+    return String((icon && icon.cn) || '')
+      .replace(/^(一双|一把|一根|一枚|一颗|一块|一串|一台|一张|一朵|一面|一只|一支|一本|一顶|一条|一片|一盏|一盒)/, '');
+  }
+
+  /**
+   * 衣服名和道具名里出现同一个词 → 读着别扭
+   *   （"海星图案小雨衣" + "一只小海星" → 一句话里两个海星）
+   * ⚠️【2026-11-26】只用在【兜底挑道具】那条路上 ——
+   *   记忆匹配出来的道具是用户当天聊到的，不该因为撞词就被丢掉
+   *   （用户明确要"道具服饰应该在记忆里匹配"）。
+   */
+  function motifClash(outfit, icon) {
+    const core = outfitCore(outfit);
+    const noun = iconNoun(icon).replace(/^[小大]/, '');
+    if (!core || noun.length < 2) return false;
+    return core.indexOf(noun) >= 0 || noun.indexOf(core) >= 0;
   }
 
   /** 某一天 0 点的毫秒时间戳（东八区，跟设备时区无关） */
@@ -332,23 +415,43 @@
     return look;
   }
 
-  /** 中文组合名：「脑袋上飘着几个小音符的粉红奶龙」/「穿旗袍的奶龙」 */
-  function beastDisplayName(app, look) {
+  /**
+   * 幻兽的称呼：配色 + 物种（「奶咖色霸下」）
+   * ⚠️ 配色说的是【毛色】，不是道具 —— 所以它只能跟着物种走。
+   */
+  function beastName(app) {
     const species = (app && app.beastSpecies) || (app && app.identity) || '灵兽';
     const palette = (app && app.palette) || '';
-    // ⚠️ 20 件穿搭的中文名全都以「的」结尾（穿旗袍的 / 戴着白手套的…），
-    //    原来这里再补一个「的」→ 「穿着白手套的的星尘角兽」。补之前先看一句。
-    const tail = todayLookCn(look);
-    return (palette ? palette : '') + tail + species;
+    const color = palette ? palette + '色' : '';
+    return color + species;
   }
 
   /**
-   * 英文生图提示词：物种 + 配色 + 今天挑出来的小装饰 + 今天的特征 + 穿搭 + 花纹 + 审美锁
+   * 今天的样子：「奶咖色霸下，头顶飘着一串小音符、穿着草莓裙」
+   *
+   * ⚠️【2026-11-26 用户反馈】「什么叫奶咖一串小音符？句子都不通顺」
+   *   → 原来配色直接贴在第一个道具前面 → 「奶咖一串小音符、头顶小行星的霸下」，
+   *     颜色和道具粘成一团读不出来。
+   *   → 改成跟【生图提示词】一个顺序：
+   *       主体在前（奶咖色霸下）→ 拿着什么道具（头顶飘着一串小音符）→ 穿什么衣服（穿着草莓裙）。
+   */
+  function beastDisplayName(app, look) {
+    const name = beastName(app);
+    const lookCn = todayLookPhrase(look);
+    return lookCn ? name + '，' + lookCn : name;
+  }
+
+  /**
+   * 英文生图提示词：物种 + 配色 → 拿着/背着/戴着什么道具 → 穿什么衣服 → 花纹 → 审美锁
    * @param keepColors true = 【有参考图】→ 别再写死配色，跟参考图保持一致
    *   ⚠️【2026-10-28 用户反馈】「九尾狐刚破壳是黑紫色，画到第三次变好看的玫红色了，后面想保持」
    *     → 以前每次都硬写盲盒配色（"with deep berry purple fur"），
    *       跟参考图里的玫红打架（而 buildEvolvePrompt 第一句又要求 "same colors"）→ 颜色反复漂。
    *     → 有参考图时改成"跟参考图同一个颜色"，颜色才稳得住。
+   * ⚠️【2026-11-26 用户定】顺序照着他说的那句来：
+   *   「奶咖色霸下，拿着/背着/戴着什么什么道具，穿着什么什么衣服」
+   *   → 主体和配色合成一句（"a chubby round baby dragon with milky coffee brown fur"），
+   *     道具用动词（holding/carrying/wearing），衣服在道具后面。
    */
   function beastPrompt(app, look, markEn, keepColors) {
     const speciesEn = (app && app.beastSpeciesEn) || 'a round cute fantasy beast';
@@ -357,9 +460,10 @@
     // 物种英文自带 "a/an/the"（不然拼出来是 "a a chubby dragon"），别再补一次冠词
     const sp = String(speciesEn).trim();
     const spWithArticle = /^(a|an|the)\s/i.test(sp) ? sp : 'a ' + sp;
-    const bits = [spWithArticle, keepColors
+    const who = spWithArticle + ' ' + (keepColors
       ? 'in exactly the same colours as the reference image'
-      : 'with ' + paletteEn + ' fur'];
+      : 'with ' + paletteEn + ' fur');
+    const bits = [who];
     for (const i of lk.icons || []) bits.push(i.en);
     for (const f of lk.features || []) bits.push(f.en);
     if (lk.outfit) bits.push(lk.outfit.en);
@@ -532,49 +636,49 @@
   // 想加新意象 → 加一行就行
   // ============================================================
   const ICON_LIBRARY = [
-    { cn: '一串小音符', en: 'a few tiny floating music notes above its head', keys: ['歌', '音乐', '唱', '旋律', '耳机', '单曲', '歌单', '演唱会', '钢琴'] },
-    { cn: '一把小伞', en: 'a tiny umbrella resting on its head', keys: ['伞', '下雨', '雨', '淋雨', '梅雨'] },
-    { cn: '一杯热饮', en: 'a tiny cup of warm drink in its paws', keys: ['咖啡', '奶茶', '茶', '喝', '热可可', '拿铁'] },
-    { cn: '一本翻开的书', en: 'a tiny open book resting on its back', keys: ['书', '读', '学习', '知识', '看完', '小说', '论文'] },
-    { cn: '一支小铅笔', en: 'a tiny pencil tucked behind its ear', keys: ['写', '作业', '考试', '笔', '笔记', '论文', '复习'] },
-    { cn: '一颗小星星', en: 'a tiny glowing star above its head', keys: ['星', '梦想', '希望', '夜空', '星星', '闪耀'] },
-    { cn: '一串小铃铛', en: 'a tiny string of bells hanging from its collar', keys: ['铃', '声音', '开心', '笑', '高兴', '叮'] },
-    { cn: '一个小相机', en: 'a tiny camera hanging around its neck', keys: ['拍照', '照片', '相机', '记录', '拍'] },
-    { cn: '一串小气球', en: 'a few tiny balloons tied to its tail', keys: ['生日', '庆祝', '派对', '气球', '纪念日'] },
-    { cn: '一片小树叶', en: 'a tiny green leaf tucked on its head', keys: ['树', '自然', '秋天', '叶子', '公园', '植物'] },
-    { cn: '一颗小糖果', en: 'a tiny candy in its cheek', keys: ['糖', '甜', '好吃', '零食', '蛋糕', '甜品'] },
-    { cn: '一顶小帽子', en: 'a tiny hat perched on its head', keys: ['帽子', '穿搭', '衣服', '搭配', '穿'] },
-    { cn: '一枚小钥匙', en: 'a tiny golden key on a ribbon', keys: ['钥匙', '门', '家', '锁', '开门'] },
-    { cn: '一块小手表', en: 'a tiny watch on its wrist', keys: ['时间', '几点', '迟到', '闹钟', '日程', '赶时间'] },
-    { cn: '一根小天线', en: 'a tiny antenna on its head with a blinking tip', keys: ['信号', '网络', '消息', '回复', '上线', '断联'] },
-    { cn: '一片小羽毛', en: 'a tiny soft feather floating beside it', keys: ['羽毛', '鸟', '飞', '轻', '飘'] },
-    { cn: '一个救生圈', en: 'a tiny striped swim ring around its belly', keys: ['游泳', '海', '水', '旅行', '海边', '泳池'] },
-    { cn: '一块小砖头', en: 'a tiny brick in its paws', keys: ['盖', '房子', '装修', '建', '施工', '搬家'] },
-    { cn: '一顶小皇冠', en: 'a tiny golden crown on its head', keys: ['赢', '第一', '厉害', '冠军', '厉害啦', '成功'] },
-    { cn: '一只小碗', en: 'a tiny bowl in front of it', keys: ['吃', '饭', '饿', '喂', '饿坏'] },
-    { cn: '一颗小灯泡', en: 'a tiny light bulb glowing above its head', keys: ['想法', '灵感', '突然', '主意', '想到', '明白'] },
-    { cn: '一株小嫩芽', en: 'a tiny sprout growing from its head', keys: ['种', '成长', '开始', '发芽', '新'] },
-    { cn: '一弯小月亮', en: 'a tiny crescent moon resting on its head', keys: ['晚安', '睡', '夜', '梦', '困'] },
-    { cn: '一只小风筝', en: 'a tiny kite floating above it', keys: ['风', '放风筝', '天空', '飞', '自由'] },
-    { cn: '一块小拼图', en: 'a tiny puzzle piece in its paws', keys: ['拼', '谜', '问题', '解决', '推理', '线索'] },
-    { cn: '一张小地图', en: 'a tiny folded map in its paws', keys: ['地图', '路', '旅行', '去哪', '出发', '导航'] },
-    { cn: '一把小梳子', en: 'a tiny comb in its fur', keys: ['梳', '头发', '毛', '打理'] },
-    { cn: '一个救生圈小旗', en: 'a tiny pennant flag on a stick', keys: ['旗', '比赛', '加油', '出发'] },
-    { cn: '一只小篮子', en: 'a tiny woven basket beside it', keys: ['篮子', '野餐', '装', '摘'] },
-    { cn: '一块小磨刀石', en: 'a tiny whetstone in its paws', keys: ['磨', '锋利', '刀', '准备'] },
-    { cn: '一把小扇子', en: 'a tiny fan in its paw', keys: ['扇', '凉快', '热', '空调', '风扇'] },
-    { cn: '一枚小硬币', en: 'a tiny shiny coin in its paw', keys: ['钱', '零花钱', '买', '价格', '省'] },
-    { cn: '一颗小桃子', en: 'a tiny peach held in its paws', keys: ['桃', '水果', '吃', '甜'] },
-    { cn: '一个小风筝线轴', en: 'a tiny spool of string in its paws', keys: ['线', '风筝', '缝', '手工'] },
-    { cn: '一朵小雪花', en: 'a tiny snowflake resting on its head', keys: ['雪', '冬天', '冷', '下雪', '冰'] },
-    { cn: '一枚小印章', en: 'a tiny red stamp in its paws', keys: ['盖章', '文件', '合同', '签', '证明'] },
-    { cn: '一条小围巾', en: 'a tiny knitted scarf around its neck', keys: ['围巾', '冷', '冬天', '保暖'] },
-    { cn: '一个小背包', en: 'a tiny backpack on its back', keys: ['背包', '出门', '旅行', '装东西', '上学'] },
-    { cn: '一串小灯泡', en: 'a string of tiny warm lights around it', keys: ['灯', '亮', '电', '装饰', '温暖'] },
-    { cn: '一片小羽毛扇', en: 'a tiny feather fan in its paws', keys: ['扇子', '优雅', '表演'] },
-    { cn: '一个小铃铛球', en: 'a tiny bell on a toy ball', keys: ['玩具', '球', '玩'] },
-    { cn: '一本小菜谱', en: 'a tiny cookbook in its paws', keys: ['菜谱', '做饭', '煮', '厨房', '烘焙'] },
-    { cn: '一顶小渔夫帽', en: 'a tiny bucket hat on its head', keys: ['渔夫帽', '遮阳', '钓鱼'] },
+    { cn: '一串小音符', hold: '头顶飘着', en: 'a few tiny music notes floating above its head', keys: ['歌', '音乐', '唱', '旋律', '耳机', '单曲', '歌单', '演唱会', '钢琴'] },
+    { cn: '一把小伞', hold: '头顶撑着', en: 'holding up a tiny umbrella above its head', keys: ['伞', '下雨', '雨', '淋雨', '梅雨'] },
+    { cn: '一杯热饮', hold: '两只小爪捧着', en: 'holding a tiny cup of warm drink in its paws', keys: ['咖啡', '奶茶', '茶', '喝', '热可可', '拿铁'] },
+    { cn: '一本翻开的书', hold: '抱着', en: 'holding a tiny open book in its paws', keys: ['书', '读', '学习', '知识', '看完', '小说', '论文'] },
+    { cn: '一支小铅笔', hold: '耳朵上别着', en: 'a tiny pencil tucked behind its ear', keys: ['写', '作业', '考试', '笔', '笔记', '论文', '复习'] },
+    { cn: '一颗小星星', hold: '头顶飘着', en: 'a tiny glowing star floating above its head', keys: ['星', '梦想', '希望', '夜空', '星星', '闪耀'] },
+    { cn: '一串小铃铛', hold: '脖子上挂着', en: 'wearing a tiny string of bells on a ribbon around its neck', keys: ['铃', '声音', '开心', '笑', '高兴', '叮'] },
+    { cn: '一个小相机', hold: '脖子上挂着', en: 'wearing a tiny camera on a ribbon around its neck', keys: ['拍照', '照片', '相机', '记录', '拍'] },
+    { cn: '一串小气球', hold: '尾巴上系着', en: 'a few tiny balloons tied to its tail', keys: ['生日', '庆祝', '派对', '气球', '纪念日'] },
+    { cn: '一片小树叶', hold: '头顶落着', en: 'a tiny green leaf resting on its head', keys: ['树', '自然', '秋天', '叶子', '公园', '植物'] },
+    { cn: '一颗小糖果', hold: '嘴里含着', en: 'holding a tiny candy in its mouth', keys: ['糖', '甜', '好吃', '零食', '蛋糕', '甜品'] },
+    { cn: '一顶小帽子', hold: '头顶戴着', en: 'wearing a tiny hat on its head', keys: ['帽子', '穿搭', '衣服', '搭配', '穿'] },
+    { cn: '一枚小钥匙', hold: '脖子上挂着', en: 'wearing a tiny golden key on a ribbon around its neck', keys: ['钥匙', '门', '家', '锁', '开门'] },
+    { cn: '一块小手表', hold: '手腕上戴着', en: 'wearing a tiny watch on its wrist', keys: ['时间', '几点', '迟到', '闹钟', '日程', '赶时间'] },
+    { cn: '一根小天线', hold: '头顶立着', en: 'a tiny antenna standing up on its head with a blinking tip', keys: ['信号', '网络', '消息', '回复', '上线', '断联'] },
+    { cn: '一片小羽毛', hold: '身旁飘着', en: 'a tiny soft feather floating beside it', keys: ['羽毛', '鸟', '飞', '轻', '飘'] },
+    { cn: '一个救生圈', hold: '身上套着', en: 'wearing a tiny striped swim ring around its belly', keys: ['游泳', '海', '水', '旅行', '海边', '泳池'] },
+    { cn: '一块小砖头', hold: '小爪里抱着', en: 'holding a tiny brick in its paws', keys: ['盖', '房子', '装修', '建', '施工', '搬家'] },
+    { cn: '一顶小皇冠', hold: '头顶戴着', en: 'wearing a tiny golden crown on its head', keys: ['赢', '第一', '厉害', '冠军', '厉害啦', '成功'] },
+    { cn: '一只小碗', hold: '身前捧着', en: 'holding a tiny bowl in front of it', keys: ['吃', '饭', '饿', '喂', '饿坏'] },
+    { cn: '一颗小灯泡', hold: '头顶悬着', en: 'a tiny light bulb glowing above its head', keys: ['想法', '灵感', '突然', '主意', '想到', '明白'] },
+    { cn: '一株小嫩芽', hold: '头顶长着', en: 'a tiny sprout growing out of its head', keys: ['种', '成长', '开始', '发芽', '新'] },
+    { cn: '一弯小月亮', hold: '头顶悬着', en: 'a tiny crescent moon resting on its head', keys: ['晚安', '睡', '夜', '梦', '困'] },
+    { cn: '一只小风筝', hold: '天上牵着', en: 'holding the string of a tiny kite floating above it', keys: ['风', '放风筝', '天空', '飞', '自由'] },
+    { cn: '一块小拼图', hold: '小爪里捧着', en: 'holding a tiny puzzle piece in its paws', keys: ['拼', '谜', '问题', '解决', '推理', '线索'] },
+    { cn: '一张小地图', hold: '小爪里摊着', en: 'holding a tiny folded map open in its paws', keys: ['地图', '路', '旅行', '去哪', '出发', '导航'] },
+    { cn: '一把小梳子', hold: '小爪里握着', en: 'holding a tiny comb in its paw', keys: ['梳', '头发', '毛', '打理'] },
+    { cn: '一个救生圈小旗', hold: '小爪里举着', en: 'holding up a tiny pennant flag on a stick in its paw', keys: ['旗', '比赛', '加油', '出发'] },
+    { cn: '一只小篮子', hold: '身前提着', en: 'carrying a tiny woven basket beside it', keys: ['篮子', '野餐', '装', '摘'] },
+    { cn: '一块小磨刀石', hold: '小爪里握着', en: 'holding a tiny whetstone in its paw', keys: ['磨', '锋利', '刀', '准备'] },
+    { cn: '一把小扇子', hold: '小爪里握着', en: 'holding a tiny fan in its paw', keys: ['扇', '凉快', '热', '空调', '风扇'] },
+    { cn: '一枚小硬币', hold: '小爪里攥着', en: 'clenching a tiny shiny coin in its paw', keys: ['钱', '零花钱', '买', '价格', '省'] },
+    { cn: '一颗小桃子', hold: '两只小爪捧着', en: 'holding a tiny peach in its paws', keys: ['桃', '水果', '吃', '甜'] },
+    { cn: '一个小风筝线轴', hold: '小爪里握着', en: 'holding a tiny spool of string in its paw', keys: ['线', '风筝', '缝', '手工'] },
+    { cn: '一朵小雪花', hold: '头顶落着', en: 'a tiny snowflake resting on its head', keys: ['雪', '冬天', '冷', '下雪', '冰'] },
+    { cn: '一枚小印章', hold: '小爪里举着', en: 'holding up a tiny red stamp in its paw', keys: ['盖章', '文件', '合同', '签', '证明'] },
+    { cn: '一条小围巾', hold: '脖子上围着', en: 'wearing a tiny knitted scarf around its neck', keys: ['围巾', '冷', '冬天', '保暖'] },
+    { cn: '一个小背包', hold: '背上背着', en: 'carrying a tiny backpack on its back', keys: ['背包', '出门', '旅行', '装东西', '上学'] },
+    { cn: '一串小灯泡', hold: '身上缠着', en: 'wearing a string of tiny warm lights around its body', keys: ['灯', '亮', '电', '装饰', '温暖'] },
+    { cn: '一片小羽毛扇', hold: '小爪里握着', en: 'holding a tiny feather fan in its paw', keys: ['扇子', '优雅', '表演'] },
+    { cn: '一个小铃铛球', hold: '身前摆着', en: 'a tiny bell on a toy ball placed in front of it', keys: ['玩具', '球', '玩'] },
+    { cn: '一本小菜谱', hold: '小爪里捧着', en: 'holding a tiny cookbook in its paws', keys: ['菜谱', '做饭', '煮', '厨房', '烘焙'] },
+    { cn: '一顶小渔夫帽', hold: '头顶戴着', en: 'wearing a tiny bucket hat on its head', keys: ['渔夫帽', '遮阳', '钓鱼'] },
 
     // ---- 「每日造型道具」: 2026-10-28 新增 22 件 ----
     //   ⚠️ 为什么单独一批: 兜底挑道具时只从这批里挑 → 「一块小磨刀石」「一块小砖头」
@@ -583,58 +687,58 @@
     //     「当天记忆里挑出来」那条路出现（用户明确要求"道具服饰应该在记忆里匹配"）。
     //   ⚠️ series = 跟衣服配套用（同一个系列的才搭，见 dailyLookFor）。
     //   ⚠️ keys 一律用【具体的词】，别用单字泛词（吃/玩/睡…）→ 那会让所有人撞同一个道具。
-    { cn: '一盒马卡龙', en: 'a small pastel box of macarons', keys: ['马卡龙', '甜点', '饼干'], series: 'sweet', daily: true },
-    { cn: '一块小蛋糕', en: 'a tiny slice of pink strawberry cake', keys: ['蛋糕', '奶油蛋糕'], series: 'sweet', daily: true },
-    { cn: '一支棉花糖', en: 'a big fluffy pink marshmallow on a stick', keys: ['棉花糖', '糖霜'], series: 'sweet', daily: true },
-    { cn: '一杯奶昔', en: 'a tall strawberry milkshake with a cherry on top', keys: ['奶昔', '奶昔杯'], series: 'sweet', daily: true },
+    { cn: '一盒马卡龙', hold: '两只小爪捧着', en: 'holding a small pastel box of macarons in its paws', keys: ['马卡龙', '甜点', '饼干'], series: 'sweet', daily: true },
+    { cn: '一块小蛋糕', hold: '两只小爪捧着', en: 'holding a tiny slice of pink strawberry cake in its paws', keys: ['蛋糕', '奶油蛋糕'], series: 'sweet', daily: true },
+    { cn: '一支棉花糖', hold: '小爪里举着', en: 'holding up a big fluffy pink marshmallow on a stick in its paw', keys: ['棉花糖', '糖霜'], series: 'sweet', daily: true },
+    { cn: '一杯奶昔', hold: '两只小爪捧着', en: 'holding a tall strawberry milkshake with a cherry on top in its paws', keys: ['奶昔', '奶昔杯'], series: 'sweet', daily: true },
 
-    { cn: '一把蕾丝伞', en: 'a frilly white lace parasol', keys: ['蕾丝', '阳伞', '洋伞'], series: 'fairy', daily: true },
-    { cn: '一顶珍珠冠', en: 'a tiny crown strung with pearls', keys: ['珍珠冠', '珍珠'], series: 'fairy', daily: true },
-    { cn: '一双水晶鞋', en: 'a pair of tiny sparkling crystal slippers', keys: ['水晶鞋', '水晶'], series: 'fairy', daily: true },
-    { cn: '一颗粉钻', en: 'a sparkling pink diamond', keys: ['粉钻', '钻石'], series: 'fairy', daily: true },
+    { cn: '一把蕾丝伞', hold: '头顶撑着', en: 'holding up a frilly white lace parasol above its head', keys: ['蕾丝', '阳伞', '洋伞'], series: 'fairy', daily: true },
+    { cn: '一顶珍珠冠', hold: '头顶戴着', en: 'wearing a tiny crown strung with pearls on its head', keys: ['珍珠冠', '珍珠'], series: 'fairy', daily: true },
+    { cn: '一双水晶鞋', hold: '小爪里捧着', en: 'holding a pair of tiny sparkling crystal slippers in its paws', keys: ['水晶鞋', '水晶'], series: 'fairy', daily: true },
+    { cn: '一颗粉钻', hold: '小爪里捧着', en: 'holding a sparkling pink diamond in its paws', keys: ['粉钻', '钻石'], series: 'fairy', daily: true },
 
-    { cn: '一颗小行星', en: 'a tiny ringed planet floating above its paw', keys: ['小行星', '行星', '星球'], series: 'galaxy', daily: true },
-    { cn: '一枚彗星尾', en: 'a tiny comet with a sparkling icy tail', keys: ['彗星', '彗尾'], series: 'galaxy', daily: true },
-    { cn: '一枚流星徽章', en: 'a glowing shooting-star badge', keys: ['流星', '流星徽章'], series: 'galaxy', daily: true },
-    { cn: '一顶太空盔', en: 'a round glass astronaut helmet', keys: ['太空', '宇航', '太空盔'], series: 'galaxy', daily: true },
+    { cn: '一颗小行星', hold: '小爪上托着', en: 'a tiny ringed planet floating just above its paw', keys: ['小行星', '行星', '星球'], series: 'galaxy', daily: true },
+    { cn: '一枚彗星尾', hold: '身旁飘着', en: 'a tiny comet with a sparkling icy tail floating beside it', keys: ['彗星', '彗尾'], series: 'galaxy', daily: true },
+    { cn: '一枚流星徽章', hold: '小爪里捧着', en: 'holding a glowing shooting-star badge in its paws', keys: ['流星', '流星徽章'], series: 'galaxy', daily: true },
+    { cn: '一顶太空盔', hold: '头顶戴着', en: 'wearing a round glass astronaut helmet on its head', keys: ['太空', '宇航', '太空盔'], series: 'galaxy', daily: true },
 
-    { cn: '一把团扇', en: 'a round silk fan painted with plum blossoms', keys: ['团扇', '绢扇'], series: 'oriental', daily: true },
-    { cn: '一枚玉如意', en: 'a pale jade ruyi scepter', keys: ['如意', '玉如意', '玉佩'], series: 'oriental', daily: true },
-    { cn: '一盏宫灯', en: 'a tiny ornate palace lantern', keys: ['宫灯', '花灯'], series: 'oriental', daily: true },
-    { cn: '一支小毛笔', en: 'a tiny calligraphy brush with a red tassel', keys: ['毛笔', '书法', '笔墨'], series: 'oriental', daily: true },
+    { cn: '一把团扇', hold: '小爪里握着', en: 'holding a round silk fan painted with plum blossoms in its paw', keys: ['团扇', '绢扇'], series: 'oriental', daily: true },
+    { cn: '一枚玉如意', hold: '小爪里握着', en: 'holding a pale jade ruyi scepter in its paw', keys: ['如意', '玉如意', '玉佩'], series: 'oriental', daily: true },
+    { cn: '一盏宫灯', hold: '小爪里提着', en: 'dangling a tiny ornate palace lantern from a string in its paw', keys: ['宫灯', '花灯'], series: 'oriental', daily: true },
+    { cn: '一支小毛笔', hold: '小爪里握着', en: 'holding a tiny calligraphy brush with a red tassel in its paw', keys: ['毛笔', '书法', '笔墨'], series: 'oriental', daily: true },
 
-    { cn: '一只小海星', en: 'a plump pink starfish', keys: ['海星'], series: 'ocean', daily: true },
-    { cn: '一串珠贝', en: 'a string of pearl-like seashells', keys: ['珠贝', '贝壳'], series: 'ocean', daily: true },
-    { cn: '一只水母灯', en: 'a tiny glowing jellyfish lantern', keys: ['水母', '水母灯'], series: 'ocean', daily: true },
+    { cn: '一只小海星', hold: '小爪里捧着', en: 'holding a plump pink starfish in its paws', keys: ['海星'], series: 'ocean', daily: true },
+    { cn: '一串珠贝', hold: '小爪里捧着', en: 'holding a string of pearl-like seashells in its paws', keys: ['珠贝', '贝壳'], series: 'ocean', daily: true },
+    { cn: '一只水母灯', hold: '身旁飘着', en: 'a tiny glowing jellyfish lantern floating beside it', keys: ['水母', '水母灯'], series: 'ocean', daily: true },
 
-    { cn: '一根小魔杖', en: 'a tiny star-tipped magic wand', keys: ['魔杖', '魔法棒'], series: 'magic', daily: true },
-    { cn: '一颗许愿星', en: 'a glowing wish star', keys: ['许愿', '许愿星'], series: 'magic', daily: true },
-    { cn: '一只精灵灯', en: 'a tiny glowing fairy lantern', keys: ['精灵', '精灵灯'], series: 'magic', daily: true },
+    { cn: '一根小魔杖', hold: '小爪里握着', en: 'holding a tiny star-tipped magic wand in its paw', keys: ['魔杖', '魔法棒'], series: 'magic', daily: true },
+    { cn: '一颗许愿星', hold: '身旁飘着', en: 'a glowing wish star floating beside it', keys: ['许愿', '许愿星'], series: 'magic', daily: true },
+    { cn: '一只精灵灯', hold: '小爪里提着', en: 'dangling a tiny glowing fairy lantern from a string in its paw', keys: ['精灵', '精灵灯'], series: 'magic', daily: true },
 
     // ---- 第二批（2026-10-28 补）: 每日造型道具 22 → 40 件 ----
-    { cn: '一只甜甜圈', en: 'a pink frosted doughnut with rainbow sprinkles', keys: ['甜甜圈', '糖霜圈'], series: 'sweet', daily: true },
-    { cn: '一块提拉米苏', en: 'a slice of tiramisu dusted with cocoa', keys: ['提拉米苏', '提拉米苏块'], series: 'sweet', daily: true },
-    { cn: '一支甜筒', en: 'a melting pastel ice cream cone', keys: ['雪糕', '冰淇淋', '甜筒'], series: 'sweet', daily: true },
+    { cn: '一只甜甜圈', hold: '小爪里捧着', en: 'holding a pink frosted doughnut with rainbow sprinkles in its paws', keys: ['甜甜圈', '糖霜圈'], series: 'sweet', daily: true },
+    { cn: '一块提拉米苏', hold: '小爪里捧着', en: 'holding a slice of tiramisu dusted with cocoa in its paws', keys: ['提拉米苏', '提拉米苏块'], series: 'sweet', daily: true },
+    { cn: '一支甜筒', hold: '小爪里举着', en: 'holding up a melting pastel ice cream cone in its paw', keys: ['雪糕', '冰淇淋', '甜筒'], series: 'sweet', daily: true },
 
-    { cn: '一只独角兽角', en: 'a tiny spiraled unicorn horn', keys: ['独角兽', '独角兽角'], series: 'fairy', daily: true },
-    { cn: '一顶花冠', en: 'a wreath of tiny pink roses', keys: ['花冠', '玫瑰冠'], series: 'fairy', daily: true },
-    { cn: '一把仙女棒', en: 'a tiny star-tipped fairy wand', keys: ['仙女棒', '仙杖'], series: 'fairy', daily: true },
+    { cn: '一只独角兽角', hold: '小爪里捧着', en: 'holding a tiny spiraled unicorn horn in its paws', keys: ['独角兽', '独角兽角'], series: 'fairy', daily: true },
+    { cn: '一顶花冠', hold: '头顶戴着', en: 'wearing a wreath of tiny pink roses on its head', keys: ['花冠', '玫瑰冠'], series: 'fairy', daily: true },
+    { cn: '一把仙女棒', hold: '小爪里握着', en: 'holding a tiny star-tipped fairy wand in its paw', keys: ['仙女棒', '仙杖'], series: 'fairy', daily: true },
 
-    { cn: '一台小火箭', en: 'a tiny toy rocket ship', keys: ['飞行器', '小火箭', '火箭'], series: 'galaxy', daily: true },
-    { cn: '一张星图', en: 'a tiny glowing star map scroll', keys: ['星图', '星海图'], series: 'galaxy', daily: true },
-    { cn: '一枚陨石', en: 'a smooth glowing meteorite', keys: ['陨石', '陨石块'], series: 'galaxy', daily: true },
+    { cn: '一台小火箭', hold: '小爪里举着', en: 'holding up a tiny toy rocket ship in its paw', keys: ['飞行器', '小火箭', '火箭'], series: 'galaxy', daily: true },
+    { cn: '一张星图', hold: '小爪里摊着', en: 'holding a tiny glowing star map scroll open in its paws', keys: ['星图', '星海图'], series: 'galaxy', daily: true },
+    { cn: '一枚陨石', hold: '小爪里捧着', en: 'holding a smooth glowing meteorite in its paws', keys: ['陨石', '陨石块'], series: 'galaxy', daily: true },
 
-    { cn: '一枚香囊', en: 'a tiny embroidered silk sachet', keys: ['香囊', '荷包', '香包'], series: 'oriental', daily: true },
-    { cn: '一枚玉坠', en: 'a pale jade pendant on a red cord', keys: ['吊坠', '平安扣', '玉坠'], series: 'oriental', daily: true },
-    { cn: '一面小铜镜', en: 'a tiny round bronze mirror', keys: ['铜镜', '小镜子', '镜子'], series: 'oriental', daily: true },
+    { cn: '一枚香囊', hold: '小爪里捧着', en: 'holding a tiny embroidered silk sachet in its paws', keys: ['香囊', '荷包', '香包'], series: 'oriental', daily: true },
+    { cn: '一枚玉坠', hold: '脖子上挂着', en: 'wearing a pale jade pendant on a red cord around its neck', keys: ['吊坠', '平安扣', '玉坠'], series: 'oriental', daily: true },
+    { cn: '一面小铜镜', hold: '小爪里握着', en: 'holding a tiny round bronze mirror in its paw', keys: ['铜镜', '小镜子', '镜子'], series: 'oriental', daily: true },
 
-    { cn: '一只海螺号', en: 'a tiny spiral conch shell', keys: ['海螺', '螺号'], series: 'ocean', daily: true },
-    { cn: '一朵小水花', en: 'a tiny crown of ocean foam', keys: ['水花', '浪花', '泡沫'], series: 'ocean', daily: true },
-    { cn: '一只小螃蟹', en: 'a tiny cute pink crab', keys: ['螃蟹', '小螃蟹', '蟹钳'], series: 'ocean', daily: true },
+    { cn: '一只海螺号', hold: '小爪里举着', en: 'holding up a tiny spiral conch shell in its paw', keys: ['海螺', '螺号'], series: 'ocean', daily: true },
+    { cn: '一朵小水花', hold: '身旁飘着', en: 'a tiny crown of ocean foam floating beside it', keys: ['水花', '浪花', '泡沫'], series: 'ocean', daily: true },
+    { cn: '一只小螃蟹', hold: '小爪里夹着', en: 'clamping a tiny cute pink crab in its paw', keys: ['螃蟹', '小螃蟹', '蟹钳'], series: 'ocean', daily: true },
 
-    { cn: '一顶睡帽', en: 'a floppy striped nightcap', keys: ['睡帽', '夜帽', '尖顶睡帽'], series: 'magic', daily: true },
-    { cn: '一只许愿瓶', en: 'a tiny glass wishing bottle with a cork', keys: ['许愿瓶', '玻璃瓶'], series: 'magic', daily: true },
-    { cn: '一颗幸运珠', en: 'a tiny four-leaf clover charm', keys: ['幸运珠', '四叶草', '幸运草'], series: 'magic', daily: true }
+    { cn: '一顶睡帽', hold: '头顶戴着', en: 'wearing a floppy striped nightcap on its head', keys: ['睡帽', '夜帽', '尖顶睡帽'], series: 'magic', daily: true },
+    { cn: '一只许愿瓶', hold: '小爪里捧着', en: 'holding a tiny glass wishing bottle with a cork in its paws', keys: ['许愿瓶', '玻璃瓶'], series: 'magic', daily: true },
+    { cn: '一颗幸运珠', hold: '小爪里捧着', en: 'holding a tiny four-leaf clover charm in its paws', keys: ['幸运珠', '四叶草', '幸运草'], series: 'magic', daily: true }
   ];
 
   // ⚠️【2026-10-28 用户实测】「所有用户的宠物服饰描述都是拿个小碗一双白手套」
@@ -708,120 +812,144 @@
   //   → 鹦鹉单独一套【鸟穿得上的衣服】: 领结/帽/围巾/斗篷/皇冠/花环/背带/头饰…
   //   series 沿用那 6 个系列 → 兜底挑道具时还是「衣服和道具配套」。
   const PARROT_OUTFITS = [
-    { cn: '围着奶油领结的', en: 'wearing a big fluffy cream whipped-cream bow tie around its neck', series: 'sweet' },
-    { cn: '戴着小饼干帽的', en: 'wearing a puffy pink marshmallow hat with a tiny cookie on top', series: 'sweet' },
-    { cn: '套着草莓围兜的', en: 'wearing a red strawberry-patterned bib around its neck', series: 'sweet' },
-    { cn: '系着棒棒糖丝带的', en: 'wearing a ribbon around its neck with a swirled pink lollipop hanging from it', series: 'sweet' },
-
-    { cn: '戴着珍珠小皇冠的', en: 'wearing a pearl-studded tiny crown on its head', series: 'fairy' },
-    { cn: '围着蕾丝领巾的', en: 'wearing a white lace ruffled collar around its neck', series: 'fairy' },
-    { cn: '戴着小花环的', en: 'wearing a wreath of tiny pastel flowers on its head', series: 'fairy' },
-    { cn: '肩披小斗篷的', en: 'wearing a tiny plush deep-pink velvet cape over its shoulders', series: 'fairy' },
-
-    { cn: '围着流星围巾的', en: 'wearing a scarf patterned with shooting stars around its neck', series: 'galaxy' },
-    { cn: '戴着小宇航头盔的', en: 'wearing a round glass astronaut helmet with a golden ring', series: 'galaxy' },
-    { cn: '背着喷气小背包的', en: 'wearing a tiny silver jetpack backpack with blue thrusters', series: 'galaxy' },
-    { cn: '披着极光小纱的', en: 'draped in a tiny shimmering aurora shawl in green and violet', series: 'galaxy' },
-
-    { cn: '戴着竹斗笠的', en: 'wearing a woven bamboo conical hat', series: 'oriental' },
-    { cn: '系着祥云腰封的', en: 'wearing a golden auspicious-cloud sash wrapped around its body', series: 'oriental' },
-    { cn: '簪着点翠发簪的', en: 'wearing a blue kingfisher-feather hairpin', series: 'oriental' },
-    { cn: '围着红绸小披帛的', en: 'wearing a flowing red silk shawl draped around its shoulders', series: 'oriental' },
-
-    { cn: '戴着贝壳发夹的', en: 'wearing a pearlescent seashell hair clip', series: 'ocean' },
-    { cn: '围着浪花围巾的', en: 'wearing a scarf of foamy turquoise waves around its neck', series: 'ocean' },
-    { cn: '戴着小圆潜水镜的', en: 'wearing a round teal diving mask over its eyes', series: 'ocean' },
-    { cn: '套着救生圈的', en: 'wearing a pink-and-white striped swim ring around its body', series: 'ocean' },
-
-    { cn: '戴着巫师尖帽的', en: 'wearing a pointed purple wizard hat with gold stars', series: 'magic' },
-    { cn: '戴着兔耳兜帽的', en: 'wearing a hood with long floppy bunny ears', series: 'magic' },
-    { cn: '背着魔法书包的', en: 'carrying a starry spellbook backpack on its back', series: 'magic' },
-    { cn: '围着星星小披肩的', en: 'wearing a tiny starry knitted shawl around its shoulders', series: 'magic' },
+    { cn: '围着奶油领结、戴着小饼干帽和系着白缎带的', en: 'wearing a big fluffy cream bow tie, a puffy cookie hat and a white ribbon', series: 'sweet' },
+    { cn: '套着草莓小围兜、围着奶油色小围巾和戴着小花环的', en: 'wearing a red strawberry bib, a cream scarf and a wreath of tiny flowers', series: 'sweet' },
+    { cn: '戴着珍珠小皇冠、围着蕾丝领巾和肩披小斗篷的', en: 'wearing a pearl crown, a white lace ruffled collar and a tiny cape over its shoulders', series: 'sweet' },
+    { cn: '背着喷气小背包、戴着小宇航头盔和围着流星小围巾的', en: 'wearing a tiny silver jetpack backpack, a small astronaut helmet and a shooting-star scarf', series: 'sweet' },
+    { cn: '系着竹叶小腰封、戴着竹斗笠和围着红绸小披帛的', en: 'wearing a bamboo-pattern sash, a woven conical hat and a red silk shawl', series: 'sweet' },
+    { cn: '簪着点翠小发簪、系着小腰封和披着淡青小披帛的', en: 'wearing a kingfisher-feather hairpin, a slim sash and a pale blue silk shawl', series: 'fairy' },
+    { cn: '戴着贝壳发夹、围着浪花小围巾和套着救生圈的', en: 'wearing a seashell hair clip, a foamy wave scarf and a striped swim ring', series: 'fairy' },
+    { cn: '戴着兔耳兜帽、围着星星小披肩和背着魔法小书包的', en: 'wearing a bunny-ear hood, a starry knitted shawl and a starry spellbook backpack', series: 'fairy' },
+    { cn: '戴着巫师尖帽、系着小格纹领结和披着小斗篷的', en: 'wearing a pointed purple wizard hat, a tiny plaid bow tie and a little cape', series: 'fairy' },
+    { cn: '戴着荷叶边小帽、系着奶油领结和围着薄荷小围巾的', en: 'wearing a soft hat with a ruffled brim, a cream bow tie and a mint scarf', series: 'fairy' },
+    { cn: '套着小雨衣、戴着雨帽和系着白色小围巾的', en: 'wearing a tiny yellow raincoat, a rain hood and a white scarf', series: 'galaxy' },
+    { cn: '系着小扣马甲、戴着小饼干帽和围着小毛线围巾的', en: 'wearing a little buttoned top, a cookie hat and a tiny knitted scarf', series: 'galaxy' },
+    { cn: '围着星星小围脖、戴着星星小发箍和披着小斗篷的', en: 'wearing a soft star-printed scarf, a star headband and a little cape', series: 'galaxy' },
+    { cn: '戴着珊瑚小花环、系着缎带小领结和套着奶油小围兜的', en: 'wearing a coral flower wreath, a satin bow tie and a cream bib', series: 'galaxy' },
+    { cn: '围着海盐色小围巾、戴着贝壳小发夹和背着蓝小书包的', en: 'wearing a sea-salt scarf, a shell hair clip and a little blue backpack', series: 'galaxy' },
+    { cn: '戴着薄荷小荷叶帽、围着白蕾丝领巾和系着粉缎带的', en: 'wearing a mint ruffled hat, a white lace collar and a pink satin ribbon', series: 'oriental' },
+    { cn: '披着极光小纱、戴着星星小发箍和系着白缎带的', en: 'wearing a shimmering aurora shawl, a star headband and a white satin ribbon', series: 'oriental' },
+    { cn: '戴着红缨小帽、系着竹叶小腰封和围着淡青小披帛的', en: 'wearing a red-tasseled cap, a bamboo-pattern sash and a pale blue shawl', series: 'oriental' },
+    { cn: '套着草莓小围兜、系着棒棒糖丝带和戴着小饼干帽的', en: 'wearing a strawberry bib, a lollipop ribbon and a little cookie hat', series: 'oriental' },
+    { cn: '围着蕾丝小领巾、背着喷气小背包和戴着小花环的', en: 'wearing a white lace ruffled collar, a tiny jetpack backpack and a flower wreath', series: 'oriental' },
+    { cn: '系着奶油小领结、披着天鹅绒小斗篷和戴着小花环的', en: 'wearing a cream bow tie, a plush velvet cape and a wreath of tiny flowers', series: 'ocean' },
+    { cn: '戴着竹斗笠、围着竹叶小腰封和系着小铃铛腰坠的', en: 'wearing a woven bamboo hat, a bamboo-pattern sash and a tiny bell charm', series: 'ocean' },
+    { cn: '围着浪花小围巾、簪着贝壳小发簪和套着救生圈的', en: 'wearing a foamy wave scarf, a shell hairpin and a striped swim ring', series: 'ocean' },
+    { cn: '戴着兔耳兜帽、系着星星小领结和披着小斗篷的', en: 'wearing a bunny-ear hood, a star bow tie and a little cape', series: 'ocean' },
+    { cn: '戴着圆形小潜水镜、系着海蓝小领结和背着蓝小书包的', en: 'wearing a round teal diving mask, a sea-blue bow tie and a little blue backpack', series: 'magic' },
+    { cn: '围着薄荷小围巾、戴着小饼干帽和系着粉缎带的', en: 'wearing a mint scarf, a cookie hat and a pink satin ribbon', series: 'magic' },
+    { cn: '披着星星小披肩、戴着紫尖帽和系着黄缎带的', en: 'wearing a starry knitted shawl, a pointed purple hat and a yellow satin ribbon', series: 'magic' },
+    { cn: '戴着奶油小皇冠、围着珊瑚色小围巾和背着星星小书包的', en: 'wearing a cream crown, a coral scarf and a starry little backpack', series: 'magic' },
   ];
   const BEAST_OUTFITS = [
     // ---- 甜品系 sweet ----
-    { cn: '系着奶油蝴蝶结的', en: 'wearing a big fluffy cream whipped-cream bow', series: 'sweet' },
-    { cn: '穿着草莓裙的', en: 'wearing a red strawberry dress with tiny yellow seeds', series: 'sweet' },
-    { cn: '戴着棉花糖帽的', en: 'wearing a puffy pink marshmallow hat', series: 'sweet' },
-    { cn: '捧着马卡龙盘的', en: 'holding a tiny plate of pastel macarons', series: 'sweet' },
-    { cn: '围着格纹围裙的', en: 'wearing a frilly gingham checkered apron', series: 'sweet' },
-    { cn: '顶着小蛋糕的', en: 'with a tiny slice of layered cake balanced on its head', series: 'sweet' },
-    { cn: '穿着焦糖背心的', en: 'wearing a caramel-brown knitted vest', series: 'sweet' },
-    { cn: '挂着小棒棒糖的', en: 'with a swirled pink lollipop on a ribbon', series: 'sweet' },
-    { cn: '戴着巧克力贝雷帽的', en: 'wearing a chocolate-brown beret with a tiny cherry', series: 'sweet' },
-    { cn: '套着奶泡长袜的', en: 'wearing long cream socks with whipped-cream frills', series: 'sweet' },
-    { cn: '捧着热可可的', en: 'holding a steaming mug of hot cocoa', series: 'sweet' },
-    { cn: '别着薄荷糖的', en: 'with a mint candy pinned to its chest', series: 'sweet' },
+    { cn: '穿着草莓背带裙、系着奶油蝴蝶结和套着奶泡长袜的', en: 'wearing a red strawberry pinafore dress, a cream satin bow tie and long cream whipped-cream socks', series: 'sweet' },
+    { cn: '穿着粉彩背带裤、围着小毛线围巾和戴着小圆帽的', en: 'wearing pastel rainbow dungarees, a tiny knitted scarf and a round wool hat', series: 'sweet' },
+    { cn: '穿着奶油色背带裙、系着缎面小领结和穿着小白鞋的', en: 'wearing a cream pinafore dress over a white shirt, a satin bow tie and tiny white shoes', series: 'sweet' },
+    { cn: '穿着草莓小围兜、围着棒棒糖花边小围巾和套着奶泡长袜的', en: 'wearing a red strawberry bib, a lollipop-patterned scarf and whipped-cream socks', series: 'sweet' },
+    { cn: '穿着白泡泡袖小衬衫、围着格纹小围裙和系着焦糖色腰带的', en: 'wearing a white blouse with big puffed sleeves, a gingham apron and a caramel belt', series: 'sweet' },
+    { cn: '穿着焦糖色小背心、套着草莓粉小棉袄和戴着小手套的', en: 'wearing a caramel knitted vest under a padded pink strawberry-print jacket, with little mittens', series: 'sweet' },
+    { cn: '穿着热可可色毛衣、围着小毛线围巾和戴着小手套的', en: 'wearing a soft cocoa-brown knitted sweater, a tiny knitted scarf and little mittens', series: 'sweet' },
+    { cn: '穿着草莓粉小棉袄、系着奶油蝴蝶结和套着奶泡长袜的', en: 'wearing a padded pink strawberry-print jacket, a cream bow tie and whipped-cream socks', series: 'sweet' },
+    { cn: '穿着粉彩色小雨衣、套着奶泡长袜和穿着小黄靴的', en: 'wearing a pastel pink raincoat, cream socks and tiny yellow boots', series: 'sweet' },
+    { cn: '穿着奶油色背带裙、围着草莓小围兜和戴着小饼干帽的', en: 'wearing a cream pinafore dress, a strawberry bib and a little cookie hat', series: 'sweet' },
+    { cn: '穿着草莓泡泡袖连衣裙、套着奶泡长袜和穿着小皮鞋的', en: 'wearing a red strawberry dress with puffed sleeves, whipped-cream socks and tiny leather shoes', series: 'sweet' },
+    { cn: '穿着巧克力色小背心、围着奶油色围裙和系着薄荷绿丝带的', en: 'wearing a chocolate-brown vest, a cream apron and a mint-green ribbon', series: 'sweet' },
+    { cn: '穿着马卡龙色背带裙、系着棉花糖小领结和套着奶泡长袜的', en: 'wearing a pastel macaron pinafore dress, a marshmallow bow tie and whipped-cream socks', series: 'sweet' },
+    { cn: '穿着热可可色开衫和白衬衫、系着奶油小领结的', en: 'wearing a cocoa-brown cardigan, a white shirt and a cream bow tie', series: 'sweet' },
+    { cn: '穿着奶油色小斗篷、系着草莓小围兜和戴着小手套的', en: 'wearing a tiny cream cape, a strawberry bib and little mittens', series: 'sweet' },
+    { cn: '穿着草莓背带裙、围着小毛线围巾和穿着小白鞋的', en: 'wearing a red strawberry pinafore dress, a tiny knitted scarf and tiny white shoes', series: 'sweet' },
 
     // ---- 童话系 fairy ----
-    { cn: '拖着蕾丝长裙的', en: 'wearing a long white lace princess dress with a ruffled hem', series: 'fairy' },
-    { cn: '戴着珍珠小皇冠的', en: 'wearing a pearl-studded tiny crown', series: 'fairy' },
-    { cn: '披着天鹅绒斗篷的', en: 'wearing a plush deep-pink velvet cape', series: 'fairy' },
-    { cn: '系着缎面蝴蝶结的', en: 'wearing a big glossy satin ribbon collar', series: 'fairy' },
-    { cn: '撑着一把蕾丝伞的', en: 'holding a frilly white lace parasol', series: 'fairy' },
-    { cn: '穿着蓬蓬纱裙的', en: 'wearing a puffy layered tulle ballet dress', series: 'fairy' },
-    { cn: '戴着花环的', en: 'wearing a wreath of tiny pastel flowers', series: 'fairy' },
-    { cn: '提着水晶鞋的', en: 'holding a tiny sparkling crystal slipper', series: 'fairy' },
-    { cn: '穿着芭蕾舞鞋的', en: 'wearing tiny pink satin ballet shoes', series: 'fairy' },
-    { cn: '戴着星星发箍的', en: 'wearing a delicate star-shaped headband', series: 'fairy' },
-    { cn: '穿着荷叶边睡裙的', en: 'wearing a frilly satin nightgown', series: 'fairy' },
-    { cn: '别着珍珠胸针的', en: 'with a big pearl brooch pinned on its chest', series: 'fairy' },
+    { cn: '穿着蕾丝长裙、戴着珍珠小皇冠和套着白色小袜子的', en: 'wearing a long white lace princess dress, a pearl crown and white socks', series: 'fairy' },
+    { cn: '穿着蓬蓬纱裙、系着缎面蝴蝶结和穿着芭蕾舞鞋的', en: 'wearing a puffy layered tulle dress, a satin ribbon collar and tiny ballet shoes', series: 'fairy' },
+    { cn: '穿着荷叶边睡裙、披着天鹅绒小斗篷和戴着小手套的', en: 'wearing a frilly satin nightgown, a plush velvet cape and little mittens', series: 'fairy' },
+    { cn: '穿着白衬衫背带裙、系着缎面蝴蝶结和戴着小花环的', en: 'wearing a white shirt under a soft pinafore dress, a satin ribbon and a flower wreath', series: 'fairy' },
+    { cn: '穿着水晶鞋、披着蕾丝小披肩和戴着小圆帽的', en: 'wearing tiny crystal slippers, a frilly lace shawl and a round hat', series: 'fairy' },
+    { cn: '穿着淡粉纱裙、戴着绣花小手套和系着珍珠小腰带的', en: 'wearing a pale pink tulle dress, embroidered lace gloves and a pearl-beaded belt', series: 'fairy' },
+    { cn: '穿着淡粉小纱裙、戴着星星发箍和穿着粉纱小凉鞋的', en: 'wearing a pale pink tulle dress, a star headband and tiny pink sandals', series: 'fairy' },
+    { cn: '穿着薰衣草色纱裙、系着珍珠小腰带和戴着小手套的', en: 'wearing a lavender tulle dress, a pearl-beaded belt and little mittens', series: 'fairy' },
+    { cn: '穿着白色小围裙、系着蕾丝领结和穿着小玛丽珍鞋的', en: 'wearing a white pinafore apron, a lace bow tie and tiny mary-jane shoes', series: 'fairy' },
+    { cn: '穿着薄荷绿背带裙、戴着绣花小手套和系着缎面小领结的', en: 'wearing a mint-green pinafore dress, embroidered lace gloves and a satin bow tie', series: 'fairy' },
+    { cn: '穿着泡泡袖小洋装、围着蕾丝小领巾和套着白色小袜子的', en: 'wearing a puffy-sleeved party dress, a lace ruffled collar and white socks', series: 'fairy' },
+    { cn: '穿着粉白背带裙、别着珍珠小胸针和穿着小皮鞋的', en: 'wearing a pink-and-white pinafore dress, a pearl brooch and tiny leather shoes', series: 'fairy' },
+    { cn: '穿着奶油色针织开衫、系着缎面蝴蝶结和围着淡粉小围巾的', en: 'wearing a cream knitted cardigan, a satin ribbon and a pale pink scarf', series: 'fairy' },
+    { cn: '穿着浅紫纱裙、戴着珍珠小皇冠和系着白缎带的', en: 'wearing a light purple tulle dress, a pearl crown and a white satin ribbon', series: 'fairy' },
+    { cn: '穿着白背带裙、系着蕾丝围兜和穿着小皮鞋的', en: 'wearing a white pinafore dress, a lace bib and tiny leather shoes', series: 'fairy' },
+    { cn: '穿着淡紫小斗篷、戴着绣花小手套和系着缎面小腰带的', en: 'wearing a lavender cape, embroidered lace gloves and a satin belt', series: 'fairy' },
 
     // ---- 星际系 galaxy ----
-    { cn: '披着星光斗篷的', en: 'wearing a midnight-blue cape scattered with glowing stars', series: 'galaxy' },
-    { cn: '戴着宇航头盔的', en: 'wearing a round glass astronaut helmet with a golden ring', series: 'galaxy' },
-    { cn: '围着流星围巾的', en: 'wearing a scarf patterned with shooting stars', series: 'galaxy' },
-    { cn: '背着喷气小背包的', en: 'wearing a tiny silver jetpack backpack with blue thrusters', series: 'galaxy' },
-    { cn: '头顶小行星的', en: 'with a tiny ringed planet resting on its head', series: 'galaxy' },
-    { cn: '穿着银河长裙的', en: 'wearing a long dress of swirling purple and blue galaxy colors', series: 'galaxy' },
-    { cn: '举着月牙灯的', en: 'holding a glowing crescent-moon lantern', series: 'galaxy' },
-    { cn: '戴着彗星光环的', en: 'wearing a halo of a tiny comet with a sparkling tail', series: 'galaxy' },
-    { cn: '提着小卫星的', en: 'holding a tiny golden satellite with solar panels', series: 'galaxy' },
-    { cn: '套着宇宙连体衣的', en: 'wearing a starry navy space onesie', series: 'galaxy' },
-    { cn: '戴着行星光环的', en: 'wearing tiny glowing planet rings around its neck', series: 'galaxy' },
-    { cn: '披着极光纱的', en: 'draped in shimmering aurora fabric in green and violet', series: 'galaxy' },
+    { cn: '穿着银河长裙、戴着宇航头盔和套着白色小袜子的', en: 'wearing a long swirling galaxy dress, a round astronaut helmet and white socks', series: 'galaxy' },
+    { cn: '穿着宇宙连体衣、围着流星小围巾和戴着小手套的', en: 'wearing a starry navy space onesie, a shooting-star scarf and little mittens', series: 'galaxy' },
+    { cn: '穿着宇航连体服、套着星尘小靴子和戴着小头盔的', en: 'wearing a padded astronaut flight suit, starry boots and a small helmet', series: 'galaxy' },
+    { cn: '穿着流星雨亮片长裙、披着星光小斗篷和戴着小手套的', en: 'wearing a long sequin gown scattered with shooting stars, a starry cape and little mittens', series: 'galaxy' },
+    { cn: '穿着星星印花卫衣、系着银河小腰带和套着条纹小袜子的', en: 'wearing a soft hoodie printed with tiny stars, a galaxy belt and striped socks', series: 'galaxy' },
+    { cn: '穿着星云渐变小裙、戴着星星小发夹和穿着小皮鞋的', en: 'wearing a little dress fading from violet to blue like a nebula, a star hair clip and tiny shoes', series: 'galaxy' },
+    { cn: '穿着月牙图案睡衣、披着极光小纱和戴着小手套的', en: 'wearing soft pyjamas printed with crescent moons, an aurora shawl and little mittens', series: 'galaxy' },
+    { cn: '穿着星尘背带裤、戴着小宇航头盔和套着白袜子的', en: 'wearing starry dungarees, a small astronaut helmet and white socks', series: 'galaxy' },
+    { cn: '穿着夜光条纹睡衣、系着星星小领结和穿着毛绒小拖鞋的', en: 'wearing soft pyjamas with glowing stripes, a star bow tie and fluffy little slippers', series: 'galaxy' },
+    { cn: '穿着流星雨小雨衣、套着白色小袜子和穿着小黄靴的', en: 'wearing a tiny raincoat printed with shooting stars, white socks and small yellow boots', series: 'galaxy' },
+    { cn: '穿着亮片小披肩、围着小围巾和戴着小手套的', en: 'wearing a tiny sequined shawl, a small scarf and little mittens', series: 'galaxy' },
+    { cn: '穿着星轨背带裙、戴着彗尾小发夹和套着深蓝小袜子的', en: 'wearing a star-trail pinafore dress, a comet-tail hair clip and deep blue socks', series: 'galaxy' },
+    { cn: '穿着太空格子连体衣、系着星星小领结和套着白袜子的', en: 'wearing a navy plaid space onesie, a star bow tie and white socks', series: 'galaxy' },
+    { cn: '穿着银河小背心、围着流星围巾和套着星星小袜子的', en: 'wearing a galaxy-print vest, a shooting-star scarf and star-patterned socks', series: 'galaxy' },
+    { cn: '穿着彗尾亮片长裙、披着星光小斗篷和戴着小手套的', en: 'wearing a long comet-tail sequin dress, a starry cape and little mittens', series: 'galaxy' },
+    { cn: '穿着星星格纹背带裤、戴着宇航小帽和穿着小靴子的', en: 'wearing star-checked dungarees, a small space cap and tiny boots', series: 'galaxy' },
 
     // ---- 国风系 oriental ----
-    { cn: '穿着绣花汉服的', en: 'wearing a traditional Chinese hanfu robe with embroidered flowers', series: 'oriental' },
-    { cn: '戴着竹斗笠的', en: 'wearing a woven bamboo conical hat', series: 'oriental' },
-    { cn: '提着红灯笼的', en: 'holding a tiny red paper lantern', series: 'oriental' },
-    { cn: '系着祥云腰带的', en: 'wearing a belt with golden auspicious-cloud patterns', series: 'oriental' },
-    { cn: '簪着点翠发簪的', en: 'wearing a blue kingfisher-feather hairpin', series: 'oriental' },
-    { cn: '抱着小折扇的', en: 'holding a tiny silk folding fan', series: 'oriental' },
-    { cn: '穿着绣花鞋的', en: 'wearing tiny embroidered cloth shoes', series: 'oriental' },
-    { cn: '披着锦绣披帛的', en: 'wearing a flowing brocade silk shawl', series: 'oriental' },
-    { cn: '顶着虎头帽的', en: 'wearing a cute little tiger-head hood', series: 'oriental' },
-    { cn: '穿着团花旗袍的', en: 'wearing a red qipao with round floral patterns', series: 'oriental' },
-    { cn: '提着小铜铃的', en: 'holding a tiny brass bell with a red ribbon', series: 'oriental' },
-    { cn: '戴着玉镯的', en: 'wearing a pale green jade bangle', series: 'oriental' },
+    { cn: '穿着绣花汉服、系着祥云腰封和穿着绣花小鞋的', en: 'wearing a traditional embroidered hanfu robe, an auspicious-cloud sash and tiny embroidered shoes', series: 'oriental' },
+    { cn: '穿着团花旗袍、簪着点翠发簪和套着绣花小袜子的', en: 'wearing a red qipao with round floral patterns, a kingfisher hairpin and embroidered socks', series: 'oriental' },
+    { cn: '穿着红色立领小褂、系着盘扣腰封和穿着绣花小鞋的', en: 'wearing a red mandarin-collar jacket, a knotted-button sash and tiny embroidered shoes', series: 'oriental' },
+    { cn: '穿着小肚兜、围着红绸小披帛和簪着点翠发簪的', en: 'wearing a traditional belly band, a red silk shawl and a kingfisher-feather hairpin', series: 'oriental' },
+    { cn: '穿着青色对襟小衫、系着祥云腰带和戴着红缨小帽的', en: 'wearing a teal cross-collar shirt, an auspicious-cloud belt and a red-tasseled cap', series: 'oriental' },
+    { cn: '穿着盘扣小马甲、围着小肚兜和戴着小虎头帽的', en: 'wearing a little knotted-button vest, a belly band and a tiger-head hood', series: 'oriental' },
+    { cn: '穿着绣花小棉袄、系着盘扣腰封和穿着虎头小鞋的', en: 'wearing a padded floral cotton jacket, a knotted-button sash and tiny tiger-head shoes', series: 'oriental' },
+    { cn: '穿着明黄小圆领袍、戴着竹斗笠和系着淡青腰带的', en: 'wearing a bright yellow round-collar robe, a bamboo conical hat and a pale blue belt', series: 'oriental' },
+    { cn: '穿着月白云纹小袍、围着小肚兜和簪着金簪的', en: 'wearing a moon-white cloud-pattern robe, a belly band and a golden hairpin', series: 'oriental' },
+    { cn: '穿着绛红对襟小衫、系着绣花香囊腰坠和穿着绣花小鞋的', en: 'wearing a crimson cross-collar shirt, an embroidered sachet at the waist and tiny embroidered shoes', series: 'oriental' },
+    { cn: '穿着藕荷色小褙子、围着小肚兜和戴着金丝小发钗的', en: 'wearing a lilac open jacket, a belly band and a thin golden hairpin', series: 'oriental' },
+    { cn: '穿着米色小袍、系着墨绿腰封和戴着小虎头帽的', en: 'wearing a beige robe, a dark green sash and a tiger-head hood', series: 'oriental' },
+    { cn: '穿着红色小肚兜、围着金线小围裙和戴着小虎头帽的', en: 'wearing a red belly band, a gold-embroidered apron and a tiger-head hood', series: 'oriental' },
+    { cn: '穿着青色窄袖小袍、系着玉佩腰绦和穿着绣花小鞋的', en: 'wearing a teal narrow-sleeved robe, a jade waist pendant and tiny embroidered shoes', series: 'oriental' },
+    { cn: '穿着粉色缠枝小袄、围着小肚兜和簪着珠花小簪的', en: 'wearing a pink blossom-embroidered jacket, a belly band and a pearl-flower hairpin', series: 'oriental' },
+    { cn: '穿着玄色小圆领袍、戴着红缨小帽和系着金线腰封的', en: 'wearing a dark round-collar robe, a red-tasseled cap and a gold-thread sash', series: 'oriental' },
 
     // ---- 海洋系 ocean ----
-    { cn: '簪着贝壳发夹的', en: 'wearing a pearlescent seashell hair clip', series: 'ocean' },
-    { cn: '围着浪花围巾的', en: 'wearing a scarf of foamy turquoise waves', series: 'ocean' },
-    { cn: '穿着水母纱裙的', en: 'wearing a translucent glowing jellyfish dress', series: 'ocean' },
-    { cn: '抱着小海星灯的', en: 'holding a softly glowing starfish lantern', series: 'ocean' },
-    { cn: '戴着圆潜水镜的', en: 'wearing a round teal diving mask', series: 'ocean' },
-    { cn: '套着救生泡泡的', en: 'wearing a pink-and-white striped swim ring', series: 'ocean' },
-    { cn: '提着珊瑚手提袋的', en: 'carrying a coral-branch shaped handbag', series: 'ocean' },
-    { cn: '戴着鲸鱼帽的', en: 'wearing a soft blue whale-shaped hood', series: 'ocean' },
-    { cn: '穿着浪花短袜的', en: 'wearing socks with white wave patterns', series: 'ocean' },
-    { cn: '戴着小丑鱼帽的', en: 'wearing a tiny orange clownfish cap', series: 'ocean' },
-    { cn: '捧着一块海玻璃的', en: 'holding a smooth piece of pale green sea glass', series: 'ocean' },
-    { cn: '披着海藻斗篷的', en: 'wearing a seaweed-green cape with frilly edges', series: 'ocean' },
+    { cn: '穿着水母纱裙、围着浪花小围巾和套着白色小袜子的', en: 'wearing a translucent glowing jellyfish dress, a foamy wave scarf and white socks', series: 'ocean' },
+    { cn: '穿着小鲸鱼连体泳衣、戴着海玻璃珠项链和小凉鞋的', en: 'wearing a little whale-patterned swimsuit, a sea-glass bead necklace and tiny sandals', series: 'ocean' },
+    { cn: '穿着小渔夫背带裤、围着小海星小围巾和套着白袜子的', en: 'wearing little fisher dungarees, a starfish-patterned scarf and white socks', series: 'ocean' },
+    { cn: '穿着海星图案小雨衣、套着白袜子和穿着小黄靴的', en: 'wearing a tiny raincoat printed with starfish, white socks and small yellow boots', series: 'ocean' },
+    { cn: '穿着珊瑚色针织开衫、系着贝壳扣腰带和穿着小凉鞋的', en: 'wearing a coral-pink knitted cardigan, a shell-button belt and tiny sandals', series: 'ocean' },
+    { cn: '穿着浪花条纹小裙、戴着海玻璃珠项链和小贝壳发夹的', en: 'wearing a wave-striped little dress, a sea-glass bead necklace and a shell hair clip', series: 'ocean' },
+    { cn: '穿着泡泡纱小罩衫、围着海藻色小围巾和套着白袜子的', en: 'wearing a frothy tulle blouse, a seaweed-green scarf and white socks', series: 'ocean' },
+    { cn: '穿着海蓝小背带裙、戴着贝壳发夹和系着珍珠小腰带的', en: 'wearing a sea-blue pinafore dress, a shell hair clip and a pearl belt', series: 'ocean' },
+    { cn: '穿着海藻小斗篷、围着小海星围巾和套着蓝条纹小袜子的', en: 'wearing a seaweed-green cape, a small starfish scarf and blue-striped socks', series: 'ocean' },
+    { cn: '穿着白色小围裙、系着海蓝小腰带和穿着小凉鞋的', en: 'wearing a white pinafore apron, a sea-blue belt and tiny sandals', series: 'ocean' },
+    { cn: '穿着水波纹小连体衣、戴着小圆帽和套着白袜子的', en: 'wearing a soft wave-pattern onesie, a round hat and white socks', series: 'ocean' },
+    { cn: '穿着珊瑚粉小罩衫、围着泡泡纱小围裙和戴着小贝壳发夹的', en: 'wearing a coral-pink blouse, a frothy tulle apron and a little shell hair clip', series: 'ocean' },
+    { cn: '穿着浪花背带裙、系着海星小腰带和穿着小皮鞋的', en: 'wearing a wave-print pinafore dress, a starfish belt and tiny leather shoes', series: 'ocean' },
+    { cn: '穿着浅蓝小浴袍、围着小海藻围巾和套着白袜子的', en: 'wearing a pale blue bathrobe, a seaweed scarf and white socks', series: 'ocean' },
+    { cn: '穿着海星背带裤、戴着小贝壳发夹和套着蓝袜子的', en: 'wearing starfish dungarees, a little shell hair clip and blue socks', series: 'ocean' },
+    { cn: '穿着珊瑚小洋装、系着海玻璃珠项链和穿着小凉鞋的', en: 'wearing a coral party dress, a sea-glass bead necklace and tiny sandals', series: 'ocean' },
 
     // ---- 魔法萌系 magic ----
-    { cn: '戴着巫师尖帽的', en: 'wearing a pointed purple wizard hat with gold stars', series: 'magic' },
-    { cn: '背着魔法书包的', en: 'carrying a starry spellbook backpack', series: 'magic' },
-    { cn: '穿着泡泡袖裙的', en: 'wearing a dress with enormous puffed sleeves', series: 'magic' },
-    { cn: '戴着兔耳兜帽的', en: 'wearing a hood with long floppy bunny ears', series: 'magic' },
-    { cn: '穿着小熊睡衣的', en: 'wearing a fuzzy teddy-bear onesie', series: 'magic' },
-    { cn: '戴着猫耳帽的', en: 'wearing a soft cat-ear hat', series: 'magic' },
-    { cn: '背着蝴蝶翅膀的', en: 'wearing tiny shimmering butterfly wings', series: 'magic' },
-    { cn: '顶着小熊鼻的', en: 'with a tiny round teddy-bear nose on its muzzle', series: 'magic' },
-    { cn: '抱着小泰迪的', en: 'holding a tiny plush teddy bear', series: 'magic' },
-    { cn: '穿着恐龙连体衣的', en: 'wearing a mint-green dinosaur onesie with soft spikes', series: 'magic' },
-    { cn: '裹着星星小毯的', en: 'wrapped in a starry knitted blanket', series: 'magic' },
-    { cn: '捧着小水晶球的', en: 'holding a glowing crystal ball', series: 'magic' }
+    { cn: '穿着小熊睡衣、戴着猫耳帽和套着星星小袜子的', en: 'wearing a fuzzy teddy-bear onesie, a soft cat-ear hat and star-patterned socks', series: 'magic' },
+    { cn: '穿着恐龙连体衣、系着星星小领结和穿着毛绒小拖鞋的', en: 'wearing a mint-green dinosaur onesie, a star bow tie and fluffy little slippers', series: 'magic' },
+    { cn: '穿着泰迪背带裤、围着小毛线围巾和戴着小熊手套的', en: 'wearing teddy-bear dungarees, a tiny knitted scarf and little bear mittens', series: 'magic' },
+    { cn: '穿着泡泡袖小裙、戴着兔耳兜帽和套着星星小袜子的', en: 'wearing a dress with enormous puffed sleeves, a bunny-ear hood and star-patterned socks', series: 'magic' },
+    { cn: '穿着小魔女格纹裙、系着星星小领结和穿着小皮鞋的', en: 'wearing a purple plaid witch dress, a star bow tie and tiny leather shoes', series: 'magic' },
+    { cn: '穿着云朵图案睡衣、披着星星小毯和戴着小手套的', en: 'wearing soft pyjamas printed with tiny clouds, a starry blanket and little mittens', series: 'magic' },
+    { cn: '穿着水晶纱罩裙、戴着小星星发夹和套着白色小袜子的', en: 'wearing a gauzy tulle dress dotted with tiny crystal beads, a star hair clip and white socks', series: 'magic' },
+    { cn: '穿着星星印花卫衣、系着星星小腰带和套着长袜子的', en: 'wearing a soft hoodie printed with tiny stars, a star belt and long socks', series: 'magic' },
+    { cn: '穿着紫色小斗篷、戴着巫师尖帽和系着缎带小腰带的', en: 'wearing a little purple cape, a pointed wizard hat and a ribbon belt', series: 'magic' },
+    { cn: '穿着泡泡小雨衣、套着彩虹小袜子和穿着小黄靴的', en: 'wearing a puffy translucent raincoat, rainbow socks and tiny yellow boots', series: 'magic' },
+    { cn: '穿着米色小开衫、系着星星小领结和套着长袜子的', en: 'wearing a beige knitted cardigan, a star bow tie and long socks', series: 'magic' },
+    { cn: '穿着小熊背带裙、戴着猫耳帽和穿着小皮鞋的', en: 'wearing a teddy-bear pinafore dress, a cat-ear hat and tiny leather shoes', series: 'magic' },
+    { cn: '穿着星星格纹小裙、围着小毛线围巾和戴着小手套的', en: 'wearing a star-checked little dress, a tiny knitted scarf and little mittens', series: 'magic' },
+    { cn: '穿着星尘小卫衣、系着星星小领结和穿着小绒靴的', en: 'wearing a stardust hoodie, a star bow tie and tiny plush boots', series: 'magic' },
+    { cn: '穿着兔耳小睡衣、戴着猫耳帽和套着星星小袜子的', en: 'wearing bunny-ear pyjamas, a cat-ear hat and star-patterned socks', series: 'magic' },
+    { cn: '穿着水晶小背心裙、披着星星小披肩和戴着小手套的', en: 'wearing a beaded tulle pinafore dress, a starry shawl and little mittens', series: 'magic' },
+
   ];
   const BEAST_PALETTES = [
     { cn: '粉红', en: 'bubblegum pink' },
@@ -2121,7 +2249,7 @@
     //   名册上就只剩"小猫"，【看不见今天这身】
     //   （更新日志 v4.41 写的是"名册和照顾弹窗里能看见它今天这身"）。
     //   → 没有 appearance 也把今天这身（衣服 + 道具）带上。
-    const lookCn0 = todayLookCn(todayLookForSync(pet));
+    const lookCn0 = todayLookPhrase(todayLookForSync(pet));
     if (!a) {
       return lookCn0 ? base + ' · ' + lookCn0 : base;
     }
@@ -2140,14 +2268,16 @@
     if (pet.kind === 'cat' || pet.kind === 'dog') {
       // 猫狗没有盲盒配色 → 按种子定一个固定的（同一只永远同一个颜色）
       const pal = petPaletteFor(pet);
-      if (pal) parts.push(pal.cn + (a.identity || base));
+      if (pal) parts.push(pal.cn + '色' + (a.identity || base));
       else if (a.identity) parts.push(a.identity);
     } else {
       if (a.identity) parts.push(a.identity);
       if (a.palette) parts.push(a.palette);
     }
     if (a.marking) parts.push(a.marking);
-    const lookCn = todayLookCn(lk);
+    // ⚠️ 这段排在句尾 → 用【不带"的"】那版（"…、围着星星小披肩"），
+    //   别在句子末尾留一个孤零零的「的」。
+    const lookCn = todayLookPhrase(lk);
     if (lookCn) parts.push(lookCn);
     return parts.length ? parts.join('，') : base;
   }
@@ -3417,6 +3547,49 @@
     catch (e) { return true; }
   }
 
+  /**
+   * 桌宠信息 —— 给沙盒 iframe 画一份用 (2026-11-26)
+   *
+   * 【为什么】宿主在影院/读书屋底下是【彻底静默】的 (2026-11-05 / 11-19 为了不发烫),
+   *   宿主那份桌宠被 display:none → 沙盒里要看见同一只宠物, 只能由宿主【下发】。
+   *   下发的还是同一只: 同 id / 同名字 / 同一张图 / 同样的光效 class。
+   *
+   * 【只发"长什么样", 不发"说什么"】
+   *   宠物的话永远由宿主生成 (PetSpeech.petSpeak), 上文 = 宿主那条会话的真实聊天记录
+   *   → 沙盒里摸它, 它收到的上文跟在外面【一模一样】。
+   *
+   * @returns {null|{id,name,spriteUrl,stage,hatched,divine}}
+   */
+  function desktopPetInfo() {
+    try {
+      if (!desktopPetEnabled()) return null;
+      const pet = currentDesktopPet();
+      if (!pet) return null;
+      const url = petSpriteUrl(pet);
+      if (!url) return null;
+      // 静态资源在站点根下 (assets/pet-nest/xxx.webp), 沙盒在子目录里
+      // → 相对路径在沙盒里会 404, 必须转成绝对地址。
+      //    blob: / data: 本身就是绝对的, 原样带过去 (同源, 沙盒读得到)。
+      let abs = url;
+      try {
+        const href = (typeof window !== 'undefined' && window.location && window.location.href) || '';
+        if (href && !/^(blob:|data:)/i.test(url)) abs = new URL(url, href).href;
+      } catch (e) { abs = url; }
+      const divine = !!(pet.appearance && pet.appearance.kind === 'divine');
+      const hatched = !divine && isHatchKind(pet.kind) && pet.stage > 0;
+      return {
+        id: pet.id,
+        name: pet.name,
+        spriteUrl: abs,
+        stage: pet.stage,
+        hatched: hatched,
+        divine: divine
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
   function saveDesktopPetPos(x, y) {
     try { localStorage.setItem(STORAGE_KEYS.desktopPetPos, JSON.stringify({ x, y })); } catch (e) { /* 忽略 */ }
   }
@@ -3745,7 +3918,17 @@ function careActionForButton(btnId) {
    * 走的是同一份 care()，所以喂食照样扣粮食、照样有饱腹上限，
    * 宠物也照样会自己开口说一句（care() 里已经接了 petSpeak）。
    */
-  async function quickCare(action) {
+  /**
+   * @param {string} action  feed | comfort | play
+   * @param {Object} opts    { silent: true } → 不弹宿主 toast (沙盒那边自己提示)
+   * @returns {Promise<{ok, status, message}>}
+   *
+   * ⚠️ 2026-11-26: 沙盒 (影院/读书屋) 里的桌宠要调这个动作。
+   *   宿主的 toast 在 iframe 底下, 用户看不见 → 沙盒传 silent: true,
+   *   由沙盒自己的提示条把结果显示出来 (消息由宿主带回)。
+   */
+  async function quickCare(action, opts) {
+    const o = opts || {};
     const menu = el('pn-desktop-pet-menu');
     if (menu) menu.hidden = true;          // 先把菜单收起来，别挡住桌宠的反应
     let pet = currentDesktopPet();
@@ -3758,17 +3941,20 @@ function careActionForButton(btnId) {
       } catch (e) { pet = null; }
     }
     if (!pet) {
-      showToastSafe('小窝里还没有宝宝', 'warning');
-      return;
+      if (!o.silent) showToastSafe('小窝里还没有宝宝', 'warning');
+      return { ok: false, status: 'no_pet', message: '小窝里还没有宝宝' };
     }
     try {
       const result = await care(action, { petIds: [pet.id], actor: 'user' });
       const receipt = result.results[0] || {};
       const msg = STATUS_TEXT[receipt.status] || '这次没什么反应';
-      showToastSafe(msg, receipt.status === 'no_food' ? 'warning' : 'success');
+      if (!o.silent) showToastSafe(msg, receipt.status === 'no_food' ? 'warning' : 'success');
       await refreshAll();
+      return { ok: true, status: receipt.status, message: msg };
     } catch (e) {
-      showToastSafe('照顾失败：' + (e.message || e), 'error');
+      const msg = '照顾失败：' + (e.message || e);
+      if (!o.silent) showToastSafe(msg, 'error');
+      return { ok: false, status: 'error', message: msg };
     }
   }
 
@@ -4213,7 +4399,8 @@ function careActionForButton(btnId) {
         .replace(/in its paws/g, 'in its beak')
         .replace(/in its paw\b/g, 'in its beak')
         .replace(/above its paw\b/g, 'above its beak');
-      return 'a fluffy ' + breed.en + ' ' + colorText + mark + parrotTail
+      // ⚠️【2026-11-26】顺序跟幻兽那条统一：主体+配色 → 道具 → 衣服 → 花纹
+      return 'a fluffy ' + breed.en + ' ' + colorText + parrotTail + mark
         + ', ' + ART_STYLE_LOCK;
     }
 
@@ -4738,6 +4925,11 @@ function careActionForButton(btnId) {
       refreshAll();
     },
     desktopPetEnabled,
+    // 🔴 2026-11-26: 影院/读书屋沙盒里的桌宠要用的
+    //   · desktopPetInfo() → 下发给沙盒, 让它在那边画同一只宠物
+    //   · quickCare(action, {silent}) → 沙盒点「摸摸/喂食/陪玩」时宿主这边执行
+    desktopPetInfo: desktopPetInfo,
+    quickCare: quickCare,
     // 🔴 2026-11-05: 宿主静默 (影院 iframe 打开) 时停/起桌宠的换帧定时器。
     //   呼吸动画靠 CSS, 宿主把桌宠藏起来它就不画了;
     //   但这个 setInterval 是 JS 的, 藏起来照样跑 —— 得手动停。
@@ -4799,7 +4991,11 @@ function careActionForButton(btnId) {
       beastSpeciesForSeed,
       dailyLookFor,
       beastDisplayName,
+      beastName,
       beastPrompt,
+      iconCn,
+      todayLookCn,
+      todayLookPhrase,
       todayBehaviors,
       cachedBehaviors,
       pickIconsFromText,

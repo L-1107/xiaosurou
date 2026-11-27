@@ -166,11 +166,147 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.66 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.66</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">Key 池改成「一目了然」：开关打开 = 主聊天直接走谷歌轮询</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>如果我打开轮询池开关，而主API又选的是其他Openai的渠道，这个时候是优先轮询池的谷歌还是主API的别的渠道？</strong>」+「<strong>现在这两有点冲突，你得说清楚，轮询池是选谷歌渠道以后才轮询，或者，作为用户乍一看，就会以为开了轮询开关就自动走谷歌所有key的轮询了</strong>」。这个反馈很准 —— 上一版确实含糊：池只在「主 API 恰好选了谷歌直连」时才生效，你<strong>先选渠道、再开池</strong>，两个开关各管一段，确实会打架。</li>
+          <li><strong>现在按你定的来，一句话说完</strong> —— <strong>轮询开关打开 → 主聊天直接走谷歌轮询</strong>（池里的 Key 挨个轮着来），<strong>不管主 API 原来选的是哪个渠道</strong>；<strong>轮询开关关闭 → 主 API 走你选择的渠道</strong>，行为跟以前一模一样。不用再在两个设置之间猜哪个优先。</li>
+          <li><strong>为什么连「模型」也一起换</strong> —— 谷歌直连的请求地址是<strong>代码里写死的</strong>（<code>generativelanguage.googleapis.com/.../{模型名}</code>），如果只把 Key 换成池里的、模型还留着 <code>gpt-4o</code>，谷歌会直接回 400（它不认这个模型）。所以池开着的时候，<strong>地址、模型、Key 三样都归池管</strong>。模型没选的话会<strong>自动挑一个能用的</strong>（先看池里选的 → 再看主 API 当前的模型是不是 gemini → 再看预设的默认模型 → 最后兜底 <code>gemini-2.5-flash</code>），并且<strong>在「生效范围」那一行明明白白写出来用的是哪个</strong>。</li>
+          <li><strong>池的模型跟主 API 的模型现在是两套，互不污染</strong> —— 上一版你选完池的模型会<strong>顺手改掉主 API 的模型框</strong>，结果池一关、主 API 还停在 gemini 模型上，打中转站必 400。现在<strong>池的模型只管池</strong>，主 API 的模型框你自己定。</li>
+          <li><strong>「生效范围」那一行重写了</strong> —— 以前它只说「池正在接管：某某功能位」，看不懂。现在直接告诉你：<strong>开着池主聊天走的是什么、用的哪个模型、几个 Key、你原先选的渠道现在不生效（关掉池自动切回去）</strong>，外加副 API / 后台 / 识图 / 情侣空间<strong>各自什么情况</strong>（走轮询还是用自己那份）。</li>
+          <li><strong>顺带修了一个你可能已经撞上的 bug：轮询【跳号】</strong> —— 之前<strong>槽位解析和 fetch 拦截器各推一次游标</strong>，一次请求等于走两格 → <strong>10 个 Key 实际只有 5 个在干活</strong>，另外 5 个永远轮不到。现在<strong>只有真正发请求的那个推游标</strong>，10 个 Key 一个不落地轮着来。这条<strong>有专门的回归测试守着</strong>。</li>
+          <li><strong>下拉列表能滚了</strong> —— 你说「<strong>最多只选到 5 个key，列表不能滚动，后面五个没看到</strong>」。根因是浮层面板是 flex 布局、列表被内容撑开又被面板裁掉，<strong>永远不产生滚动条</strong>。现在列表会被压进面板高度里，<strong>能滚了</strong>，10 个预设随便挑。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">影院 / 读书屋：你问的「是不是没走轮询」和「格式不一样」，答案在这</div>
+        <ul class="item-list">
+          <li><strong>先回答「开轮询开关，影院和图书馆聊天是不是也走谷歌轮询」</strong> —— <strong>是</strong>。影院和读书屋的 AI 请求<strong>走的都是主 API 那个槽位</strong>（<code>resolveApiSlotConfig('main')</code>），而且<strong>请求是宿主页面发出的</strong>（沙盒 iframe 只管画界面，谷歌直连那种它自己打不了，会通过 postMessage 交给宿主代打）—— 所以<strong>池的拦截器管得到</strong>。而且现在主槽位被池<strong>强制</strong>接管了，<strong>主 API 选的是 OpenAI 中转站也一样会走谷歌轮询</strong>。</li>
+          <li><strong>但「格式不一样」跟池没关系</strong> —— 这是<strong>两个渲染差异</strong>，不是渠道差异：①<strong>渲染层</strong>：主聊天走 <code>parseMarkdown()</code> 再把换行转成 <code>&lt;br&gt;</code>，所以 <code>**加粗**</code>、<code>*斜体*</code>、<code>~~删除~~</code>、<code>||剧透||</code> 会变成样式；<strong>影院和读书屋原来是纯文本</strong>（<code>textContent</code>），这些标记<strong>原样显示成字面符号</strong>。②<strong>文本层</strong>：读书屋额外做了一步思维链清洗，影院没做。</li>
+          <li><strong>现在把渲染对齐了</strong> —— 两个沙盒的 AI 气泡都改走<strong>主聊天那一套 markdown</strong>（沙盒页新引了 <code>ui-loaders.js</code>，拿的就是主聊天用的同一个 <code>parseMarkdown</code>）。<strong>用户消息仍然走纯文本</strong>，不会被当成 HTML。另外沙盒是<strong>同源 iframe</strong>，所以多了一步<strong>先转义再解析</strong> —— 不给父页面开 XSS 口子。剧透的「藏起来、鼠标移上去才显示」也补上了，跟主聊天一致。</li>
+          <li><strong>还有一处提示词层面的差异（这次没动）</strong> —— 影院/读书屋会<strong>把 JSON 指令系统从提示词里剥掉</strong>，让模型直接输出纯文字；主聊天是让模型输出 JSON 数组再由代码还原。所以<strong>两边回复的「结构」本来就不一样</strong>（影院是一整段纯文本，主聊天可能拆成好几个气泡）—— 这个是<strong>设计如此</strong>，不是坏了。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这一版的边界（先说清，免得白期待）</div>
+        <ul class="item-list">
+          <li><strong>本地验过的</strong> —— Key 池 <strong>69 条断言全过</strong>（新增：池开=主聊天强制走谷歌、池关=回到你选的渠道、<strong>轮询不跳号</strong>、模型兜底、池的模型不污染主 API 的模型）；<code>node --check</code> 全过；全项目测试跑了一遍，<strong>只有抠图那个老红</strong>，跟这次无关。</li>
+          <li><strong>本地验不了的（只能你手上试）</strong> —— <strong>真 Key + 真 503</strong> 的实际表现；<strong>影院/读书屋的聊天界面</strong>（要真的有角色、有房间才进得去，我这边只能验到代码层）；<strong>下拉能不能滚</strong>这个是布局问题，得你在真机上看一眼。</strong></li>
+          <li><strong>「角色单独设过 API」的那种角色，池管不到它</strong> —— 悬浮球里能给单个角色设独立 API，那种角色的请求<strong>用它自己的 API</strong>（这是它更具体的设置，优先级更高），<strong>不参与池的轮询</strong>。其余角色全部走池。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.65 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.65</span>
+        <span class="version-date">2026-11-26</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">谷歌直连 Key 池 —— 10 个 Key 轮着用，报错自动换下一个</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>最近依赖谷歌模型聊天，但外面openai公益站基本死完了，想用谷歌直连，但503报错实在是太频繁了，而且每次报错之后那个key就得歇一阵才能再点，否则无限503，我有10个key,挨个切换有点实在太麻烦了</strong>」。</li>
+          <li><strong>先回答你那个问题</strong> —— 「一个预设里放 10 个 Key，有没有这功能？」<strong>代码层面早就有，界面上没有</strong>：<code>modules/utils.js</code> 里的 <code>getRandomValue()</code> 会把带逗号的字符串拆开、<strong>随机挑一个</strong>用。所以你手动往预设的 Key 框里粘 <code>key1,key2,…,key10</code> 是能跑的 —— 但它<strong>只有「随机抽签」，没有冷却、没有失败转移</strong>。抽到坏 Key 就直接报错，一个都不换。</li>
+          <li><strong>为什么你会觉得「无限 503」</strong> —— 因为<strong>代码里没有任何地方记得「这个 Key 刚才失败了」</strong>。每次请求都重新抽签，1/10 的概率又抽中同一个坏 Key，体感就是「这个 Key 坏了，得歇一阵」。你手动歇一歇之所以管用，是 Google 那边的限流窗口过去了 —— 但那是<strong>你替代码记着</strong>。</li>
+          <li><strong>现在做成 Key 池</strong> —— 设置页主 API 下面多了一块「<strong>🔑 谷歌直连 Key 池</strong>」。<strong>池成员就是你现在这些 API 预设</strong>（一个预设一个 Key），勾几个进去就行，<strong>不用再手抄一遍 Key</strong>。开池之后：请求报错（503 / 429 / 超时）→ <strong>立刻换下一个 Key</strong> 接着试；<strong>401 / 403</strong>（Key 本身失效）→ 这个 Key 被<strong>隔离 15 分钟</strong>，以后请求直接跳过它；<strong>坏 Key 冷却 60 秒</strong>，越失败越久（翻倍，最多 10 分钟）。</li>
+          <li><strong>超时上限按你说的来</strong> —— <strong>单个 Key 给 40 秒</strong>没反应就放弃它换下一个；整轮最多 4 分钟；<strong>全部 Key 都在冷却</strong>时不会傻等，而是立刻告诉你「最近 XX 秒后恢复」。</li>
+          <li><strong>池成员做成下拉了，不铺开</strong> —— 你说「全部铺在主界面上太占地方」—— 是的，10 个预设全摊开那一屏就废了。现在主界面只留<strong>一个按钮</strong>，写着「已选 10 个预设（谷歌线路A、谷歌线路B…）」，<strong>点一下才弹出来</strong>，里面有勾选框 + 「全选直连 / 清空」两个快捷键，勾完<strong>按钮上的摘要立刻更新</strong>，点外面自动收起。</li>
+          <li><strong>「拉取模型」也在这一块里</strong> —— 池卡片上有<strong>拉取模型</strong>按钮 + 下拉框：<strong>逐个 Key 试</strong>，第一个拉成功的就把模型列表填进去；你<strong>手动选一个</strong>就是池的轮询模型，选完自动同步到主 API 的模型框。10 个 Key 全拉失败的话会直接告诉你，不会干等。</li>
+          <li><strong>拉模型用的是哪个 Key？</strong> —— <strong>从池列表第一个开始挨个试</strong>（正在冷却/隔离的 Key 会自动往后排，免得每次都先撞刚坏的那个），<strong>第一个拉成功的就用它的模型列表</strong>，提示条上会写明是从哪个 Key 拉的（只显示头尾几位，不露完整 Key）。这条路<strong>不走故障转移</strong>，自己试自己记账 —— 否则同一个失败会被记两遍，退避会翻倍得过快。</li>
+          <li><strong>看得见的诊断</strong> —— 池卡片下面有「<strong>Key 状态</strong>」和「<strong>最近错误</strong>」两块：每个 Key 现在是<strong>可用 / 冷却中（还剩几秒）/ 已隔离</strong>都写着，Google 返回的<strong>完整错误体</strong>也摊开给你看（可复制）。这样你一眼就能分清 503 到底是<strong>Key 的问题</strong>还是<strong>模型的问题</strong>—— 这个我本地没法替你验，只有你的真 Key 能验。</li>
+          <li><strong>改动面很小，但覆盖很全</strong> —— 全项目 <strong>100 处</strong>谷歌直连调用点（分布在 19 个文件）<strong>一行都没改</strong>：池在 <code>fetch</code> 链底换掉请求头里的 Key。因为<strong>谷歌直连全是「拿完整内容才渲染」的非流式</strong>，所以换 Key 重试<strong>绝不会把同一句话说两遍</strong>。</li>
+          <li><strong>随时能退回去</strong> —— 池<strong>默认是关的</strong>，关着的时候行为跟以前<strong>一模一样</strong>。不想要了，把开关一关就回到原样，不用改代码、不用回退版本。</li>
+          <li><strong>顺带修了一个会互相打架的地方</strong> —— MCP 工具桥接也会包装 <code>window.fetch</code>，它以前「卸载」的时候会把 <code>window.fetch</code> 直接还原掉，<strong>会把池的拦截器一起抹掉</strong>（表现就是：明明开了池，突然又不轮换了）。现在改成<strong>只关自己的行为、不动别人的包装</strong>，两边能和平共存。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这一版的边界（先说清，免得白期待）</div>
+        <ul class="item-list">
+          <li><strong>「模型过载」那种报错，这一版先不管</strong> —— 按你说的办。如果 503 的错误体是 <code>The model is overloaded</code>，那是<strong>模型级</strong>拥塞，换 Key 也可能照样报；<strong>等 Key 轮询这一版你实测跑通了，再加上「换模型轮询」</strong>（池从「Key 一维」升级成「Key × 模型」两维）。接缝已经留好了，升级只是加一维，不用重写。</li>
+          <li><strong>你的 10 个 Key 是不是同一个 Google 项目下的，这个决定轮询有没有用</strong> —— 如果是<strong>同一个项目</strong>，免费配额是<strong>按项目算</strong>的，轮询摊薄不了配额，这一版就只是「防抖 + 不再死磕坏 Key」；如果是<strong>10 个独立项目</strong>，配额 ×10，轮询才真正值钱。这个我没法从代码里看出来，<strong>「最近错误」面板里的配额信息能自己分辨</strong>。</li>
+          <li><strong>本地验过的</strong> —— 池的开关行为、503 换 Key、401 隔离、超时换 Key、你点「停止生成」不乱换、400 不乱换、全部冷却的报错文案、槽位下发的是<strong>单个</strong> Key（不是逗号串）—— 共 <strong>35 条断言全过</strong>；全项目 <strong>25 个测试文件 24 绿 1 红</strong>，唯一那个红是<strong>抠图</strong>的老账，跟这次无关。</li>
+          <li><strong>本地验不了的（只能你手上试）</strong> —— <strong>真 Key + 真 503</strong>的实际表现、10 个 Key 的配额到底共享不共享、你的网络到谷歌的实际延迟（决定 40 秒够不够）。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.64 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.64</span>
+        <span class="version-date">2026-11-26</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">在影院/读书屋里，直接换 API 预设 —— 不用再被踢出去</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>悬浮球弄进影院就是为了方便切换API预设的，不然都弹出去了我还弄它进来干啥呢</strong>」。说得对，这条是上一版做歪了。</li>
+          <li><strong>原来是怎么回事</strong> —— 悬浮球菜单里 12 项，有 9 项干的事在<strong>宿主那一层</strong>（角色API配置、样式设置、清聊天记录、宠物屋……）。宿主在影院底下是<strong>彻底静默</strong>的，这些窗口开出来你根本看不见 → 宿主那边的规矩是<strong>「先把影院收掉，再执行」</strong>。而「切换API预设」当时也被归进了这一类 → 你点一下，<strong>影院当场关掉</strong>，人被弹回主页面去选预设，选完想回去还得再点一次。</li>
+          <li><strong>现在改成就地换</strong> —— 在影院/读书屋里点「切换API预设」，<strong>球旁边直接弹出一列预设名</strong>，你选一个，沙盒里冒一句「已切换主 API 到：XXX」，<strong>影院不关</strong>，接着看。</li>
+          <li><strong>换完立刻生效，不是"下次进影院才生效"</strong> —— 影院里的 AI 配置是<strong>进房间那一刻的快照</strong>，所以宿主换完预设会把新配置<strong>重新推回影院</strong>，影院里的陪聊<strong>马上</strong>就换线路，不用退出重进。</li>
+          <li><strong>其余菜单项维持原样</strong> —— 角色API配置、样式设置、AI原创曲管理、清聊天记录、宠物屋这些，<strong>还是会先把影院/读书屋收掉</strong>再执行：它们要开窗/弹提示条，<strong>得让你看得见结果</strong>才算数。桌宠开关、隐藏/关闭悬浮球则是<strong>在房间里就地生效</strong>，不动房间。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.63 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.63</span>
+        <span class="version-date">2026-11-26</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">桌宠和悬浮球，现在跟着你一起进影院和读书屋</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「那个宠物桌宠哦还有外面的悬浮球能也一起放进影院和图书馆吗，跟用户一起，用户进影院，这两个也进」；还有一句更要紧的：「<strong>那宠物被摸回话的时候收到的上文要和外面一样哦</strong>」。</li>
+          <li><strong>为什么它俩以前进不去</strong> —— 影院和读书屋是<strong>整个屏幕盖住</strong>的独立页面，而为了不让手机发烫，宿主那一层进房间时会<strong>彻底停掉</strong>：54 个面板全隐藏、58 条动画全停、桌宠和悬浮球也一起藏掉。所以宿主里的东西<strong>进不去</strong>。</li>
+          <li><strong>现在怎么办</strong> —— 在<strong>影院/读书屋这一侧</strong>把同一只宠物、同一个悬浮球<strong>再画一份</strong>。画的是同一只：同一个名字、同一张图、同样会呼吸会换姿势、能拖、能点。</li>
+          <li><strong>摸它回话，上文跟外面完全一样</strong> —— 这条是重点。<strong>沙盒里那只只是"演出"</strong>：你点了「摸摸」，动作交回宿主去做，<strong>宠物的话是宿主那边生成的</strong>，用的就是宿主那条会话的<strong>真实聊天记录</strong>。所以它在影院里开口，拿到的是跟你一模一样的上文；而<strong>影院里说的话本来就会写回主聊天记录</strong>，它还听得见你们刚才在聊什么。</li>
+          <li><strong>它说话你看得见了</strong> —— 以前它开口时气泡在宿主那边，被整屏盖着；现在气泡在<strong>影院/读书屋里它头顶</strong>冒出来，聊天框里也同步多一条它的话。</li>
+          <li><strong>菜单还是能用的</strong> —— 桌宠菜单里「喂食 / 摸摸 / 陪玩 / 进入小屋」照样能点；悬浮球的菜单也带过来了。悬浮球里那些要开窗的动作（切 API 预设、角色 API 配置、样式设置、清聊天记录……）会在<strong>宿主那边执行</strong>——它需要你看得见结果，所以会先把影院/读书屋收掉再执行。</li>
+          <li><strong>顺便修了一个真 bug</strong> —— 你上次试的时候「宠物没说话」：其实<strong>它有在说</strong>，只是宿主判断「桌宠看得见吗」时只看有没有 <code>hidden</code> 属性，而进房间时桌宠是被 CSS 藏起来的 → 判断成看得见 → <strong>兜底的那句提示也就没弹出来</strong>。现在改成也看计算样式，兜底提示该弹就弹。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">会不会让手机更烫？—— 不会，账给你算清楚</div>
+        <ul class="item-list">
+          <li><strong>你问的</strong> —— 「本来隐藏宿主页是为了避免影院和图书馆发烫，只把这两放进来会不会导致发烫呢」。</li>
+          <li><strong>先把发烫的成因说清楚</strong> —— 你 2026-11-05 那次真机 A/B/C 实测已经证明：<strong>宿主单独开着不烫，影院单独看也不烫，两者叠在一起才烫</strong>。所以关键不是"多两个小东西"，而是<strong>让不让宿主那一层继续在底下全速渲染</strong>。</li>
+          <li><strong>我们没动宿主静默那一段</strong> —— 宿主在影院/读书屋底下<strong>还是一个像素都不渲染</strong>，54 个面板、58 条动画、毛玻璃顶栏该藏还是藏。这条防线一个字没动。</li>
+          <li><strong>那为什么不浮在宿主上面、偏要画在影院里面？</strong> —— 两个原因：① 影院的整屏盖层是 <code>z-index: 2147483647</code>（int32 上限），<strong>宿主任何元素都压不过它</strong>，要浮上去就得把盖层降级，那会引出新的层级 bug；② 降级后宿主那层就"活了"，等于把当年实测会发烫的那个组合<strong>请回来</strong>。</li>
+          <li><strong>画在影院里面的开销</strong> —— 桌宠空闲时 = 1 条 <code>transform</code> 呼吸动画（GPU 合成，不触发重排重绘）+ 1 个 <strong>5.2 秒</strong>换一次的姿势；悬浮球空闲时 = <strong>0</strong>（它没有定时器，动画都是点开才跑、跑完自己消失）。而且它们是<strong>加在本来就在渲染的那一层里</strong>，<strong>不新增任何合成图层</strong>。</li>
+          <li><strong>唯一要如实说的</strong> —— 孵化中/神兽阶段的宠物会有一层<strong>光晕动画在动 <code>filter</code></strong>，这个不像位移那样能纯 GPU 合成，会每帧重绘那个 98px 的小方块。跟影院自己播 HLS 视频的解码开销比，是可以忽略的量级，但这一条我不藏着。</li>
+          <li><strong>结论</strong> —— <strong>不会更烫</strong>。真正决定烫不烫的是"宿主那层有没有继续渲染"，那一层我们一点没放松；新增的两个小挂件是白捡的。</li>
+        </ul>
+      </div>
+    </div>
+    <!-- 4.62 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.62</span>
+        <span class="version-date">2026-11-26</span>
+      </div>
+      <div class="section">
+        <div class="section-title feat">宠物屋的装扮提示词重写：那句话终于通顺了</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「什么叫奶咖一串小音符，头顶小行星？句子都不通顺，如果音符是道具，那应该描述道具怎么拿，后面小行星感觉属于服饰类，服饰就全部用衣服，不要再搞乱七八糟的东西」。</li>
+          <li><strong>原来那句话是怎么拼出来的</strong> —— 名册上那句是<strong>三段直接首尾相接</strong>拼的：<strong>配色</strong> + <strong>道具</strong> + <strong>衣服</strong>。所以「奶咖」（毛色）会<strong>粘在道具前面</strong>变成「奶咖一串小音符」；道具又只有名字没有动作，不知道是顶着还是捧着；而衣服那一格里还混着「顶着小行星」这种根本不是衣服的东西。</li>
+          <li><strong>现在改成跟画图提示词一个顺序</strong> —— <strong>主体在前 → 拿/背/戴什么道具 → 穿什么衣服</strong>：「<strong>奶咖色霸下，头顶飘着一串小音符、穿着草莓裙</strong>」。</li>
+          <li><strong>道具会说清怎么拿</strong> —— 83 件道具每件都配了动作：头顶飘着、两只小爪捧着、小爪里握着、尾巴上系着……画图用的英文也一起加了动词和位置（holding / carrying / wearing）。以前有 45 件道具的英文<strong>根本没说东西在哪儿</strong>，模型随便放 → 名册写「捧着香囊」，图上香囊可能长在屁股上。</li>
+          <li><strong>衣服只放衣服</strong> —— 19 件「手里拿着东西」的（捧着马卡龙盘、举着月牙灯、提着红灯笼、头顶小行星……）全部换成真正穿在身上的衣服；「彗星光环」「行星光环」这种抽象装饰也一并换掉了。</li>
+          <li><strong>而且每条都是一整套</strong> —— 你说「小手套、小腰带这些不叫衣服吧，把单品剔除去，都要能整件搭配的」：现在<strong>小手套、小腰带、发夹、项链这些不再单独当一身衣服</strong>，它们只能当搭配里的一件。每条服饰都是<strong>「一件整件衣服 + 一两件配件」</strong>，比如「穿着草莓背带裙、系着奶油蝴蝶结和套着奶泡长袜的」。</li>
+          <li><strong>娃衣扩充</strong> —— 幻兽衣服 72 → <strong>96</strong> 套（6 个系列各 16），鹦鹉衣橱 24 → <strong>28</strong> 套，补进来的都是小朋友穿的那种：背带裙、背带裤、围兜、小衬衫、睡衣、小雨衣、小棉袄、小肚兜、虎头鞋、粉纱凉鞋……</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.61 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.61</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-03</span>
       </div>
       <div class="section">
         <div class="section-title feat">AI 回复：要求它分段、不要时间戳、不要名字前缀</div>

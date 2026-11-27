@@ -23,6 +23,7 @@
 //                 reading:books / reading:page / reading:progress /
 //                 reading:importProgress / reading:importDone /
 //                 reading:chatDelta / reading:chatDone / reading:chatError
+//                 reading:petSay  ← 2026-11-25 宠物说的话, 刷进读书屋聊天框
 //   沙盒 → 宿主:  reading:needChat / reading:ready / reading:needBooks /
 //                 reading:requestPage / reading:saveProgress /
 //                 reading:deleteBook / reading:importFile /
@@ -420,6 +421,147 @@
     try {
       frame.contentWindow.postMessage(payload, '*');
     } catch (e) { /* noop */ }
+  }
+
+  // ============================================================
+  // 🔴 2026-11-25: 外面（宿主）的宠物说了话 → 转发进读书屋的聊天框
+  //
+  // 【为什么】读书屋是独立 iframe 页面, 一打开就整屏盖住宿主的聊天框。
+  //   pet-speech.js 只把话写进主聊天历史 + 重绘宿主聊天框 —— 用户在读书屋里
+  //   一点都看不见 (用户原话: 「外面宠物说的话没办法刷新进图书馆的聊天框里」)。
+  //   话本身已经落库 (退出读书屋照样能看到), 这里只负责【界面同步】。
+  //
+  // 【为什么认 _overrideChat】桌面第二页「图书馆」进来时没有 activeChatId,
+  //   读书对象是 _overrideChat (最近聊过的那条) —— 那才是"当前会话"。
+  // ============================================================
+  function handlePetSpoke(e) {
+    if (!frame) return;
+    var d = (e && e.detail) || null;
+    if (!d || !String(d.text || '').trim()) return;
+    var c = currentChatObject(_overrideChat);
+    if (c && d.chatId && c.id !== d.chatId) return;
+    replyToSandbox({
+      type: 'reading:petSay',
+      petName: d.petName || '宠物',
+      text: String(d.text),
+      timestamp: Number(d.timestamp) || Date.now()
+    });
+  }
+  global.addEventListener('pet:spoke', handlePetSpoke);
+
+  // =========================================================================
+  // 🔴 2026-11-26: 桌宠 + 悬浮球 跟着用户进读书屋
+  //
+  // 【为什么宿主这边给不了】宿主在读书屋底下是【彻底静默】的 (见 pauseHostTimers),
+  //   宿主那份桌宠和悬浮球被 display:none → 【进不来】。
+  //   → 宿主把"这只宠物长什么样"下发下去, 由沙盒自己画一份。
+  //
+  // 【宠物的话还是宿主说的 —— 上文跟外面一模一样】
+  //   沙盒点「摸摸」→ 宿主 care() → petSpeak() (上文 = 宿主那条会话的真实聊天记录)
+  //   → 广播 pet:spoke → 这里转发进沙盒 (reading:petSay) → 沙盒冒气泡 + 聊天框一条。
+  //
+  // 【发烫吗】不发热 (跟影院同一个道理: 画在已经在渲染的 iframe 里面,
+  //   不新增合成图层; 宿主静默那一段一个字没动)。
+  // =========================================================================
+  function sendCompanion() {
+    if (!frame) return;
+    try {
+      var pn = global.PetNest;
+      var pet = (pn && typeof pn.desktopPetInfo === 'function') ? pn.desktopPetInfo() : null;
+      replyToSandbox({ type: 'reading:companion', pet: pet || null });
+    } catch (e) { /* noop */ }
+  }
+
+  /** 沙盒里的桌宠点了「摸摸/喂食/陪玩」→ 宿主这边真的去做 */
+  async function handleReadingPetAction(d) {
+    var action = String((d && d.action) || '').trim();
+    if (!action) return;
+    var pn = global.PetNest;
+    if (!pn || typeof pn.quickCare !== 'function') return;
+
+    if (action === 'enter') {
+      // 「进入小屋」要把宠物屋开到宿主那一层 → 先把读书屋收掉, 否则用户看不到
+      closeSandbox();
+      try { if (typeof global.openPetNest === 'function') global.openPetNest(); } catch (e) { /* noop */ }
+      return;
+    }
+    if (action !== 'feed' && action !== 'comfort' && action !== 'play') return;
+
+    var result = null;
+    try {
+      // ⚠️ silent: true —— 宿主那条 toast 在 iframe 底下, 用户根本看不见
+      result = await pn.quickCare(action, { silent: true });
+    } catch (e) {
+      result = { ok: false, message: '照顾失败：' + ((e && e.message) || e) };
+    }
+    replyToSandbox({
+      type: 'reading:petActionResult',
+      action: action,
+      ok: !!(result && result.ok),
+      message: (result && result.message) || ''
+    });
+  }
+
+  /** 沙盒里的悬浮球点了菜单 → 宿主这边真的去做 */
+  function handleReadingBallAction(d) {
+    var action = String((d && d.action) || '').trim();
+    if (!action) return;
+    var fb = global.FloatingBall;
+    if (!fb || typeof fb.handleMenuAction !== 'function') return;
+    // ⚠️ 悬浮球的菜单动作全都在宿主那一层做 → 先把读书屋收掉, 用户才看得见结果
+    // ⚠️【2026-11-26 例外】"切换API预设" 不走这条路 ——
+    //   用户把悬浮球带进读书屋就是为了方便换预设, 为换预设把这一场踢掉本末倒置。
+    //   它改成沙盒就地换 (见 handleReadingSwitchApiPreset), 整个过程不退出读书屋。
+    closeSandbox();
+    try { fb.handleMenuAction(action); } catch (e) { /* noop */ }
+    try { if (typeof fb.syncFromStorage === 'function') fb.syncFromStorage(); } catch (e) { /* noop */ }
+  }
+
+  /**
+   * 沙盒里的悬浮球要列 API 预设
+   * (沙盒够不着 db.apiPresets —— 见 modules/companion-layer.js 的说明)
+   */
+  function handleReadingApiPresets() {
+    var fb = global.FloatingBall;
+    if (!fb || typeof fb.listApiPresets !== 'function') return;
+    Promise.resolve(fb.listApiPresets()).then(function (res) {
+      if (!frame) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'reading:apiPresets',
+          ok: !!(res && res.ok),
+          presets: (res && res.presets) || [],
+          currentId: (res && res.currentId != null) ? res.currentId : null
+        }, '*');
+      } catch (e) { /* noop */ }
+    });
+  }
+
+  /**
+   * 沙盒里就地换 API 预设 → 宿主真的去换, 换完把新配置推回沙盒
+   *
+   * ⚠️【必须重推配置】沙盒那边 state.apiConfig 只是【启动时的快照】,
+   *   沙盒里没有 resolveApiSlotConfig → 不重推的话读书屋里的对话还在用旧预设。
+   */
+  function handleReadingSwitchApiPreset(d) {
+    var id = d && d.id;
+    var fb = global.FloatingBall;
+    if (!fb || typeof fb.switchApiPreset !== 'function') return;
+    Promise.resolve(fb.switchApiPreset(id, { silent: true })).then(function (res) {
+      var okFlag = !!(res && res.ok);
+      if (okFlag) {
+        _apiCfg = null;
+        pushApiConfig();
+      }
+      if (!frame) return;
+      try {
+        frame.contentWindow.postMessage({
+          type: 'reading:apiPresetSwitched',
+          ok: okFlag,
+          name: (res && res.name) || ''
+        }, '*');
+      } catch (e) { /* noop */ }
+    });
   }
 
   // ============================================================
@@ -1064,6 +1206,7 @@
       case 'reading:ready':
         sendInit();
         handleNeedBooks();
+        sendCompanion();
         break;
       case 'reading:needBooks':
         handleNeedBooks();
@@ -1092,6 +1235,20 @@
       case 'reading:closed':
         closeSandbox();
         break;
+      // 🔴 2026-11-26: 沙盒里的桌宠/悬浮球把动作交回宿主做
+      case 'reading:petAction':
+        handleReadingPetAction(d);
+        break;
+      case 'reading:ballAction':
+        handleReadingBallAction(d);
+        break;
+      // 🔴 2026-11-26: 沙盒里就地换 API 预设 (不退出读书屋)
+      case 'reading:needApiPresets':
+        handleReadingApiPresets();
+        break;
+      case 'reading:switchApiPreset':
+        handleReadingSwitchApiPreset(d);
+        break;
       default:
         break;
     }
@@ -1114,13 +1271,13 @@
     frame.id = 'reading-sandbox-frame';
     // ⚠️ 必须带 ?v=: 沙盒页会被 SW 的 '/index.html' 白名单命中 → 不带 ?v= 就是
     //   cache-first, 改了沙盒也不生效。带 ?v= 走 network-first, 断网回落到预缓存。
-    frame.src = 'reading-sandbox/index.html?v=0.1.1';
+    frame.src = 'reading-sandbox/index.html?v=0.1.4';
     frame.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
     frame.style.cssText =
       'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;' +
       'background:#f6efe2;';
     document.body.appendChild(frame);
-    frame.addEventListener('load', function () { sendInit(); pushViewport(); });
+    frame.addEventListener('load', function () { sendInit(); pushViewport(); sendCompanion(); });
     startWatch();
     log('读书屋已打开');
   }

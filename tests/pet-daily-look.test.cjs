@@ -232,8 +232,11 @@ section('① 每日换装: 界面写的和图上画的必须是同一身');
   } catch (e) {
     desc = '(抛错: ' + e.message + ')';
   }
+  // ⚠️【2026-11-26】句尾不再留孤零零的「的」→ 不能再用 /的/ 判断"有没有今天这身"，
+  //   改成看【衣服名】在不在里面。
+  const hasOutfit = R.BEAST_OUTFITS.some(o => desc.indexOf(o.cn.replace(/的$/, '')) >= 0);
   check('刚领养的宠物（appearance 为 null）名册上也显示今天这身',
-    desc && desc !== '小猫' && /的/.test(desc), desc);
+    desc && desc !== '小猫' && hasOutfit, desc);
 }
 
 section('① 每日换装: 蜕变提示词必须永远说「按今天这身重画」');

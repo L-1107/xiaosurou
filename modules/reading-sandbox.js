@@ -48,6 +48,7 @@
     chatBusy: false,
     chatSeq: 0,
     lastAiBubble: null,
+    lastAiRaw: '',           // AI 回复的【原始纯文本】(气泡里存的是渲染后的 HTML, 读不回来)
     hostApiConfig: null,
     chat: null             // 宿主给的聊天对象
   };
@@ -556,6 +557,35 @@
     } catch (e) { return ''; }
   }
 
+  /**
+   * AI 回复正文 → HTML (跟主聊天同一套 markdown, 2026-11-26)
+   *
+   * 【为什么要改】
+   *   主聊天: parseMarkdown(plainText) → innerHTML, 所以 **加粗** / *斜体* / ~~删除~~
+   *     会变成样式, !h{...} / ||剧透|| 的外层标记也会被吃掉。
+   *   读书屋这边原来是 textContent = 纯文本 → 这些标记原样显示成字面符号,
+   *     用户看到的就是"同一句回复在读书屋和主聊天里格式不一样"。
+   *
+   * 【怎么改】
+   *   parseMarkdown 来自 ../modules/ui-loaders.js (主聊天那份的唯一出处),
+   *   沙盒 HTML 里已经引入, 这里直接用。
+   *   ⚠️ 多了一步"先转义再解析": 沙盒是【同源 iframe】, AI 文本直接塞 innerHTML
+   *      等于给父页面开了个 XSS 口子。先把 & < > 转义掉, 再让 parseMarkdown
+   *      加回它自己的 <span>/<strong> 标签 —— 标签是我们自己的, 不是 AI 的。
+   *
+   * 换行不用管: 气泡 CSS 是 white-space: pre-wrap, \n 本来就会断行,
+   * 再补 <br> 反而会多空一行 (主聊天是 white-space:normal + <br>, 两条路各走各的)。
+   */
+  function renderAiHtml(text) {
+    var t = String(text == null ? '' : text);
+    if (!t) return '';
+    t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (typeof parseMarkdown === 'function') {
+      try { t = parseMarkdown(t); } catch (e) { /* 解析不了就用转义后的原文 */ }
+    }
+    return t;
+  }
+
   function appendMsg(role, text) {
     if (!el.rrChatBody) return null;
     var d = document.createElement('div');
@@ -563,7 +593,7 @@
 
     // AI 气泡带角色头像 (2026-11-03, 用户要求"可以加显示 AI 头像", 跟主聊天一个观感)。
     // ⚠️ 头像要放在【气泡外面】的同一行里 —— 所以 AI 那条多一层 .rr-msg-row 包着,
-    //    .rr-msg 自己仍然是气泡本体 (下面的 textContent 一律操作它)。
+    //    .rr-msg 自己仍然是气泡本体 (下面的 innerHTML 一律操作它)。
     if (role === 'ai') {
       var row = document.createElement('div');
       row.className = 'rr-msg-row';
@@ -577,17 +607,56 @@
       }
       var bubble = document.createElement('div');
       bubble.className = 'rr-msg ai';
-      bubble.textContent = String(text || '');
+      bubble.innerHTML = renderAiHtml(text);
       row.appendChild(bubble);
       el.rrChatBody.appendChild(row);
       el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
       return bubble;   // 返回气泡本体, 调用方照旧往里写文字
     }
 
+    // 用户 / 系统消息一律走 textContent —— 用户输入不能当 HTML 解析
     d.textContent = String(text || '');
     el.rrChatBody.appendChild(d);
     el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
     return d;
+  }
+
+  /**
+   * 宠物说的话 → 聊天框里的一条气泡 (2026-11-25)
+   *
+   * 【为什么】读书屋是独立 iframe 页面, 打开时整屏盖住宿主聊天框。
+   *   pet-speech.js 说的话由宿主转发过来 (reading:petSay), 这里补一条,
+   *   否则用户在读书屋里根本看不到宠物开口
+   *   (用户原话: 「外面宠物说的话没办法刷新进图书馆的聊天框里」)。
+   *
+   * 【结构】.rr-msg 自己就是气泡本体 (见 CSS 里那条注释), 所以名字 / 正文
+   *   只能是它里面的 span, 不能给 .rr-msg 再套一层 —— 套了气泡样式就落在外层。
+   */
+  function appendPetMsg(d) {
+    if (!el.rrChatBody) return;
+    var name = String((d && d.petName) || '').trim() || '宠物';
+    var text = String((d && d.text) || '').trim();
+    if (!text) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'rr-msg pet';
+    var who = document.createElement('span');
+    who.className = 'rr-msg-pet-name';
+    who.textContent = '🐾 ' + name + '：';
+    var body = document.createElement('span');
+    body.className = 'rr-msg-pet-text';
+    body.textContent = text;
+    wrap.appendChild(who);
+    wrap.appendChild(body);
+    el.rrChatBody.appendChild(wrap);
+    el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
+
+    // 用户看不到聊天框时 (聊天收起了 / 还在书架页) 用 toast 兜一下 ——
+    //   不兜的话宠物这句话等于白说 (跟宿主聊天框那边的 toastSafe 一个道理)。
+    var collapsed = !!(el.rrChat && el.rrChat.classList.contains('collapsed'));
+    if (collapsed || S.view !== 'reader') {
+      toast('🐾 ' + name + '：' + text, 4000);
+    }
   }
 
   function setChatBusy(busy) {
@@ -618,6 +687,7 @@
 
     var bubble = appendMsg('ai', '');
     S.lastAiBubble = bubble;
+    S.lastAiRaw = '';
     setChatBusy(true);
 
     var reqId = 'rc' + (++S.chatSeq) + '_' + Date.now();
@@ -632,7 +702,10 @@
 
   function onChatDelta(d) {
     if (!S.lastAiBubble) S.lastAiBubble = appendMsg('ai', '');
-    S.lastAiBubble.textContent += String(d.delta || '');
+    // ⚠️ 气泡里存的是【渲染后的 HTML】, textContent 读回来已经没有 markdown 标记了
+    //    → 原始纯文本自己留一份, 收尾拆段落时要用
+    S.lastAiRaw = String(S.lastAiRaw || '') + String(d.delta || '');
+    S.lastAiBubble.innerHTML = renderAiHtml(S.lastAiRaw);
     if (el.rrChatBody) el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
   }
 
@@ -673,11 +746,11 @@
   function onChatDone(d) {
     setChatBusy(false);
     var text = String(d.text || '').trim();
-    var finalText = text || (S.lastAiBubble ? S.lastAiBubble.textContent : '');
+    var finalText = text || S.lastAiRaw || '';
     if (S.lastAiBubble) {
       // 流式过程一直在同一个气泡里追加; 结束后按段落拆开重排 (见 splitReplyParagraphs)
       var paras = splitReplyParagraphs(finalText);
-      S.lastAiBubble.textContent = paras[0];
+      S.lastAiBubble.innerHTML = renderAiHtml(paras[0]);
       var prevBubble = S.lastAiBubble;
       for (var i = 1; i < paras.length; i++) {
         var extra = appendMsg('ai', paras[i]);
@@ -695,6 +768,7 @@
       for (var j = 0; j < ps.length; j++) appendMsg('ai', ps[j]);
     }
     S.lastAiBubble = null;
+    S.lastAiRaw = '';
     if (el.rrChatBody) el.rrChatBody.scrollTop = el.rrChatBody.scrollHeight;
   }
 
@@ -702,6 +776,7 @@
     setChatBusy(false);
     appendMsg('sys', '⚠️ ' + String(d.error || '聊天失败'));
     S.lastAiBubble = null;
+    S.lastAiRaw = '';
   }
 
   function toggleChat(force) {
@@ -714,6 +789,26 @@
     if (el.rrChatToggle) {
       el.rrChatToggle.style.transform = want ? 'rotate(180deg)' : '';
     }
+    syncCompanionOffset();
+  }
+
+  /**
+   * 桌宠别压住聊天框 (2026-11-26)
+   *
+   * 读书屋的聊天面板在底部, 展开时会把桌宠的默认位置 (bottom: 92px) 盖住
+   * → 聊天展开时把桌宠顶到面板上面 (CSS 变量 --cx-pet-bottom)。
+   */
+  function syncCompanionOffset() {
+    try {
+      var chat = el.rrChat;
+      var collapsed = !chat || chat.classList.contains('collapsed');
+      var bottom = 92;
+      if (!collapsed && chat) {
+        var h = Math.round(chat.getBoundingClientRect().height || 0);
+        if (h > 0) bottom = h + 14;
+      }
+      document.documentElement.style.setProperty('--cx-pet-bottom', bottom + 'px');
+    } catch (e) { /* noop */ }
   }
 
   // ---- 分隔条拖动 ----
@@ -739,6 +834,7 @@
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
       document.removeEventListener('touchend', onEnd);
+      syncCompanionOffset();   // 2026-11-26: 聊天面板高度变了 → 桌宠跟着挪
     }
 
     function onStart(e) {
@@ -861,6 +957,29 @@
 
       case 'reading:chatError':
         onChatError(d);
+        break;
+
+      // 🔴 2026-11-25: 外面的宠物说话了 → 刷一条气泡进读书屋聊天框
+      case 'reading:petSay':
+        appendPetMsg(d);
+        // 🔴 2026-11-26: 同时在沙盒这只桌宠头顶冒个气泡 (用户要"看得见它在说话")
+        if (window.CompanionLayer && typeof window.CompanionLayer.say === 'function') {
+          window.CompanionLayer.say(d.petName, d.text);
+        }
+        break;
+
+      // 🔴 2026-11-26: 宿主把桌宠信息下发下来了 → 沙盒画同一只宠物
+      case 'reading:companion':
+        if (window.CompanionLayer && typeof window.CompanionLayer.setPet === 'function') {
+          window.CompanionLayer.setPet(d.pet || null);
+        }
+        break;
+
+      // 宿主那边照顾完了 → 沙盒自己提示 (宿主那条 toast 在 iframe 底下, 用户看不见)
+      case 'reading:petActionResult':
+        if (window.CompanionLayer && typeof window.CompanionLayer.toast === 'function') {
+          window.CompanionLayer.toast(d.message || '');
+        }
         break;
 
       // 换封面 (2026-11-02)
@@ -1034,6 +1153,8 @@
     grab();
     bindUi();
     showView('hall');
+    syncCompanionOffset();                              // 2026-11-26: 桌宠别压住聊天框
+    window.addEventListener('resize', syncCompanionOffset);
     if (!IN_IFRAME) {
       // 单独在浏览器里打开这一页 → 本地兜底 (方便开发时调试)
       if (el.rrBoot) el.rrBoot.classList.add('hide');

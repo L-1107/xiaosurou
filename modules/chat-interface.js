@@ -162,6 +162,232 @@
     }
   }
 
+  // ============================================================
+  // 通话记录折叠组 (2026-11-25)
+  // ------------------------------------------------------------
+  // 通话里的每一句都进了 chat.history (AI 上下文 / 记忆总结要按顺序读到),
+  // 但界面上不能铺开 —— 一通电话可能几十句, 全铺开又吵又占 DOM。
+  // 所以同一通电话的这些消息在聊天里折叠成一条 "📞 通话记录 · N 句", 点开才展开。
+  //
+  // ⚠️ 展开时才生成那几个气泡 (懒渲染):
+  //   挂断那一帧只建一个壳 → 挂断瞬间的 DOM 压力不涨
+  //   (那边正在拆 WebGL / 摄像头 / AudioContext, 多几十个气泡就是多几十个节点)。
+  //
+  // 结尾那条 "通话结束，时长 X" 也在组里 (它带 callRecordId),
+  // 展开后照样能点开原来的"通话记录详情"弹窗, 行为没丢。
+  // ============================================================
+
+  /** `${chatId}::${callRecordId}` -> 组对象 (同一通电话只建一个组) */
+  const callGroupRegistry = new Map();
+
+  function getCallGroupKey(chatId, callRecordId) {
+    return `${chatId}::${callRecordId}`;
+  }
+
+  function isCallGroupMessage(msg) {
+    return !!(msg && msg.callRecordId);
+  }
+
+  /** 把消息数组切成 [普通消息 | 通话组] 的单元序列 (同一 callRecordId 的归一组) */
+  function buildCallRenderUnits(messages) {
+    const units = [];
+    const list = Array.isArray(messages) ? messages : [];
+    let i = 0;
+    while (i < list.length) {
+      const msg = list[i];
+      if (isCallGroupMessage(msg)) {
+        const groupId = msg.callRecordId;
+        const members = [];
+        while (i < list.length && list[i] && list[i].callRecordId === groupId) {
+          members.push(list[i]);
+          i++;
+        }
+        units.push({ type: 'callGroup', groupId, members });
+        continue;
+      }
+      units.push({ type: 'message', msg });
+      i++;
+    }
+    return units;
+  }
+
+  /** 聊天记录整个重渲染时, 把这个聊天的旧组登记清掉 (DOM 已经被清空了) */
+  function clearCallGroups(chatId) {
+    const prefix = `${chatId}::`;
+    for (const key of Array.from(callGroupRegistry.keys())) {
+      if (key.startsWith(prefix)) callGroupRegistry.delete(key);
+    }
+  }
+
+  /** 建一条"通话记录"折叠组的壳 (header + 空的 body) */
+  function createCallTranscriptGroupShell(chat, groupId, members) {
+    const group = {
+      key: getCallGroupKey(chat.id, groupId),
+      chatId: chat.id,
+      groupId,
+      members: [],
+      rendered: false,
+      container: null,
+      header: null,
+      body: null
+    };
+
+    // 结尾那条 "通话结束" 没有 callTurnIndex
+    const endMessage = members.find(m => !m.callTurnIndex);
+    const turnCount = (endMessage && Number(endMessage.callTurnTotal)) ||
+      members.filter(m => m.callTurnIndex).length;
+    const callTypeText = endMessage && String(endMessage.content || '').indexOf('语音') >= 0
+      ? '语音通话记录' : '视频通话记录';
+
+    const container = document.createElement('div');
+    container.className = 'call-transcript-group';
+    container.dataset.callRecordId = String(groupId);
+
+    const header = document.createElement('div');
+    header.className = 'call-transcript-header';
+    header.setAttribute('role', 'button');
+    header.setAttribute('aria-expanded', 'false');
+    header.tabIndex = 0;
+
+    const icon = document.createElement('span');
+    icon.className = 'call-transcript-icon';
+    icon.textContent = '📞';
+
+    const label = document.createElement('span');
+    label.className = 'call-transcript-label';
+    label.textContent = callTypeText;
+
+    const meta = document.createElement('span');
+    meta.className = 'call-transcript-meta';
+    // 结尾那条的文案是 "通话结束，时长 5分12秒" —— 标题上只取时长那半截, 免得啰嗦
+    const endText = endMessage ? String(endMessage.content || '') : '';
+    const durationMatch = endText.match(/时长\s*([^\s]+)$/);
+    meta.textContent = durationMatch ? `· ${durationMatch[1]}` : '';
+
+    const count = document.createElement('span');
+    count.className = 'call-transcript-count';
+    count.textContent = `· ${turnCount} 句`;
+
+    const toggle = document.createElement('span');
+    toggle.className = 'call-transcript-toggle';
+    toggle.textContent = '展开 ▾';
+
+    header.appendChild(icon);
+    header.appendChild(label);
+    if (meta.textContent) header.appendChild(meta);
+    header.appendChild(count);
+    header.appendChild(toggle);
+
+    const body = document.createElement('div');
+    body.className = 'call-transcript-body';
+    body.style.display = 'none';
+
+    container.appendChild(header);
+    container.appendChild(body);
+
+    group.container = container;
+    group.header = header;
+    group.body = body;
+    group.members = members.slice();
+
+    const toggleGroup = () => toggleCallTranscriptGroup(group);
+    header.addEventListener('click', toggleGroup);
+    header.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleGroup();
+      }
+    });
+
+    callGroupRegistry.set(group.key, group);
+    return group;
+  }
+
+  async function toggleCallTranscriptGroup(group) {
+    if (!group || !group.container) return;
+    const expanded = group.container.classList.toggle('expanded');
+    group.header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    const toggle = group.header.querySelector('.call-transcript-toggle');
+    if (toggle) toggle.textContent = expanded ? '收起 ▴' : '展开 ▾';
+    if (expanded && !group.rendered) {
+      await renderCallTranscriptGroupBody(group);
+    }
+    // 渲染失败(聊天被删等)时别留一条空的虚线
+    if (expanded && group.body && group.body.children.length) {
+      group.body.style.display = '';
+    }
+  }
+
+  /** 展开时才真的生成那几个气泡 (懒渲染) */
+  async function renderCallTranscriptGroupBody(group) {
+    if (!group || !group.body || group.rendered) return;
+    group.rendered = true;
+    await renderCallTranscriptGroupMembers(group, group.members, false);
+  }
+
+  /**
+   * 把一批成员渲染进组里。
+   * @param {boolean} prepend true = 这批比组里已有的更早 (往上翻历史时补进来的), 插到最前面
+   */
+  async function renderCallTranscriptGroupMembers(group, members, prepend) {
+    const chat = state.chats[group.chatId];
+    if (!chat || !group.body || !Array.isArray(members) || members.length === 0) return;
+    const fragment = document.createDocumentFragment();
+    for (const msg of members) {
+      try {
+        const el = await createMessageElement(msg, chat);
+        if (el) fragment.appendChild(el);
+      } catch (error) {
+        console.warn('[通话记录] 气泡渲染失败:', error);
+      }
+    }
+    if (prepend) {
+      group.body.insertBefore(fragment, group.body.firstChild);
+    } else {
+      group.body.appendChild(fragment);
+    }
+    group.body.style.display = '';
+  }
+
+  /**
+   * 往上翻历史时, 同一通电话的更早几句可能被翻到新的一页里 →
+   * 合并进界面上已有的那个组, 别再立一个重复的标题。
+   * @returns {Object|null} 已有的组 (null = 界面上没有, 调用方自己建一个)
+   */
+  function mergeCallGroupMembers(chat, groupId, members) {
+    const existing = callGroupRegistry.get(getCallGroupKey(chat.id, groupId));
+    if (!existing || !existing.container || !existing.container.isConnected) return null;
+    existing.members = members.concat(existing.members);
+    if (existing.rendered) {
+      renderCallTranscriptGroupMembers(existing, members, true);
+    }
+    return existing;
+  }
+
+  /**
+   * 实时来了一条通话记录的消息 → 归到界面上那一通话的组里。
+   * (正常流程不会走到这: 挂断是整页重渲染的。这里是兜底, 免得这类消息变成孤儿泡。)
+   */
+  async function appendCallGroupMessage(msg, chat) {
+    const messagesContainer = document.getElementById('chat-messages');
+    if (!messagesContainer) return;
+    const key = getCallGroupKey(chat.id, msg.callRecordId);
+    let group = callGroupRegistry.get(key);
+    if (!group || !group.container || !group.container.isConnected) {
+      group = createCallTranscriptGroupShell(chat, msg.callRecordId, [msg]);
+      const typingIndicator = document.getElementById('typing-indicator');
+      if (typingIndicator) {
+        messagesContainer.insertBefore(group.container, typingIndicator);
+      } else {
+        messagesContainer.appendChild(group.container);
+      }
+    }
+    group.members.push(msg);
+    if (group.rendered) {
+      await renderCallTranscriptGroupMembers(group, [msg], false);
+    }
+  }
+
   async function renderChatInterface(chatId) {
     window.runtimeDiag?.markStart('RENDER_CHAT', { chatId });
     try {
@@ -312,8 +538,29 @@
     const fragment = document.createDocumentFragment();
     let lastTimestamp = 0;
 
+    // 旧组登记作废 (DOM 刚被清空)
+    clearCallGroups(chat.id);
 
-    for (const msg of initialMessages) {
+    // 通话记录的消息要折叠成一条, 其余照旧
+    const renderUnits = buildCallRenderUnits(initialMessages);
+
+    for (const unit of renderUnits) {
+
+      if (unit.type === 'callGroup') {
+        // 通话组: 只建壳, 里面那几句等用户点开再生成 (挂断瞬间不涨 DOM)
+        const firstMsg = unit.members[0];
+        if (firstMsg && !firstMsg.isHidden) {
+          if (lastTimestamp > 0 && (firstMsg.timestamp - lastTimestamp > 600000)) {
+            fragment.appendChild(createSystemTimestampElement(firstMsg.timestamp));
+          }
+          lastTimestamp = firstMsg.timestamp;
+        }
+        const group = createCallTranscriptGroupShell(chat, unit.groupId, unit.members);
+        fragment.appendChild(group.container);
+        continue;
+      }
+
+      const msg = unit.msg;
 
       if (!msg.isHidden) {
         if (lastTimestamp > 0 && (msg.timestamp - lastTimestamp > 600000)) {
@@ -422,20 +669,6 @@
     }
     currentRenderedCount += messagesToPrepend.length;
 
-    const messageElements = [];
-    for (const msg of messagesToPrepend) {
-      try {
-        const el = await createMessageElement(msg, chat);
-        messageElements.push(el);
-      } catch (error) {
-        window.runtimeDiag?.log?.('CHAT_RENDER_BAD_MESSAGE_SKIPPED', { chatId: chat.id, messageTimestamp: msg?.timestamp, error: error?.message || String(error) });
-        console.warn('[CHAT_RENDER_BAD_MESSAGE_SKIPPED]', error, msg);
-        messageElements.push(null);
-      }
-    }
-
-
-
     const fragment = document.createDocumentFragment();
     const firstVisibleMessage = messagesContainer.querySelector('.message-wrapper[data-timestamp]');
 
@@ -443,21 +676,49 @@
 
     let lastTimestampInNewBatch = 0;
 
+    // 同一通电话的更早几句可能被翻到这一页 → 合并进界面上已有的那个组
+    const prependUnits = buildCallRenderUnits(messagesToPrepend);
 
-    messagesToPrepend.forEach((msg, index) => {
+    for (const unit of prependUnits) {
+
+      if (unit.type === 'callGroup') {
+        const firstMsg = unit.members[0];
+        if (firstMsg && !firstMsg.isHidden) {
+          if (lastTimestampInNewBatch > 0 && (firstMsg.timestamp - lastTimestampInNewBatch > 600000)) {
+            fragment.appendChild(createSystemTimestampElement(firstMsg.timestamp));
+          }
+          lastTimestampInNewBatch = firstMsg.timestamp;
+        }
+        const existing = mergeCallGroupMembers(chat, unit.groupId, unit.members);
+        if (!existing) {
+          const group = createCallTranscriptGroupShell(chat, unit.groupId, unit.members);
+          fragment.appendChild(group.container);
+        }
+        continue;
+      }
+
+      const msg = unit.msg;
+
+      let element = null;
+      try {
+        element = await createMessageElement(msg, chat);
+      } catch (error) {
+        window.runtimeDiag?.log?.('CHAT_RENDER_BAD_MESSAGE_SKIPPED', { chatId: chat.id, messageTimestamp: msg?.timestamp, error: error?.message || String(error) });
+        console.warn('[CHAT_RENDER_BAD_MESSAGE_SKIPPED]', error, msg);
+        element = null;
+      }
+
       if (!msg.isHidden) {
-
         if (lastTimestampInNewBatch > 0 && (msg.timestamp - lastTimestampInNewBatch > 600000)) {
           fragment.appendChild(createSystemTimestampElement(msg.timestamp));
         }
         lastTimestampInNewBatch = msg.timestamp;
       }
 
-      const element = messageElements[index];
       if (element) {
         fragment.appendChild(element);
       }
-    });
+    }
 
     if (timestampOfFirstVisible > 0 && (timestampOfFirstVisible - lastTimestampInNewBatch > 600000)) {
       fragment.appendChild(createSystemTimestampElement(timestampOfFirstVisible));
@@ -1660,6 +1921,20 @@
 
   async function appendMessage(msg, chat, isInitialLoad = false) {
     const diagKey = !isInitialLoad ? 'RENDER_CHAT_APPEND' : null;
+
+    // 通话记录的消息不单独成泡 —— 归到那一通话的折叠组里
+    if (isCallGroupMessage(msg)) {
+      await appendCallGroupMessage(msg, chat);
+      if (diagKey) {
+        window.runtimeDiag?.markEnd(diagKey, 'RENDER_CHAT_DONE', {
+          chatId: chat?.id,
+          role: msg?.role,
+          type: 'call_group'
+        });
+      }
+      return;
+    }
+
     if (diagKey) {
       window.runtimeDiag?.markStart(diagKey, {
         chatId: chat?.id,
