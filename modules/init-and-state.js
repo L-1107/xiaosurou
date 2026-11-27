@@ -286,6 +286,29 @@ document.addEventListener('DOMContentLoaded', () => {
       state.globalSettings.wallpaper = defaultGlobalSettings.wallpaper;
     }
 
+    // 🔴 2026-11-27 「API调用历史 / 记忆库存档」下线后的一次性残留清理。
+    //   这两块功能不再采集新数据了, 但老用户的 DB 里可能还压着几十条原始 prompt
+    //   和整段聊天快照 (单角色可达几 MB)。这里静默删字段 + 落库, 不弹窗不打扰。
+    //   (只在有残留时写一次, 之后每次启动都是 0 个, 不产生额外写入)
+    const junkPurge = [];
+    chatsArr.forEach(chat => {
+      let dirty = false;
+      if (Object.prototype.hasOwnProperty.call(chat, 'apiHistory')) { delete chat.apiHistory; dirty = true; }
+      if (Object.prototype.hasOwnProperty.call(chat, 'memoryArchives')) { delete chat.memoryArchives; dirty = true; }
+      if (dirty) junkPurge.push(chat);
+    });
+    if (junkPurge.length > 0) {
+      try {
+        if (typeof db.chats.bulkPut === 'function') {
+          const p = db.chats.bulkPut(junkPurge);
+          if (p && typeof p.catch === 'function') {
+            p.catch(e => console.warn('[启动清理] 清除已下线功能的残留数据失败:', e));
+          }
+          console.log(`[启动清理] 已清除 ${junkPurge.length} 个角色的 apiHistory / memoryArchives 残留`);
+        }
+      } catch (e) { /* 清理失败不影响启动 */ }
+    }
+
     chatsArr.forEach(chat => {
       if (typeof chat.settings.enableTimePerception === 'undefined') {
         chat.settings.enableTimePerception = true;
@@ -460,6 +483,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (typeof chat.settings.viewMyPhoneChance === 'undefined') {
           chat.settings.viewMyPhoneChance = null; // null表示使用全局设置
+        }
+
+        // 【2026-11-27】后台活动开关全部收敛到 chat.settings.bgActivity。
+        //   这里显式建一次结构 —— 第一次会按旧字段迁移一次(老用户开关不丢),
+        //   之后角色聊天设置页的面板直接读写它。
+        if (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function') {
+          window.BgActivityConfig.getBgActivityConfig(chat);
         }
 
         if (typeof chat.heartfeltVoice === 'undefined') chat.heartfeltVoice = '...';
@@ -674,9 +704,6 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await window.loadBackgroundKeepAliveSettings();
       } catch (e) { console.warn('后台保活初始化失败:', e); }
-    }
-    if (typeof startAIReminderScheduler === 'function') {
-      startAIReminderScheduler();
     }
     loadShoppingCart(); // 加载购物车数据
     

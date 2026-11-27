@@ -2243,14 +2243,8 @@ window.initEventBindingsA = async function(state, db) {
           window.ProactiveWakeUI.syncPushConfig().catch(e => console.warn('[push-config] 主 API 变化 sync 失败:', e.message));
       }
 
-      const backgroundSwitch = document.getElementById('background-activity-switch');
-      const intervalInput = document.getElementById('background-interval-input');
-      const cooldownInput = document.getElementById('block-cooldown-input');
       const proactiveIntervalInput = document.getElementById('proactive-interval-input');
 
-      state.globalSettings.enableBackgroundActivity = backgroundSwitch.checked;
-      state.globalSettings.backgroundActivityInterval = parseInt(intervalInput.value) || 60;
-      state.globalSettings.blockCooldownHours = parseFloat(cooldownInput.value) || 1;
       state.globalSettings.enableAiDrawing = document.getElementById('enable-ai-drawing-switch').checked;
 
       // 保存悬浮球开关
@@ -2266,7 +2260,7 @@ window.initEventBindingsA = async function(state, db) {
         }
       }
 
-      // 新增：保存心声和动态功能开关
+      // 新增：保存心声开关
       state.globalSettings.enableThoughts = document.getElementById('global-enable-thoughts-switch').checked;
       state.globalSettings.customThoughtsUIEnabled = document.getElementById('custom-thoughts-ui-switch').checked;
       state.globalSettings.customThoughtsHTML = document.getElementById('custom-thoughts-html-textarea').value;
@@ -2279,14 +2273,7 @@ window.initEventBindingsA = async function(state, db) {
       state.globalSettings.customChatPromptSingle = document.getElementById('custom-chat-prompt-single-textarea').value;
       state.globalSettings.customChatPromptGroup = document.getElementById('custom-chat-prompt-group-textarea').value;
       state.globalSettings.customChatPromptOffline = document.getElementById('custom-chat-prompt-offline-textarea').value;
-      state.globalSettings.enableQzoneActions = document.getElementById('global-enable-qzone-actions-switch').checked;
-      state.globalSettings.enableViewMyPhone = document.getElementById('global-enable-view-myphone-switch').checked;
       state.globalSettings.enableCrossChat = document.getElementById('global-enable-cross-chat-switch').checked;
-      
-      // 新增：保存后台查看用户手机设置
-      state.globalSettings.enableViewMyPhoneInBackground = document.getElementById('global-enable-view-myphone-bg-switch').checked;
-      const viewMyPhoneChanceInput = document.getElementById('global-view-myphone-chance-input');
-      state.globalSettings.viewMyPhoneChance = viewMyPhoneChanceInput.value.trim() === '' ? null : parseInt(viewMyPhoneChanceInput.value);
 
       state.globalSettings.chatRenderWindow = parseInt(document.getElementById('chat-render-window-input').value) || 50;
       state.globalSettings.chatListRenderWindow = parseInt(document.getElementById('chat-list-render-window-input').value) || 30;
@@ -2295,13 +2282,9 @@ window.initEventBindingsA = async function(state, db) {
       state.globalSettings.apiPresencePenalty = parseFloat(document.getElementById('api-presence-penalty-input').value);
       state.globalSettings.apiFrequencyPenalty = parseFloat(document.getElementById('api-frequency-penalty-input').value);
       state.globalSettings.mainApiUseProxy = document.getElementById('main-api-use-proxy-switch').checked;
-      
-      // 方案4：保存API历史记录开关状态
-      const apiHistorySwitch = document.getElementById('enable-api-history-switch');
-      if (apiHistorySwitch) {
-        state.globalSettings.enableApiHistory = apiHistorySwitch.checked;
-      }
-      
+
+      // 🔴 2026-11-27 「保存API历史记录开关状态」删掉: 开关和采集端一起下线
+
       // 保存安全渲染模式
       const safeRenderSwitch = document.getElementById('safe-render-mode-switch');
       const oldSafeRenderMode = state.globalSettings.safeRenderMode;
@@ -2335,12 +2318,10 @@ window.initEventBindingsA = async function(state, db) {
         }, 100);
       }
 
-      stopBackgroundSimulation();
-      if (state.globalSettings.enableBackgroundActivity) {
+      // 2026-11-27: 全局后台活动总闸已删 —— 心跳常开。
+      //   实际跑不跑由【每个角色】自己的 bgActivity.enabled 决定 (见 modules/background-activity.js)
+      if (typeof startBackgroundSimulation === 'function') {
         startBackgroundSimulation();
-        console.log(`后台活动模拟已启动，间隔: ${state.globalSettings.backgroundActivityInterval}秒`);
-      } else {
-        console.log("后台活动模拟已停止。");
       }
       // 保存NovelAI配置到localStorage
       const novelaiEnabled = document.getElementById('novelai-switch').checked;
@@ -3481,8 +3462,6 @@ window.initEventBindingsA = async function(state, db) {
       document.getElementById('offline-mode-group').style.display = isGroup ? 'none' : 'block';
       document.getElementById('ai-cooldown-group').style.display = isGroup ? 'none' : 'block';
       document.getElementById('group-cooldown-group').style.display = isGroup ? 'block' : 'none';
-      // 记忆存档功能现在支持群聊
-      document.getElementById('memory-archive-section').style.display = 'block';
       document.getElementById('export-character-full-btn').style.display = isGroup ? 'none' : 'block';
       document.getElementById('chat-name-input').value = chat.name;
 
@@ -3569,22 +3548,17 @@ window.initEventBindingsA = async function(state, db) {
         document.getElementById('single-char-background-activity-group').style.display = 'block';
         document.getElementById('enable-todo-list-switch').checked = chat.settings.enableTodoList || false;
         // 🔴 2026-11-19 「实时天气同步」删掉 (原来的天气区块显隐 + 配置回显在这一段)
-        document.getElementById('char-background-activity-switch').checked = chat.settings.enableBackgroundActivity;
+        // 🔴 2026-11-27 「启用独立后台活动 / 清购物车 / 后台看手机 / 查看概率」四个开关
+        //   合并成角色设置里的一块「AI 后台活动」面板 → BgActivityPanel.load()
+        if (window.BgActivityPanel && typeof window.BgActivityPanel.load === 'function') {
+          window.BgActivityPanel.load(chat.id);
+          window.BgActivityPanel.bindEvents();
+        }
         const charProactiveSwitch = document.getElementById('char-proactive-enabled-switch');
         if (charProactiveSwitch) {
           charProactiveSwitch.checked = chat.settings.proactiveEnabled === true;
         }
         document.getElementById('inject-thought-toggle').checked = chat.settings.injectLatestThought;
-        document.getElementById('char-auto-cart-clear-switch').checked = chat.settings.enableAutoCartClear || false;
-        
-        // 新增：加载后台查看用户手机设置
-        const charViewMyPhoneBgSelect = document.getElementById('char-view-myphone-bg-select');
-        if (chat.settings.enableViewMyPhoneInBackground === null || chat.settings.enableViewMyPhoneInBackground === undefined) {
-          charViewMyPhoneBgSelect.value = 'null';
-        } else {
-          charViewMyPhoneBgSelect.value = String(chat.settings.enableViewMyPhoneInBackground);
-        }
-        document.getElementById('char-view-myphone-chance-input').value = chat.settings.viewMyPhoneChance !== null && chat.settings.viewMyPhoneChance !== undefined ? chat.settings.viewMyPhoneChance : '';
 
         // 新增：读取AI行为控制设置
         const thoughtsSelect = document.getElementById('chat-enable-thoughts-select');
@@ -3594,19 +3568,8 @@ window.initEventBindingsA = async function(state, db) {
           thoughtsSelect.value = String(chat.settings.enableThoughts);
         }
 
-        const qzoneSelect = document.getElementById('chat-enable-qzone-actions-select');
-        if (chat.settings.enableQzoneActions === null || chat.settings.enableQzoneActions === undefined) {
-          qzoneSelect.value = 'null';
-        } else {
-          qzoneSelect.value = String(chat.settings.enableQzoneActions);
-        }
-
-        const viewMyPhoneSelect = document.getElementById('chat-enable-view-myphone-select');
-        if (chat.settings.enableViewMyPhone === null || chat.settings.enableViewMyPhone === undefined) {
-          viewMyPhoneSelect.value = 'null';
-        } else {
-          viewMyPhoneSelect.value = String(chat.settings.enableViewMyPhone);
-        }
+        // 🔴 2026-11-27 「启用动态功能」「查看User手机」两个下拉删掉了
+        //   (动态 / 看手机现在由「AI 后台活动」面板统一管)
 
         const crossChatSelect = document.getElementById('chat-enable-cross-chat-select');
         if (chat.settings.enableCrossChat === null || chat.settings.enableCrossChat === undefined) {
@@ -3617,8 +3580,6 @@ window.initEventBindingsA = async function(state, db) {
 
         // 更新全局设置状态显示
         document.getElementById('global-thoughts-status').textContent = state.globalSettings.enableThoughts ? '开启' : '关闭';
-        document.getElementById('global-qzone-status').textContent = state.globalSettings.enableQzoneActions ? '开启' : '关闭';
-        document.getElementById('global-view-myphone-status').textContent = state.globalSettings.enableViewMyPhone ? '开启' : '关闭';
         document.getElementById('global-cross-chat-status').textContent = state.globalSettings.enableCrossChat !== false ? '开启' : '关闭';
 
         // 读取回复条数范围设置（仅单聊）
@@ -3686,7 +3647,7 @@ window.initEventBindingsA = async function(state, db) {
         const live2dInput = document.getElementById('ai-live2d-model-input');
         if (live2dInput) live2dInput.value = chat.settings.live2dModelPath || '';
         document.getElementById('my-nickname-input').value = chat.settings.myNickname || '我';
-        document.getElementById('ai-action-cooldown-input').value = chat.settings.actionCooldownMinutes || 10;
+        // 🔴 2026-11-27 冷却改由 AI 后台活动面板读写 bgActivity.cooldownMinutes, 这里不再回显
         const select = document.getElementById('assign-group-select');
         select.innerHTML = '<option value="">未分组</option>';
         const groups = await db.qzoneGroups.toArray();
@@ -3893,8 +3854,7 @@ window.initEventBindingsA = async function(state, db) {
         document.getElementById('link-memory-toggle').addEventListener('change', updateTokenCountDisplay);
       }, 100);
 
-      // 渲染记忆库列表
-      renderMemoryArchiveList();
+      // 🔴 2026-11-27 「渲染记忆库列表」调用删掉 (存档功能整体下线)
 
       // P3-2: 聊天设置页"视频通话优化"板块已删除, loadVideoOptimizationSettings(chat) (无 prefix) 入口不再调用
       //   视频通话优化加载入口仅在 #live2d-call-prep-screen 的 Live2DCallPrep.render() 中以 'prep-' prefix 调
@@ -4135,7 +4095,10 @@ window.initEventBindingsA = async function(state, db) {
         chat.settings.enableStickerSmartMatch = document.getElementById('enable-sticker-smart-match-checkbox').checked;
       } else {
         const wasProactiveEnabled = chat.settings.proactiveEnabled === true;
-        chat.settings.enableBackgroundActivity = document.getElementById('char-background-activity-switch').checked;
+        // 🔴 2026-11-27 后台活动四个开关合并成一块面板 → BgActivityPanel.save()
+        if (window.BgActivityPanel && typeof window.BgActivityPanel.save === 'function') {
+          window.BgActivityPanel.save(chat.id);
+        }
         const charProactiveSwitch = document.getElementById('char-proactive-enabled-switch');
         if (charProactiveSwitch) {
           chat.settings.proactiveEnabled = charProactiveSwitch.checked;
@@ -4143,17 +4106,6 @@ window.initEventBindingsA = async function(state, db) {
             chat.lastProactiveTimestamp = Date.now();
           }
         }
-        chat.settings.enableAutoCartClear = document.getElementById('char-auto-cart-clear-switch').checked;
-        
-        // 新增：保存后台查看用户手机设置
-        const charViewMyPhoneBgSelect = document.getElementById('char-view-myphone-bg-select');
-        if (charViewMyPhoneBgSelect.value === 'null') {
-          chat.settings.enableViewMyPhoneInBackground = null;
-        } else {
-          chat.settings.enableViewMyPhoneInBackground = charViewMyPhoneBgSelect.value === 'true';
-        }
-        const charViewMyPhoneChanceInput = document.getElementById('char-view-myphone-chance-input');
-        chat.settings.viewMyPhoneChance = charViewMyPhoneChanceInput.value.trim() === '' ? null : parseInt(charViewMyPhoneChanceInput.value);
         
         chat.settings.enableTodoList = document.getElementById('enable-todo-list-switch').checked;
         const newOfflineModeState = document.getElementById('offline-mode-toggle').checked;
@@ -4190,20 +4142,7 @@ window.initEventBindingsA = async function(state, db) {
           chat.settings.enableThoughts = thoughtsValue === 'true';
         }
 
-        const qzoneValue = document.getElementById('chat-enable-qzone-actions-select').value;
-        if (qzoneValue === 'null') {
-          chat.settings.enableQzoneActions = null;
-        } else {
-          chat.settings.enableQzoneActions = qzoneValue === 'true';
-        }
-
-        const viewMyPhoneValue = document.getElementById('chat-enable-view-myphone-select').value;
-        if (viewMyPhoneValue === 'null') {
-          chat.settings.enableViewMyPhone = null;
-        } else {
-          chat.settings.enableViewMyPhone = viewMyPhoneValue === 'true';
-        }
-
+        // 🔴 2026-11-27 「启用动态功能」「查看User手机」两个下拉删掉了, 不用再存
         const crossChatValue = document.getElementById('chat-enable-cross-chat-select').value;
         if (crossChatValue === 'null') {
           chat.settings.enableCrossChat = null;
@@ -4259,7 +4198,7 @@ window.initEventBindingsA = async function(state, db) {
         const live2dInputEl = document.getElementById('ai-live2d-model-input');
         if (live2dInputEl) chat.settings.live2dModelPath = live2dInputEl.value.trim();
         chat.settings.myNickname = document.getElementById('my-nickname-input').value.trim() || '我';
-        chat.settings.actionCooldownMinutes = parseInt(document.getElementById('ai-action-cooldown-input').value) || 10;
+        // 🔴 2026-11-27 冷却改由 AI 后台活动面板读写 bgActivity.cooldownMinutes, 这里不再保存
 
         const selectedGroupId = document.getElementById('assign-group-select').value;
         chat.groupId = selectedGroupId ? parseInt(selectedGroupId) : null;

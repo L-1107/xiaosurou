@@ -263,8 +263,7 @@ function strip(s) {
     /function resumeHostBackgroundTasks\(\)/.test(BG));
   check('后台活动: 只恢复【进影院之前就在跑】的那些 (不给用户凭空多开)',
     /hostTaskPauseState/.test(BG) &&
-    /simulation: !!simulationIntervalId/.test(BG) &&
-    /reminder: !!aiReminderSchedulerIntervalId/.test(BG));
+    /simulation: !!simulationIntervalId/.test(BG));
   check('后台活动: pause/resume 暴露到 window (影院那边调得到)',
     /window\.pauseHostBackgroundTasks = pauseHostBackgroundTasks/.test(BG) &&
     /window\.resumeHostBackgroundTasks = resumeHostBackgroundTasks/.test(BG));

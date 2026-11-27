@@ -1168,12 +1168,20 @@ ${recentHistoryContext}
   async function checkAndClearShoppingCart(chatId) {
     try {
       const chat = state.chats[chatId];
-      
+      if (!chat) return;
+
       // 检查是否启用了自动清空购物车功能
-      if (!chat || !chat.settings.enableAutoCartClear) {
+      // 2026-11-27: 开关并入 chat.settings.bgActivity.acts.clearCart (旧字段读时兼容)
+      const bgCfg = (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function')
+        ? window.BgActivityConfig.getBgActivityConfig(chat)
+        : null;
+      const cartClearEnabled = bgCfg
+        ? !!(bgCfg.enabled && bgCfg.acts && bgCfg.acts.clearCart)
+        : !!chat.settings.enableAutoCartClear;
+      if (!cartClearEnabled) {
         return;
       }
-      
+
       // 检查购物车是否为空
       if (!shoppingCart || shoppingCart.length === 0) {
         return;

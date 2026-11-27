@@ -1706,13 +1706,136 @@
 //   修法: 这两行改成【堆叠】布局(跟「池成员」「生效范围」一样), 彻底不用 .settings-right。
 //   index.html 的 ?v=：css/features-1.css 0.0.43→0.0.44。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.143.0';
+// v0.2.143.1 (2026-11-27): AI 后台活动开关整合 —— 全部收进【角色聊天设置 → AI 后台活动】面板。
+//   改动:
+//   · 新增 modules/bg-activity-config.js (统一配置层) + modules/bg-activity-panel.js (面板 UI)
+//   · 主设置页删掉: 启用后台角色活动 / 检测间隔 / 拉黑冷静期 / 后台查看用户手机 /
+//     查看概率 / 启用动态功能 / 查看User手机  (全局总闸彻底没了)
+//   · 角色聊天设置页删掉两个重复下拉: 启用动态功能 / 查看User手机 (由新面板接管)
+//   · NPC 编辑弹窗: 「启用独立后台活动」拆成「发动态」+「评论动态」两个独立开关
+//   · 情侣空间子页面 (330--main/index.html): 11 个弹窗删掉「定时自动/时间/AI自主决定/概率」,
+//     只留内容设置 + 一行「去哪设」的提示; 纪念日/情侣树 不动
+//   · 删掉 modules/ai-reminders.js + css/ai-reminders.css (本地 AI 提醒 UI 从未挂载, 表永远空)
+//   · 删掉 create_push_task 哑链路 (prompt 教 AI 输出 → 被抹掉 → POST 到 noop 端点)
+//   index.html 的 ?v=: css/features-1.css 0.0.44→0.0.45, chat-interface 0.0.38→0.0.39,
+//     ai-response 0.0.59→0.0.60, ai-group 0.0.42→0.0.43, settings-presets 0.0.91→0.0.92,
+//     chat-settings-presets 0.0.36→0.0.37, shopping 0.0.36→0.0.37,
+//     background-activity 0.0.51→0.0.52, proactive-wake 0.2.16→0.2.17,
+//     proactive-wake-ui 0.2.28→0.2.29, misc-features 0.0.45→0.0.46,
+//     init-event-bindingsA 0.0.51→0.0.52, init-event-bindingsB 0.0.43→0.0.44,
+//     init-and-state 0.0.85→0.0.86, couple-space 0.0.39→0.0.40。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.2 (2026-11-27): 删掉三块没人用的垃圾功能（用户原话: "没什么用的垃圾功能"）。
+//   · 「记忆库」= 角色设置页的存档/读档 (chat.memoryArchives) —— 保存/加载/删除/重命名 全删,
+//     css/memory.css 里那套 .memory-archive-* 样式一并删掉
+//   · 「API调用历史」= 调试用的原始 prompt/响应记录 —— 角色设置页入口 + 查看器弹窗 +
+//     主设置页「启用API历史记录」开关 + 「清空所有API历史记录」按钮 + 采集端
+//     (ai-response.js 不再构造 requestData / 不再写 chat.apiHistory) 全删
+//   · 「消息导航」= 回到第一条/最后一条消息 两个按钮 + handler 全删
+//   · 老数据一次性清理: init-and-state.js 启动时静默删掉 DB 里残留的 apiHistory / memoryArchives
+//     (只在有残留时写一次, 之后 0 个)
+//   · ⚠️ 真·记忆系统 (vector-memory.js / memory-summary.js / structured-memory.css) 一个字节没动
+//   备份导入导出里 strip apiHistory 的防御代码【保留】—— 防止导入老备份把垃圾数据再写回库
+//   index.html 的 ?v=: css/memory.css 0.0.36→0.0.37, chat-settings-skyblue.css 0.0.37→0.0.38,
+//     ai-response 0.0.60→0.0.61, settings-presets 0.0.92→0.0.93,
+//     init-event-bindingsA 0.0.52→0.0.53, init-event-bindingsB 0.0.44→0.0.45,
+//     init-features 0.0.47→0.0.48, init-and-state 0.0.86→0.0.87。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.3 (2026-11-27): 删掉 3.1MB 死文件 script.js。
+//   · script.js = 项目早期混淆过的旧总包，拆分到 modules/ 之后【再没有任何 HTML 加载它】
+//     (只有 sw.js 预缓存清单和 force-update.js 更新清单还提到)。不执行 → 纯占体积。
+//   · 同步改: sw.js 的 URLS_TO_CACHE 去掉 './script.js'、fetch 的 isLocalAsset 去掉该匹配,
+//     force-update.js 的 FILES_TO_UPDATE 去掉 'script.js'。
+//   · ⚠️ 必须 bump CACHE_VERSION: activate 只删"名字不同"的旧缓存, 版本不变则旧缓存里
+//     那 3.1MB 会一直留着。bump 后旧 cache 整体被清, 用户设备上真能省下这 3MB。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.4 (2026-11-27): 修「朋友圈 / 情侣空间相册从来不出图」。
+//   · 朋友圈(聊天路径) 提示词里那两行把 ${ 转义成了字面量 —— 每次都在提示词里塞一段
+//     没被求值的 JS 源码, 而且只认 NovelAI / Google Imagen, OpenAI 兼容压根没接。
+//     ⇒ AI 从来没被告知"可以发图片动态", 所以永远只发纯文字 (四个渠道都一样)。
+//     现在改成读统一生图路由 getCurrentEnabledImageProvider(), 四渠道都认。
+//   · 朋友圈处理器补 openaiimag / ai_image 两个分支 (原来只有 naiimag / googleimag)。
+//   · 后台发动态 (ai-group.js) 原来既没有图片选项也没有生成分支 —— 现在都补上。
+//   · 情侣空间相册: 生图失败原来是全静默的 (catch 里只 console.error), 用户永远只看到
+//     灰色占位。现在失败会弹 toast 说明原因 (同一原因 60 秒内只提示一次)。
+//   注意: 相册的「角色生图方式」下拉本来就是独立的 (coupleAlbumSettings_<charId>)
+//     默认 "无(灰色占位)", 得在 情侣空间 → 相册 → 设置 里选「OpenAI 兼容」才会生图。
+//   index.html 的 ?v=: ai-response 0.0.61→0.0.62, ai-group 0.0.43→0.0.44,
+//     qzone 0.0.37→0.0.38 (渲染层要认得 openaiimag / ai_image), nai-imagen 0.0.36→0.0.37 (图库扫描同补),
+//     couple-space 0.0.40→0.0.41。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.5 (2026-11-27): 「独立行动冷却」修好 + 朋友圈/通用行动各算各的。
+//   · 改前面板里填的冷却【白填】—— 它写 chat.settings.bgActivity.cooldownMinutes,
+//     而真正判定冷却的代码读的是旧字段 chat.settings.actionCooldownMinutes(默认10), 没人读新值。
+//     页面上还并存两个同名「独立行动冷却 (分钟)」输入框, 改到哪个都可能白改。
+//     现在: 删掉旧输入框(连同回显/保存), 判定改读 bgActivity.cooldownMinutes。
+//   · 改前 发动态/评论/点赞 跟 发消息/打电话/换头像 共用同一个 lastActionTimestamp → 互相占机会。
+//     现在同一个数值、两套独立计时:
+//        chat.lastActionTimestamp      管 发消息/打电话/换头像/唱歌/购物/偷看
+//        chat.lastQzoneActionTimestamp 管 发动态/评论/点赞/删动态
+//     提示词按「这一组是否过了冷却」过滤, 只有两组都在冷却才整轮跳过。
+//   · 情侣空间本来就不走这条 —— 它有自己「每功能每天最多一次 + 每次心跳掷 5%/15%」的模型,
+//     跟这个分钟冷却无关, 也没被朋友圈占用。
+//   index.html 的 ?v=: ai-group 0.0.44→0.0.45, background-activity 0.0.52→0.0.53,
+//     init-event-bindingsA 0.0.53→0.0.54。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.6 (2026-11-27): AI 唱歌的渠道从 MiniMax 换成【阶跃星辰 StepAudio 3 Music】。
+//   背景: MiniMax 已把该账号踢出老用户队列, music_generation 名存实亡。
+//   接口不是同一种协议, 所以 modules/ai-music.js 的调用层整个重写:
+//     · MiniMax: 同步 POST /v1/music_generation, 返回 hex, 模型 music-3.0
+//     · 阶跃:   异步 POST /v1/audio/music/submit 拿 task_id
+//               → 每 5 秒轮询 /v1/audio/music/query (PENDING/RUNNING/SUCCESS/FAILED)
+//               → SUCCESS 返回 base64 音频; 模型 stepaudio-3-music-preview (必须带 -preview)
+//   字段映射: prompt→caption(必填曲风描述), model→model_id, lyrics/instrumental 保留
+//             (官方规定 instrumental=true 时不得同时传 lyrics)
+//   API Key 仍由用户自己填 (设置页「音乐生成 → API Key」→ globalSettings.musicApiKey)。
+//     ⚠️ 砍掉了原来"留空回落到聊天主 API Key"的兜底 —— 那是别的厂商的 key, 发给阶跃必然 401。
+//   旧库里的 musicModel (music-3.0 / music-2.6 / music-cover) 在阶跃不存在,
+//     读取时一律兜回 stepaudio-3-music-preview, 避免带着旧 ID 请求直接 404 model_invalid。
+//   错误按官方 error.type 转成人话 (insufficient_credit 余额不足 / not_allowed key 无效 /
+//     model_invalid 无权限 / rate_limited 限流 / service_unavailable 服务繁忙),
+//     FAILED 终态按 error.stage 区分 (censor 审核 / no_speech_detected / audio_transcode / internal)。
+//   index.html 的 ?v=: ai-music 0.0.81→0.0.82, settings-presets 0.0.93→0.0.94。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.7 (2026-11-27): 阶跃星辰音乐 —— 提示词完善 + 断点续取。
+//   · 提示词(聊天 request_song / 后台 sing_song)按阶跃的 caption 规则重写:
+//     曲风描述必须写全 5 个维度(曲风 / 人声性别音色 / 速度 / 乐器编曲 / 情绪与调式),
+//     并明确「优先你自己写完整歌词」——留空是交给阶跃服务端按曲风瞎编, 它不认识角色。
+//   · 音乐生成开关关着时, 不再把 request_song 写进提示词(否则模型调了只会失败)。
+//   · 断点续取: 提交成功即把 task_id 存 localStorage(stepfunMusicPendingTasks),
+//     页面重开 10 秒后自动查一遍 —— SUCCESS 补交付(存原创曲库 + 推聊天消息),
+//     RUNNING 接着轮询到完成, FAILED / task_not_found / 超 24h 丢弃,
+//     30 秒内的跳过(防止和本页 live 生成抢着交付)。
+//     (关页面会中断轮询但服务端照跑照计费, 没这个机制那笔钱就白花了)
+//   · 三个调用方(ai-response / ai-group / background-activity)补传 title, 续取时歌名不丢。
+//   index.html 的 ?v=: ai-music 0.0.82→0.0.83, ai-response 0.0.62→0.0.63,
+//     ai-group 0.0.45→0.0.46, background-activity 0.0.53→0.0.54。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.8 (2026-11-27): 唱歌提示词去掉示例（笨模型会照抄示例当答案）。
+//   · 删掉「示例："温柔民谣，女声独唱气声偏暖…"」整行和 5 维度里的「如 民谣 / R&B / …」举例。
+//   · JSON 骨架里的占位值也清空（原来写 "title": "歌名", "prompt": "曲风描述" —— 会被原样抄出来）。
+//   · 只保留【格式契约】：JSON 字段名 + 歌词结构标签语法（[Intro]/[Verse 1]/[Chorus 1]…），
+//     这两个删了指令就发不对，不是"示例"。
+//   · 顺带修掉「你有两个音乐工具」的错（实际有 3 个），改成不写死数量。
+//   index.html 的 ?v=: ai-response 0.0.63→0.0.64, ai-group 0.0.46→0.0.47。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+// v0.2.143.9 (2026-11-27): 网易云搜歌提示词去掉歌名示例。
+//   原因: 原来写着 keyword 举例（如"晴天 周杰伦"），模型每次都照抄去搜周杰伦/晴天，
+//   而网易云根本没有周杰伦的版权 → 每次都搜不到。
+//   · 删掉具体歌名示例，只描述"歌名 / 歌手 / 歌词片段都可以，按用户这次真正说的内容来写"。
+//   · JSON 占位值清空（"song_name": "", "keyword": ""），避免被当答案填。
+//   · 补一条：搜不到（没有版权/已下架）就换一首再试，别反复搜同一首。
+//   index.html 的 ?v=: ai-response 0.0.64→0.0.65。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.143.9';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
   './index.html',
   './online-app.css',
-  './script.js',
+  // 🔴 2026-11-27: './script.js' 从这里删掉了 —— 那个 3.1MB 的混淆旧包
+  //   全项目【没有任何 HTML 加载它】(读档见 _reports/reading-room-audit-2026-11-01.md),
+  //   属于纯死文件, 用户已确认删除。下面的 activate 会清掉带它的旧缓存。
   './modules/hot-news.js',
   './modules/runtime-diagnostics.js',
   // v0.1.28 新增：AI 唱歌�? 个新模块�?
@@ -1878,7 +2001,6 @@ self.addEventListener('fetch', event => {
   const isLocalAsset = url.startsWith(self.location.origin) &&
     (url.includes('/index.html') ||
      url.includes('/online-app.css') ||
-     url.includes('/script.js') ||
      url.includes('/modules/hot-news.js') ||
      url.includes('/modules/runtime-diagnostics.js') ||
      // v0.1.28 新增：AI 唱歌模块

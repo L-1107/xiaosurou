@@ -4910,3 +4910,136 @@
            #phone-screen.dark-mode .gemini-pool-preset-info {
                color: #98989f;
            }
+
+/* ============================================================
+   [2026-11-27] 角色设置 →「AI 后台活动」面板
+   ============================================================ */
+/* 活动项清单: 每项一行 (开关在右, 文字在左)
+   ★ 2026-11-27: 整个清单现在塞在「会做什么 (N/10)」折叠下拉里,
+     所以容器直接复用 .char-bg-couple-list (自带 max-height + 纵向滚动),
+     不再单独定义 .char-bg-act-list (免得两套 display 规则打架)。 */
+.char-bg-act,
+.char-bg-feat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 2px;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.char-bg-act + .char-bg-act,
+.char-bg-feat + .char-bg-feat {
+    border-top: 1px solid rgba(0, 0, 0, .05);
+}
+.char-bg-act-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.char-bg-act-label {
+    font-size: 14px;
+    line-height: 1.45;
+    /* ★ 用 --text-primary (base.css 有定义, 且 video-voice-call.css 里带暗色版)
+       之前写的 var(--text-color) 这个变量全项目都没定义 → 颜色失效继承成白色
+       → 浅灰底上字直接看不见。 */
+    color: var(--text-primary, #1f1f1f);
+    font-weight: 600;
+}
+.char-bg-act-desc {
+    font-size: 11px;
+    line-height: 1.45;
+    color: #999;
+    margin-top: 2px;
+    word-break: break-word;
+}
+.char-bg-feat-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    /* 同上: --text-color 没定义, 必须用 --text-primary */
+    color: var(--text-primary, #1f1f1f);
+    cursor: pointer;
+}
+
+/* 情侣空间 13 项: 折叠 + 可滚动
+   ⚠️ 跟 Key 池 (.gemini-pool-list) 同一个坑:
+   折叠容器不用 flex column + max-height 去限高,
+   而是【给列表自己】一个 max-height, 让它自己成为滚动容器。
+   否则内容超出但永远不产生滚动条 → 下面几项选不到。 */
+.char-bg-couple {
+    width: 100%;
+    min-width: 0;
+    margin-top: 4px;
+}
+.char-bg-couple-trigger {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid #d9dee4;
+    background: #fff;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 14px;
+    color: #333;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .2s, background-color .2s;
+}
+.char-bg-couple-trigger:hover {
+    border-color: #b6c0cb;
+    background: #f7f9fb;
+}
+.char-bg-couple-arrow {
+    flex: 0 0 auto;
+    color: #9aa3ad;
+    font-size: 12px;
+}
+.char-bg-couple-list {
+    display: none;
+    width: 100%;
+    min-width: 0;
+    /* ★ box-sizing 必须 border-box: div 默认 content-box,
+       width:100% 不算 padding+border → 窄屏右边会溢出卡片 5px。
+       (旁边的 .char-bg-couple-trigger 是 <button>, UA 默认就是 border-box, 所以它没事) */
+    box-sizing: border-box;
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px solid #e2e6ea;
+    border-radius: 10px;
+    background: #fafbfc;
+    /* ★ 列表自己是滚动容器 (关键, 见上面的注释) */
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+.char-bg-couple-list.open {
+    display: block;
+}
+/* 暗黑模式 */
+#phone-screen.dark-mode .char-bg-couple-trigger {
+    background: #1c1c1e;
+    border-color: #3a3a3c;
+    color: #f2f2f7;
+}
+#phone-screen.dark-mode .char-bg-couple-trigger:hover {
+    background: #2c2c2e;
+}
+#phone-screen.dark-mode .char-bg-couple-list {
+    background: #161618;
+    border-color: #3a3a3c;
+}
+#phone-screen.dark-mode .char-bg-act-label,
+#phone-screen.dark-mode .char-bg-feat-label {
+    color: #f2f2f7;
+}
+#phone-screen.dark-mode .char-bg-act-desc {
+    color: #98989f;
+}
+#phone-screen.dark-mode .char-bg-act + .char-bg-act,
+#phone-screen.dark-mode .char-bg-feat + .char-bg-feat {
+    border-top-color: #3a3a3c;
+}

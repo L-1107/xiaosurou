@@ -4,11 +4,14 @@
 // 包含：startBackgroundSimulation, stopBackgroundSimulation, runBackgroundSimulationTick,
 //       generateNpcActions, simulateBackgroundActivity
 
+  // 2026-11-27: 全局总闸 (globalSettings.enableBackgroundActivity) 已删。
+  //   每个角色自己有 bgActivity.enabled 总闸, 见 modules/bg-activity-config.js
+  const BG_TICK_INTERVAL_MS = 60 * 1000;
+
   function startBackgroundSimulation() {
     if (simulationIntervalId) return;
-    const intervalSeconds = state.globalSettings.backgroundActivityInterval || 60;
 
-    simulationIntervalId = setInterval(runBackgroundSimulationTick, intervalSeconds * 1000);
+    simulationIntervalId = setInterval(runBackgroundSimulationTick, BG_TICK_INTERVAL_MS);
     playSilentAudio();
   }
 
@@ -20,1264 +23,63 @@
     stopSilentAudio();
   }
 
-
-
-
-  const aiReminderTriggerLocks = new Set();
-  let aiReminderSchedulerIntervalId = null;
-  let aiReminderSchedulerEventsBound = false;
-  let aiReminderScanInProgress = false;
-
-  const AI_REMINDER_SCHEDULER_INTERVAL_MS = 30000;
-  const AI_REMINDER_DEBUG_STORAGE_KEY = 'aiReminderDebugLogs';
-  const AI_REMINDER_DEBUG_MAX_LOGS = 100;
-  const AI_REMINDER_DEBUG_DETAIL_MAX_LENGTH = 300;
-  const AI_REMINDER_RECENT_MESSAGE_LIMIT = 50;
-  const AI_REMINDER_MAX_TEXT_LENGTH = 200;
-  const AI_REMINDER_API_TIMEOUT_MS = 60000;
-
-  function sanitizeAiReminderDebugDetail(detail) {
-    const sensitiveKeyRe = /(api[-_]?key|authorization|token|password|passwd|secret|bearer|cookie|set-cookie)/i;
-
-    function sanitize(value, depth = 0, seen = new WeakSet()) {
-      if (value == null) return value;
-      if (typeof value === 'string') {
-        let text = value
-          .replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g, '[image/base64 omitted]')
-          .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
-          .replace(/[A-Za-z0-9+/]{800,}={0,2}/g, '[base64 omitted]');
-        if (text.length > AI_REMINDER_DEBUG_DETAIL_MAX_LENGTH) {
-          text = `${text.slice(0, AI_REMINDER_DEBUG_DETAIL_MAX_LENGTH)}...`;
-        }
-        return text;
-      }
-      if (typeof value === 'number' || typeof value === 'boolean') return value;
-      if (value instanceof Error) return sanitize(value.message || value.name || 'Error');
-      if (typeof value !== 'object') return sanitize(String(value));
-      if (seen.has(value)) return '[circular]';
-      seen.add(value);
-      if (depth >= 2) return Array.isArray(value) ? `[Array(${value.length})]` : '[Object]';
-
-      const out = {};
-      Object.keys(value).slice(0, 20).forEach(key => {
-        if (sensitiveKeyRe.test(key)) {
-          out[key] = '[REDACTED]';
-        } else if (/^(content|text|message|body|prompt|image|imageUrl|url)$/i.test(key)) {
-          const raw = value[key];
-          if (typeof raw === 'string') out[key] = sanitize(raw);
-          else if (Array.isArray(raw)) out[key] = `[Array(${raw.length})]`;
-          else if (raw && typeof raw === 'object') out[key] = '[Object omitted]';
-          else out[key] = raw;
-        } else {
-          out[key] = sanitize(value[key], depth + 1, seen);
-        }
-      });
-      return out;
-    }
-
-    const sanitized = sanitize(detail);
-    const text = typeof sanitized === 'string' ? sanitized : JSON.stringify(sanitized);
-    return text.length > AI_REMINDER_DEBUG_DETAIL_MAX_LENGTH
-      ? `${text.slice(0, AI_REMINDER_DEBUG_DETAIL_MAX_LENGTH)}...`
-      : text;
-  }
-
-  function readAiReminderDebugLogs() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(AI_REMINDER_DEBUG_STORAGE_KEY) || '[]');
-      return Array.isArray(parsed) ? parsed.slice(-AI_REMINDER_DEBUG_MAX_LOGS) : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function writeAiReminderDebugLogs(logs) {
-    try {
-      localStorage.setItem(AI_REMINDER_DEBUG_STORAGE_KEY, JSON.stringify(logs.slice(-AI_REMINDER_DEBUG_MAX_LOGS)));
-    } catch (_) {
-      // 调试日志写入失败不影响提醒业务。
-    }
-  }
-
-  function logAiReminderDebug(event, reminder, detail = {}) {
-    const entry = {
-      time: new Date().toISOString(),
-      event: String(event || 'AI_REMINDER_UNKNOWN'),
-      reminderId: reminder?.id || detail?.reminderId || null,
-      reminderName: reminder?.title || reminder?.name || detail?.reminderName || '',
-      detail: sanitizeAiReminderDebugDetail(detail)
-    };
-
-    const logs = readAiReminderDebugLogs();
-    logs.push(entry);
-    writeAiReminderDebugLogs(logs);
-
-    if (window.runtimeDiag && typeof window.runtimeDiag.log === 'function') {
-      try {
-        window.runtimeDiag.log(event, {
-          reminderId: entry.reminderId,
-          reminderName: entry.reminderName,
-          detail: entry.detail
-        });
-      } catch (_) {}
-    }
-
-    return entry;
-  }
-
-  function getFixedAiReminderText(reminder) {
-    return String(reminder?.content || '').trim();
-  }
-
-  function truncateAiReminderText(text, maxLength = AI_REMINDER_MAX_TEXT_LENGTH) {
-    const source = String(text || '').replace(/\s+/g, ' ').trim();
-    if (source.length <= maxLength) return source;
-    const sliced = source.slice(0, maxLength);
-    const lastPunctuation = Math.max(
-      sliced.lastIndexOf('。'),
-      sliced.lastIndexOf('！'),
-      sliced.lastIndexOf('？'),
-      sliced.lastIndexOf('!'),
-      sliced.lastIndexOf('?')
-    );
-    return (lastPunctuation >= 60 ? sliced.slice(0, lastPunctuation + 1) : sliced).trim();
-  }
-
-  function getAiReminderValueType(value) {
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (value instanceof Date) return 'Date';
-    if (Array.isArray(value)) return 'array';
-    return typeof value;
-  }
-
-  function summarizeAiReminderNextTriggerAt(value) {
-    const type = getAiReminderValueType(value);
-    if (value instanceof Date) {
-      return {
-        type,
-        value: Number.isFinite(value.getTime()) ? value.toISOString() : 'Invalid Date'
-      };
-    }
-    if (typeof value === 'number') {
-      return {
-        type,
-        value: Number.isFinite(value) ? value : String(value)
-      };
-    }
-    if (typeof value === 'string') {
-      return {
-        type,
-        value: value.length > 80 ? `${value.slice(0, 80)}...` : value
-      };
-    }
-    if (value == null) {
-      return {
-        type,
-        value: value === null ? null : 'undefined'
-      };
+  /** 取角色的后台活动配置 (新结构优先, 模块没加载时兜底读旧字段) */
+  function getChatBgConfig(chat) {
+    if (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function') {
+      try { return window.BgActivityConfig.getBgActivityConfig(chat); } catch (e) { /* fallthrough */ }
     }
     return {
-      type,
-      value: '[unsupported]'
+      enabled: chat.settings && chat.settings.enableBackgroundActivity !== false,
+      acts: {},
+      couple: { enabled: false, feats: {} }
     };
   }
 
-  function normalizeAiReminderNextTriggerAt(value) {
-    const summary = summarizeAiReminderNextTriggerAt(value);
-
-    if (typeof value === 'number') {
-      if (Number.isFinite(value)) {
-        return {
-          ok: true,
-          time: value,
-          ...summary
-        };
-      }
-      return {
-        ok: false,
-        time: null,
-        reason: 'number_not_finite',
-        ...summary
-      };
-    }
-
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          time: null,
-          reason: 'empty_string',
-          ...summary
-        };
-      }
-
-      const parsed = Date.parse(trimmed);
-      if (Number.isFinite(parsed)) {
-        return {
-          ok: true,
-          time: parsed,
-          ...summary
-        };
-      }
-
-      return {
-        ok: false,
-        time: null,
-        reason: 'string_parse_failed',
-        ...summary
-      };
-    }
-
-    if (value instanceof Date) {
-      const time = value.getTime();
-      if (Number.isFinite(time)) {
-        return {
-          ok: true,
-          time,
-          ...summary
-        };
-      }
-
-      return {
-        ok: false,
-        time: null,
-        reason: 'invalid_date',
-        ...summary
-      };
-    }
-
-    return {
-      ok: false,
-      time: null,
-      reason: value == null ? 'missing_nextTriggerAt' : 'unsupported_type',
-      ...summary
-    };
-  }
-
-  function cleanAiReminderGeneratedText(rawText) {
-    let text = String(rawText || '').trim();
-    if (!text) return '';
-
-    text = text
-      .replace(/^```(?:json|markdown|md|text)?\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
-
-    text = text
-      .replace(/^(?:提醒语|提醒文案|以下是(?:提醒语|提醒文案)?|生成结果|回复内容)\s*[:：]\s*/i, '')
-      .replace(/^["“”'‘’]+|["“”'‘’]+$/g, '')
-      .trim();
-
-    return truncateAiReminderText(text);
-  }
-
-  function extractAiReminderTextFromResponse(rawContent, chat, proxyUrl, latestUserMessage) {
-    const raw = String(rawContent || '').trim();
-    if (!raw) return '';
-
-    const parsedActions = typeof parseAiResponse === 'function' ? parseAiResponse(raw) : null;
-
-    if (Array.isArray(parsedActions)) {
-      for (const action of parsedActions) {
-        if (!action || typeof action !== 'object') continue;
-        if (action.type === 'thought_chain' || action.type === 'internal_state' || action.type === 'character_thoughts') continue;
-
-        const candidate = action.content || action.message || action.text || action.dialogue || action.description;
-        const cleaned = cleanAiReminderGeneratedText(candidate);
-        if (cleaned) return cleaned;
-      }
-    }
-
-    return cleanAiReminderGeneratedText(raw);
-  }
-
-  function sanitizeAiReminderPromptText(value, maxLength = 1200) {
-    let text = String(value || '');
-    text = text.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g, '[图片数据已省略]');
-    text = text.replace(/[A-Za-z0-9+/]{800,}={0,2}/g, '[疑似base64内容已省略]');
-    text = text.replace(/\s+/g, ' ').trim();
-    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
-  }
-
-  async function getRecentAiReminderMessages(chat) {
-    if (!chat?.id) return [];
-
-    if (window.messageStore?.getRecentContextMessages) {
-      return window.messageStore.getRecentContextMessages(chat.id, {
-        limit: AI_REMINDER_RECENT_MESSAGE_LIMIT,
-        excludeHidden: false,
-        excludeExcluded: true
-      });
-    }
-
-    if (window.db?.messages) {
-      const rows = await db.messages
-        .where('[chatId+timestamp]')
-        .between([chat.id, Dexie.minKey], [chat.id, Dexie.maxKey])
-        .reverse()
-        .limit(AI_REMINDER_RECENT_MESSAGE_LIMIT * 2)
-        .toArray();
-
-      return rows
-        .reverse()
-        .filter(msg => !msg.isExcluded)
-        .slice(-AI_REMINDER_RECENT_MESSAGE_LIMIT);
-    }
-
-    throw new Error('messages 表或安全消息读取函数不可用');
-  }
-
-  function buildAiReminderWorldBookContext(chat) {
-    let worldBookContent = '';
-    const worldBooks = Array.isArray(state.worldBooks) ? state.worldBooks : [];
-    const allWorldBookIds = [...(chat?.settings?.linkedWorldBookIds || [])];
-
-    worldBooks.forEach(wb => {
-      if (wb.isGlobal && !allWorldBookIds.includes(wb.id)) {
-        allWorldBookIds.push(wb.id);
-      }
-    });
-
-    if (allWorldBookIds.length > 0) {
-      const linkedContents = allWorldBookIds.map(bookId => {
-        const worldBook = worldBooks.find(wb => wb.id === bookId);
-        if (!worldBook || !Array.isArray(worldBook.content)) return '';
-
-        const formattedEntries = worldBook.content
-          .filter(entry => entry.enabled !== false)
-          .map(entry => {
-            let entryString = `\n### 条目: ${entry.comment || '无备注'}\n`;
-            entryString += `**内容:**\n${entry.content}`;
-            return entryString;
-          })
-          .join('');
-
-        return formattedEntries ? `\n\n## 世界书: ${worldBook.name}\n${formattedEntries}` : '';
-      }).filter(Boolean).join('');
-
-      if (linkedContents) {
-        worldBookContent = `# --- 世界书 (World Book) ---
-# 【最高优先级指令：绝对真理】
-# 以下内容是你所在世界的“物理法则”和“基础常识”。
-# 无论用户是否提及，你都【必须】时刻主动应用这些设定来指导你的思考和描写。
-# 它们是无条件生效的，不需要触发词。
-${linkedContents}
-# --- 世界书设定结束 ---
-`;
-      }
-    }
-
-    return worldBookContent;
-  }
-
-  async function buildAiReminderLongTermMemoryContext(chat, recentMessages) {
-    const queryTextForVector = (recentMessages || [])
-      .slice(-5)
-      .map(msg => typeof msg.content === 'string' ? msg.content : '')
-      .join(' ');
-
-    if (chat?.isGroup) {
-      let longTermMemoryContext = '# 长期记忆 (最高优先级，这是群内已经确立的事实，所有角色必须严格遵守)\n';
-      let collectedMemories = false;
-
-      for (const member of chat.members || []) {
-        const memberChat = state.chats?.[member.id] || await db.chats.get(member.id).catch(() => null);
-        if (!memberChat) continue;
-
-        const memMode = memberChat.settings?.memoryMode || (memberChat.settings?.enableStructuredMemory ? 'structured' : 'diary');
-        let memberMemContent = '';
-
-        if (memMode === 'vector' && window.vectorMemoryManager) {
-          memberMemContent = await window.vectorMemoryManager.serializeForPrompt(memberChat, queryTextForVector, { countRecall: false });
-        } else if (memMode === 'structured' && window.structuredMemoryManager) {
-          memberMemContent = window.structuredMemoryManager.serializeForPrompt(memberChat);
-        } else if (memberChat.longTermMemory && memberChat.longTermMemory.length > 0) {
-          memberMemContent = memberChat.longTermMemory.map(mem => `- (记录于 ${typeof formatTimeAgo === 'function' ? formatTimeAgo(mem.timestamp) : mem.timestamp}) ${mem.content}`).join('\n');
-        }
-
-        if (memberMemContent && memberMemContent.trim()) {
-          longTermMemoryContext += `\n## --- 关于“${member.groupNickname || member.originalName}”的记忆 ---\n${memberMemContent}\n`;
-          collectedMemories = true;
-        }
-      }
-
-      return collectedMemories ? longTermMemoryContext : `${longTermMemoryContext}- (暂无)`;
-    }
-
-    const memMode = chat?.settings?.memoryMode || (chat?.settings?.enableStructuredMemory ? 'structured' : 'diary');
-    if (memMode === 'vector' && window.vectorMemoryManager) {
-      return await window.vectorMemoryManager.serializeForPrompt(chat, queryTextForVector, { countRecall: false });
-    }
-    if (memMode === 'structured' && window.structuredMemoryManager) {
-      return window.structuredMemoryManager.serializeForPrompt(chat);
-    }
-    if (typeof getMemoryContextForPrompt === 'function') {
-      return getMemoryContextForPrompt(chat);
-    }
-    return chat?.longTermMemory && chat.longTermMemory.length > 0
-      ? chat.longTermMemory.map(mem => `- ${mem.content}`).join('\n')
-      : '- (暂无)';
-  }
-
-  function formatAiReminderMessageForPrompt(chat, msg) {
-    if (!msg || typeof msg !== 'object') return null;
-    if (msg.isExcluded) return null;
-    if (msg.isHidden && typeof msg.content === 'string' && msg.content.includes('[这是你上一轮的内部思考]')) return null;
-
-    const timestamp = msg.timestamp ? `(Timestamp: ${msg.timestamp}) ` : '';
-    const sender = msg.role === 'user'
-      ? (chat?.settings?.myNickname || '我')
-      : (chat?.isGroup && typeof getDisplayNameInGroup === 'function'
-        ? getDisplayNameInGroup(chat, msg.senderName)
-        : (msg.senderName || chat?.name || 'AI'));
-
-    if (msg.role === 'system') {
-      if (msg.type === 'narration') return { role: 'user', content: `${timestamp}[旁白] ${sanitizeAiReminderPromptText(msg.content)}` };
-      if (msg.isHidden) return { role: 'user', content: sanitizeAiReminderPromptText(msg.content) };
-      return { role: 'user', content: `${timestamp}[系统] ${sanitizeAiReminderPromptText(msg.content)}` };
-    }
-
-    let content = '';
-    if (Array.isArray(msg.content)) {
-      content = '[用户发送了一张图片，图片原始数据已省略。]';
-    } else if (msg.type === 'user_photo' || msg.type === 'ai_image') {
-      content = `[图片消息，描述：${sanitizeAiReminderPromptText(msg.content || msg.description || msg.prompt)}]`;
-    } else if (msg.type === 'voice_message') {
-      content = `[语音消息：${sanitizeAiReminderPromptText(msg.content)}]`;
-    } else if (msg.type === 'sticker') {
-      content = `[表情：${sanitizeAiReminderPromptText(msg.meaning || msg.content || 'sticker')}]`;
-    } else if (msg.type === 'transfer') {
-      content = `[转账：${sanitizeAiReminderPromptText(msg.amount)}${msg.currency || '元'}，备注：${sanitizeAiReminderPromptText(msg.note)}]`;
-    } else {
-      content = sanitizeAiReminderPromptText(msg.content);
-    }
-
-    if (!content) return null;
-
-    if (msg.role === 'assistant') {
-      return {
-        role: 'assistant',
-        content: `${timestamp}${JSON.stringify([{ type: msg.type || 'text', content }])}`
-      };
-    }
-
-    return {
-      role: 'user',
-      content: `${timestamp}${sender}: ${content}`
-    };
-  }
-
-  function getAiReminderCurrentTimeContext(chat) {
-    const now = new Date();
-    const customTimeInfo = typeof window.getCustomTime === 'function' ? window.getCustomTime() : null;
-
-    if (customTimeInfo && customTimeInfo.enabled) {
-      const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-      const weekDay = weekDays[customTimeInfo.date.getDay()];
-      return `${customTimeInfo.year}年${customTimeInfo.month}月${customTimeInfo.day}日${weekDay} ${String(customTimeInfo.hour).padStart(2, '0')}:${String(customTimeInfo.minute).padStart(2, '0')}`;
-    }
-
-    const selectedTimeZone = chat?.settings?.timeZone || 'Asia/Shanghai';
-    return now.toLocaleString('zh-CN', {
-      timeZone: selectedTimeZone,
-      dateStyle: 'full',
-      timeStyle: 'short'
-    });
-  }
-
-  function buildAiReminderTaskInstruction(reminder, chat) {
-    const triggerAtInfo = normalizeAiReminderNextTriggerAt(reminder?.nextTriggerAt ?? reminder?.remindAt);
-    const triggerTimeText = triggerAtInfo.ok && triggerAtInfo.time > 0
-      ? new Date(triggerAtInfo.time).toLocaleString('zh-CN', { hour12: false })
-      : '(未设置)';
-    const characterName = reminder?.characterName || chat?.name || chat?.originalName || '角色';
-
-    return `# 【定时提醒任务】
-这是一次到点触发的定时提醒，请在完整遵守你的人设、关系、世界书、长期记忆和最近聊天语境的前提下，像正式主动聊天一样自然开口提醒用户。
-
-- reminder.title: ${sanitizeAiReminderPromptText(reminder?.title || '定时提醒')}
-- reminder.content: ${sanitizeAiReminderPromptText(reminder?.content || '')}
-- reminder.remindAt / nextTriggerAt: ${triggerTimeText}
-- characterName: ${sanitizeAiReminderPromptText(characterName)}
-
-要求：
-1. 必须以“${sanitizeAiReminderPromptText(characterName)}”自己的口吻自然主动提醒用户。
-2. 要体现角色身份感、关系感和当前聊天语境。
-3. 不要解释任务。
-4. 不要说自己是系统、闹钟或程序。
-5. 不要输出多段长文。
-6. 尽量控制在 200 字以内。
-7. 只输出最终要发送给用户的一条提醒语；如果按原聊天格式输出 JSON，也只能包含一条 text/offline_text 内容。`;
-  }
-
-  async function buildAiReminderFormalChatContext(reminder, chat) {
-    const recentMessages = await getRecentAiReminderMessages(chat);
-    const filteredRecentMessages = typeof filterHistoryWithDoNotSendRules === 'function'
-      ? await filterHistoryWithDoNotSendRules(recentMessages, chat.id)
-      : recentMessages;
-
-    const worldBookContent = buildAiReminderWorldBookContext(chat);
-    const longTermMemoryContext = await buildAiReminderLongTermMemoryContext(chat, filteredRecentMessages);
-    const currentTime = getAiReminderCurrentTimeContext(chat);
-    const timeOfDayGreeting = typeof getTimeOfDayGreeting === 'function' ? getTimeOfDayGreeting(new Date()) : '';
-    const myNickname = chat?.settings?.myNickname || '我';
-    const userName = state.qzoneSettings?.nickname || '用户';
-    const aiAgeContext = typeof getDynamicAgeContext === 'function' ? getDynamicAgeContext(chat) : '';
-    const currencyExchangeContext = chat?.settings?.enableDynamicCurrency && typeof getCurrencyExchangeContext === 'function' ? getCurrencyExchangeContext() : '';
-    const stickerContext = chat?.isGroup
-      ? (typeof getGroupStickerContextForPrompt === 'function' ? getGroupStickerContextForPrompt(chat) : '')
-      : (typeof getStickerContextForPrompt === 'function' ? getStickerContextForPrompt(chat) : '');
-
-    const promptType = chat?.isGroup ? 'group' : 'single';
-    const systemPromptTemplate = window.getActiveChatPrompt ? window.getActiveChatPrompt(promptType) : '';
-
-    let contextMap;
-    if (chat?.isGroup) {
-      const memberNames = (chat.members || []).map(m => m.originalName);
-      const membersWithContacts = (chat.members || []).map(member => `- **${member.groupNickname}** (本名: ${member.originalName}): ${member.persona}`).join('\n');
-      contextMap = {
-        aiAgeContext,
-        currencyExchangeContext,
-        char_avatar: chat.settings?.groupAvatar || '',
-        user_avatar: chat.settings?.myAvatar || state.qzoneSettings?.avatar || '',
-        char_name: chat.originalName || chat.name,
-        char_remark: chat.name,
-        user_name: userName,
-        user_nickname: myNickname,
-        memberNames: memberNames.join('、 '),
-        myNickname,
-        myOriginalName: userName,
-        groupTimePerceptionInstruction: chat.settings?.enableTimePerception ? `**情景感知**: 当前时间 ${currentTime} ${timeOfDayGreeting}。` : '',
-        readingContextStr: '按当前聊天阅读状态处理。',
-        groupCrossChatInstruction: '',
-        'chat.name': chat.name,
-        groupTimeContextText: chat.settings?.enableTimePerception ? `- **当前时间**: ${currentTime} (${timeOfDayGreeting})` : '',
-        groupLongTimeNoSeeContext: '',
-        membersWithContacts,
-        myPersona: chat.settings?.myPersona || '普通用户',
-        userStatus: chat.settings?.userStatus ? chat.settings.userStatus.text : '在线',
-        worldBookContent,
-        longTermMemoryContext,
-        memoryModeContext: longTermMemoryContext,
-        multiLayeredSummaryContext_group: '',
-        linkedMemoryContext: '',
-        musicContext: '',
-        sharedContext: '',
-        groupAvatarLibraryContext: '',
-        stickerContext,
-        forbiddenNamesContext: '',
-        callTranscriptContext: '',
-        synthMusicInstruction: '',
-        narratorInstruction: '',
-        novelAiImageGroupContext: '',
-        googleImagenGroupContext: '',
-        bilingualAlertVoice: ''
-      };
-    } else {
-      contextMap = {
-        aiAgeContext,
-        currencyExchangeContext,
-        char_avatar: chat.settings?.aiAvatar || '',
-        user_avatar: chat.settings?.myAvatar || state.qzoneSettings?.avatar || '',
-        char_name: chat.originalName || chat.name,
-        char_remark: chat.name,
-        user_name: userName,
-        user_nickname: myNickname,
-        'chat.originalName': chat.originalName || chat.name,
-        aiPersona: chat.settings?.aiPersona || '',
-        latestThoughtContext: chat.settings?.injectLatestThought && chat.heartfeltVoice ? `# 你的内心独白\n- 心声: ${chat.heartfeltVoice}\n- 散记: ${chat.randomJottings || ''}` : '',
-        worldBookContent: worldBookContent || '(当前无特殊世界观设定，以现实逻辑为准)',
-        memoryContextForPrompt: longTermMemoryContext,
-        multiLayeredSummaryContext: '',
-        todoListContext: '',
-        periodSummaryContext: '',
-        'chat.name': chat.name,
-        myNickname,
-        myPersona: chat.settings?.myPersona || '普通用户',
-        userStatus: chat.settings?.userStatus ? chat.settings.userStatus.text : '在线',
-        userProfileContext: `- 用户的QZone昵称是 "${userName}"。`,
-        nameHistoryContext: chat.nameHistory?.length ? `\n- **你的曾用名**: [${chat.nameHistory.join(', ')}]。` : '',
-        timePerceptionContext: chat.settings?.enableTimePerception ? `- **当前时间**: ${currentTime} (${timeOfDayGreeting})` : '',
-        weatherContext: '',   // 2026-11-19: 实时天气同步已删 (见 ai-response.js)
-        timeContext: '',
-        musicContextStr: '按当前聊天音乐状态处理。',
-        readingContextStr: '按当前聊天阅读状态处理。',
-        contactsList: '',
-        postsContext: '',
-        groupContext: '',
-        sharedContext: '',
-        callTranscriptContext: '',
-        synthMusicInstruction: '',
-        narratorInstruction: '',
-        kinshipContext: '',
-        coupleSpaceContext: '',
-        bilingualModeContext: chat.settings?.enableBilingualMode ? '必须使用已启用的双语格式。' : '',
-        thoughtsPrompt: '',
-        bilingualAlertText: chat.settings?.enableBilingualMode ? ' ⚠️ 必须使用双语格式：外语〖中文〗' : '',
-        bilingualAlertVoice: chat.settings?.enableBilingualMode ? ' ⚠️ 必须使用双语格式：外语〖中文〗' : '',
-        novelAiImageContext: '',
-        googleImagenContext: '',
-        qzoneActionsPrompt: '',
-        viewMyPhonePrompt: '',
-        crossChatInstruction: '',
-        todoInstruction: '',
-        stickerContext,
-        aiAvatarLibrary: chat.settings?.aiAvatarLibrary?.length ? chat.settings.aiAvatarLibrary.map(avatar => `- ${avatar.name}`).join('\n') : '- (空)',
-        myAvatarLibrary: chat.settings?.myAvatarLibrary?.length ? chat.settings.myAvatarLibrary.map(avatar => `- ${avatar.name}`).join('\n') : '- (空)'
-      };
-    }
-
-    let systemPrompt = typeof replaceTemplateVars === 'function'
-      ? replaceTemplateVars(systemPromptTemplate, contextMap)
-      : systemPromptTemplate;
-
-    if (typeof processPromptWithSettings === 'function') {
-      systemPrompt = processPromptWithSettings(systemPrompt, promptType);
-    }
-
-    const messagesPayload = filteredRecentMessages
-      .slice(-AI_REMINDER_RECENT_MESSAGE_LIMIT)
-      .map(msg => formatAiReminderMessageForPrompt(chat, msg))
-      .filter(Boolean);
-
-    const taskInstruction = buildAiReminderTaskInstruction(reminder, chat);
-    messagesPayload.push({
-      role: 'user',
-      content: taskInstruction
-    });
-
-    return {
-      systemPrompt,
-      messagesPayload,
-      latestUserMessage: taskInstruction
-    };
-  }
-
-  async function requestAiReminderCompletion(chat, systemPrompt, messagesPayload) {
-    const mainApiConfig = typeof resolveApiSlotConfig === 'function'
-      ? await resolveApiSlotConfig('main')
-      : state.apiConfig;
-    let apiConfig = mainApiConfig;
-    if (chat?.apiOverride?.enabled) {
-      apiConfig = {
-        proxyUrl: chat.apiOverride.proxyUrl || mainApiConfig.proxyUrl,
-        apiKey: chat.apiOverride.apiKey || mainApiConfig.apiKey,
-        model: chat.apiOverride.model || mainApiConfig.model
-      };
-    }
-
-    const { proxyUrl, apiKey, model } = apiConfig || {};
-    if (!proxyUrl || !apiKey || !model) {
-      throw new Error('API未配置');
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AI_REMINDER_API_TIMEOUT_MS);
-
-    try {
-      const isGemini = String(proxyUrl).includes('generativelanguage');
-      if (isGemini) {
-        const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messagesPayload);
-        const response = await fetch(geminiConfig.url, {
-          ...geminiConfig.data,
-          signal: controller.signal
-        });
-        if (!response.ok) throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
-        const data = await response.json();
-        return {
-          rawContent: getGeminiResponseText(data),
-          proxyUrl
-        };
-      }
-
-      const response = await fetch(`${proxyUrl.replace(/\/+$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'system', content: systemPrompt }, ...messagesPayload],
-          temperature: state.globalSettings.apiTemperature || 0.8,
-          top_p: state.globalSettings.apiTopP !== undefined ? state.globalSettings.apiTopP : 1.0,
-          presence_penalty: state.globalSettings.apiPresencePenalty !== undefined ? state.globalSettings.apiPresencePenalty : 0.0,
-          frequency_penalty: state.globalSettings.apiFrequencyPenalty !== undefined ? state.globalSettings.apiFrequencyPenalty : 0.0,
-          stream: false
-        }),
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        let errorMessage = `${response.status} ${response.statusText}`;
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData?.error?.message || errorData?.message || errorMessage;
-        } catch (e) {}
-        throw new Error(`API请求失败: ${errorMessage}`);
-      }
-
-      const data = await response.json();
-      return {
-        rawContent: getGeminiResponseText(data),
-        proxyUrl
-      };
-    } catch (error) {
-      if (error?.name === 'AbortError') throw new Error('AI生成超时');
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  async function generateAiReminderText(reminder, chat) {
-    const fallbackText = getFixedAiReminderText(reminder);
-    const now = Date.now();
-
-    try {
-      const context = await buildAiReminderFormalChatContext(reminder, chat);
-      logAiReminderDebug('AI_REMINDER_API_START', reminder, {
-        chatId: chat?.id || reminder?.characterId || '',
-        model: chat?.apiOverride?.enabled ? (chat.apiOverride.model || state.apiConfig?.model || '') : (state.apiConfig?.model || '')
-      });
-      const completion = await requestAiReminderCompletion(chat, context.systemPrompt, context.messagesPayload);
-      const text = extractAiReminderTextFromResponse(completion.rawContent, chat, completion.proxyUrl, context.latestUserMessage);
-
-      if (!text) {
-        throw new Error('AI返回空内容');
-      }
-
-      logAiReminderDebug('AI_REMINDER_API_DONE', reminder, {
-        chatId: chat?.id || reminder?.characterId || '',
-        generatedLength: text.length
-      });
-
-      return {
-        text,
-        ok: true,
-        result: 'success',
-        error: '',
-        aiFields: {
-          lastAiGenerateAt: now,
-          lastAiGenerateResult: 'success',
-          lastAiGenerateError: ''
-        }
-      };
-    } catch (error) {
-      const message = error?.message || String(error);
-      logAiReminderDebug('AI_REMINDER_API_ERROR', reminder, {
-        error: message
-      });
-      console.warn('[AI定时提醒] AI生成失败，回退固定文案:', reminder?.id, error);
-      return {
-        text: fallbackText,
-        ok: false,
-        result: 'fallback',
-        error: message.slice(0, 160),
-        aiFields: {
-          lastAiGenerateAt: now,
-          lastAiGenerateResult: 'fallback',
-          lastAiGenerateError: message.slice(0, 160)
-        }
-      };
-    }
-  }
-
-  function getNextAiReminderTriggerAt(reminder, now) {
-    const repeatType = reminder?.repeatType || 'none';
-    const normalizedNext = normalizeAiReminderNextTriggerAt(reminder?.nextTriggerAt ?? reminder?.remindAt);
-    let next = normalizedNext.ok ? normalizedNext.time : null;
-    if (!Number.isFinite(next) || next <= 0) return null;
-
-    const interval = repeatType === 'weekly'
-      ? 7 * 24 * 60 * 60 * 1000
-      : repeatType === 'daily'
-        ? 24 * 60 * 60 * 1000
-        : 0;
-
-    if (!interval) return null;
-    while (next <= now) next += interval;
-    return next;
-  }
-
-  function buildAiReminderUpdate(reminder, now, result) {
-    const repeatType = reminder?.repeatType || 'none';
-    const update = {
-      lastTriggeredAt: now,
-      updatedAt: now,
-      lastTriggerResult: result.triggerResult || (result.ok ? 'success' : 'failed'),
-      lastTriggerError: result.error || '',
-      lastTriggerMessagePreview: String(result.messagePreview || '').slice(0, 100)
-    };
-
-    if (result.aiFields && typeof result.aiFields === 'object') {
-      Object.assign(update, result.aiFields);
-    }
-
-    if (repeatType === 'none') {
-      update.enabled = false;
-      update.nextTriggerAt = null;
-    } else {
-      update.nextTriggerAt = getNextAiReminderTriggerAt(reminder, now);
-      if (!update.nextTriggerAt || update.nextTriggerAt <= now) {
-        update.enabled = false;
-        update.lastTriggerResult = 'failed';
-        update.lastTriggerError = [update.lastTriggerError, '无法计算下一次提醒时间'].filter(Boolean).join('；');
-        update.nextTriggerAt = null;
-      }
-    }
-
-    return update;
-  }
-
-  async function insertAiReminderIntoChat(reminder, text, now) {
-    const chatId = reminder?.characterId;
-    if (!chatId) throw new Error('缺少 characterId');
-
-    const chat = state.chats?.[chatId] || await db.chats.get(chatId);
-    if (!chat) throw new Error(`找不到聊天 ${chatId}`);
-
-    if (state.chats && !state.chats[chatId]) {
-      state.chats[chatId] = chat;
-    }
-
-    const message = {
-      role: 'assistant',
-      senderName: reminder.characterName || chat.originalName || chat.name,
-      type: 'text',
-      content: text,
-      timestamp: now,
-      source: 'aiReminder',
-      reminderId: reminder.id
-    };
-
-    if (window.messageStore?.addMessageToChat) {
-      await window.messageStore.addMessageToChat(chat, message);
-    } else if (db.messages?.put) {
-      const messageId = `${chatId}::${now}::assistant::text::aiReminder::${reminder.id}`;
-      await db.messages.put({
-        ...message,
-        id: messageId,
-        chatId
-      });
-    } else {
-      throw new Error('messageStore 与 db.messages 均不可用，无法写入提醒消息');
-    }
-
-    if (state.activeChatId === chatId && typeof renderChatInterface === 'function') {
-      await renderChatInterface(chatId);
-    }
-    if (typeof renderChatList === 'function') {
-      renderChatList();
-    }
-
-    return true;
-  }
-
-  async function sendAiReminderSystemNotification(reminder, text) {
-    const chatId = reminder?.characterId;
-    if (!chatId) throw new Error('缺少 characterId');
-
-    const config = state.globalSettings?.systemNotification;
-    if (!config?.enabled) throw new Error('系统通知未启用');
-    if (typeof Notification === 'undefined') throw new Error('当前浏览器不支持系统通知');
-    if (Notification.permission !== 'granted') throw new Error('通知权限未授权');
-
-    if (typeof showSystemNotification === 'function') {
-      await showSystemNotification(chatId, text, {
-        title: reminder.title || '定时提醒'
-      });
-      return true;
-    }
-
-    if (typeof handleSystemNotification === 'function') {
-      await handleSystemNotification(chatId, text);
-      return true;
-    }
-
-    throw new Error('系统通知发送函数不可用');
-  }
-
-  async function playAiReminderSound() {
-    if (typeof playNotificationSound === 'function') {
-      playNotificationSound();
-      return true;
-    }
-
-    if (typeof playSystemNotificationSound === 'function') {
-      playSystemNotificationSound();
-      return true;
-    }
-
-    throw new Error('未找到独立轻量提示音能力');
-  }
-
-  async function triggerDueAiReminder(reminder, now) {
-    logAiReminderDebug('AI_REMINDER_TRIGGER_START', reminder, {
-      nextTriggerAt: reminder?.nextTriggerAt || null,
-      useAI: !!reminder?.useAI,
-      insertIntoChat: !!reminder?.insertIntoChat,
-      sendSystemNotification: !!reminder?.sendSystemNotification
-    });
-
-    const fixedText = getFixedAiReminderText(reminder);
-    if (!reminder?.useAI && !fixedText) {
-      logAiReminderDebug('AI_REMINDER_TRIGGER_SKIPPED', reminder, {
-        reason: 'no_content_and_ai_disabled'
-      });
-      const skippedResult = {
-        ok: false,
-        triggerResult: 'skipped',
-        error: 'no_content_and_ai_disabled',
-        messagePreview: ''
-      };
-      await db.aiReminders.update(reminder.id, buildAiReminderUpdate(reminder, now, skippedResult));
-      return skippedResult;
-    }
-
-    const chatId = reminder?.characterId;
-    const chat = chatId ? (state.chats?.[chatId] || await db.chats.get(chatId)) : null;
-    const aiTextResult = reminder.useAI
-      ? await generateAiReminderText(reminder, chat)
-      : {
-          text: fixedText,
-          ok: true,
-          result: 'success',
-          error: '',
-          aiFields: {}
-        };
-    const text = aiTextResult.text || getFixedAiReminderText(reminder);
-    const result = {
-      ok: false,
-      triggerResult: aiTextResult.result || 'success',
-      error: aiTextResult.error ? `AI生成失败：${aiTextResult.error}` : '',
-      messagePreview: text,
-      aiFields: aiTextResult.aiFields || {}
-    };
-    const errors = [];
-    let delivered = false;
-
-    if (result.error) {
-      errors.push(result.error);
-    }
-
-    if (reminder.insertIntoChat) {
-      try {
-        logAiReminderDebug('AI_REMINDER_INSERT_CHAT_START', reminder, {
-          chatId: reminder.characterId
-        });
-        await insertAiReminderIntoChat(reminder, text, now);
-        logAiReminderDebug('AI_REMINDER_INSERT_CHAT_DONE', reminder, {
-          chatId: reminder.characterId
-        });
-        delivered = true;
-      } catch (error) {
-        const message = error?.message || String(error);
-        logAiReminderDebug('AI_REMINDER_INSERT_CHAT_ERROR', reminder, {
-          chatId: reminder.characterId,
-          error: message
-        });
-        errors.push(`插入聊天失败：${message}`);
-        console.warn('[AI定时提醒] 插入聊天失败:', reminder.id, error);
-      }
-    }
-
-    if (reminder.sendSystemNotification) {
-      try {
-        await sendAiReminderSystemNotification(reminder, text);
-        logAiReminderDebug('AI_REMINDER_NOTIFICATION_SENT', reminder, {
-          chatId: reminder.characterId
-        });
-        delivered = true;
-      } catch (error) {
-        const message = error?.message || String(error);
-        logAiReminderDebug('AI_REMINDER_NOTIFICATION_ERROR', reminder, {
-          chatId: reminder.characterId,
-          error: message
-        });
-        errors.push(`系统通知失败：${message}`);
-        console.warn('[AI定时提醒] 系统通知失败:', reminder.id, error);
-      }
-    }
-
-    if (reminder.playSound) {
-      try {
-        await playAiReminderSound();
-        delivered = true;
-      } catch (error) {
-        const message = error?.message || String(error);
-        errors.push(`提示音失败：${message}`);
-        console.warn('[AI定时提醒] 提示音未实现或播放失败:', reminder.id, error);
-      }
-    }
-
-    if (!reminder.insertIntoChat && !reminder.sendSystemNotification && !reminder.playSound) {
-      errors.push('提醒没有启用任何触达方式');
-    }
-
-    const deliveryErrors = errors.filter(error => !String(error).startsWith('AI生成失败：'));
-    result.ok = delivered && deliveryErrors.length === 0;
-    result.error = errors.join('；');
-    if (deliveryErrors.length > 0 && result.triggerResult !== 'fallback') {
-      result.triggerResult = 'failed';
-    }
-    const update = buildAiReminderUpdate(reminder, now, result);
-    await db.aiReminders.update(reminder.id, update);
-
-    if (update.enabled === false && update.nextTriggerAt == null) {
-      logAiReminderDebug('AI_REMINDER_COMPLETED', reminder, {
-        repeatType: reminder.repeatType || 'none',
-        triggerResult: result.triggerResult,
-        error: result.error || ''
-      });
-    } else if (update.nextTriggerAt) {
-      logAiReminderDebug('AI_REMINDER_NEXT_SCHEDULED', reminder, {
-        repeatType: reminder.repeatType || 'none',
-        nextTriggerAt: update.nextTriggerAt
-      });
-    }
-
-    return result;
-  }
-
-  async function scanDueAiReminders(reason = 'manual') {
-    // v0.1.87+: 老 AI 提醒功能废弃, 合并到 proactive-wake 走 push-server
-    // 保留函数 + db.aiReminders 表 (兼容老数据), 但轮询直接 return 永不触发
-    return;
-
-    if (!window.db?.aiReminders) return;
-
-    if (aiReminderScanInProgress) {
-      logAiReminderDebug('AI_REMINDER_SCAN_START', null, {
-        reason,
-        skipped: true,
-        skipReason: 'scan_in_progress'
-      });
-      return;
-    }
-
-    aiReminderScanInProgress = true;
-    const now = Date.now();
-    let scannedCount = 0;
-    let dueCount = 0;
-    let invalidCount = 0;
-    let dueReminders = [];
-
-    logAiReminderDebug('AI_REMINDER_SCAN_START', null, {
-      reason,
-      now
-    });
-
-    try {
-      const allReminders = await db.aiReminders.toArray();
-      const enabledReminders = allReminders.filter(reminder => reminder?.enabled === true);
-      scannedCount = enabledReminders.length;
-
-      for (const reminder of enabledReminders) {
-        try {
-          const normalized = normalizeAiReminderNextTriggerAt(reminder?.nextTriggerAt);
-
-          if (!normalized.ok) {
-            invalidCount += 1;
-            logAiReminderDebug('AI_REMINDER_INVALID_NEXT_TRIGGER', reminder, {
-              reason: normalized.reason,
-              nextTriggerAtType: normalized.type,
-              nextTriggerAtValue: normalized.value
-            });
-            continue;
-          }
-
-          if (typeof reminder.nextTriggerAt === 'string' && normalized.time !== reminder.nextTriggerAt) {
-            try {
-              await db.aiReminders.update(reminder.id, {
-                nextTriggerAt: normalized.time,
-                updatedAt: Date.now()
-              });
-            } catch (normalizeSaveError) {
-              logAiReminderDebug('AI_REMINDER_SCAN_ERROR', reminder, {
-                reason: 'normalize_save_failed',
-                nextTriggerAtType: normalized.type,
-                nextTriggerAtValue: normalized.value,
-                error: normalizeSaveError?.message || String(normalizeSaveError)
-              });
-            }
-          }
-
-          if (normalized.time <= now) {
-            dueReminders.push({
-              ...reminder,
-              nextTriggerAt: normalized.time
-            });
-          }
-        } catch (reminderScanError) {
-          invalidCount += 1;
-          logAiReminderDebug('AI_REMINDER_INVALID_NEXT_TRIGGER', reminder, {
-            reason: 'per_reminder_scan_exception',
-            ...summarizeAiReminderNextTriggerAt(reminder?.nextTriggerAt),
-            error: reminderScanError?.message || String(reminderScanError)
-          });
-        }
-      }
-
-      dueCount = dueReminders.length;
-      dueReminders = dueReminders.slice(0, 20);
-
-      for (const reminder of dueReminders) {
-        if (!reminder?.id || aiReminderTriggerLocks.has(reminder.id)) continue;
-
-        logAiReminderDebug('AI_REMINDER_DUE_FOUND', reminder, {
-          nextTriggerAt: reminder.nextTriggerAt,
-          now
-        });
-        aiReminderTriggerLocks.add(reminder.id);
-        try {
-          const latest = await db.aiReminders.get(reminder.id);
-          const latestNextTriggerAt = normalizeAiReminderNextTriggerAt(latest?.nextTriggerAt);
-          if (!latest || latest.enabled !== true) {
-            continue;
-          }
-
-          if (!latestNextTriggerAt.ok) {
-            invalidCount += 1;
-            logAiReminderDebug('AI_REMINDER_INVALID_NEXT_TRIGGER', latest, {
-              reason: latestNextTriggerAt.reason,
-              nextTriggerAtType: latestNextTriggerAt.type,
-              nextTriggerAtValue: latestNextTriggerAt.value
-            });
-            continue;
-          }
-
-          if (latestNextTriggerAt.time > Date.now()) {
-            continue;
-          }
-
-          await triggerDueAiReminder({
-            ...latest,
-            nextTriggerAt: latestNextTriggerAt.time
-          }, Date.now());
-        } catch (error) {
-          const errorMessage = error?.message || String(error);
-          logAiReminderDebug('AI_REMINDER_TRIGGER_SKIPPED', reminder, {
-            reason: 'trigger_exception',
-            error: errorMessage
-          });
-          console.error('[AI定时提醒] 触发提醒失败:', reminder.id, error);
-          try {
-            const latest = await db.aiReminders.get(reminder.id);
-            if (latest) {
-              await db.aiReminders.update(reminder.id, buildAiReminderUpdate(latest, Date.now(), {
-                ok: false,
-                error: `触发异常：${errorMessage}`,
-                messagePreview: getFixedAiReminderText(latest)
-              }));
-            }
-          } catch (updateError) {
-            console.warn('[AI定时提醒] 写入失败状态失败:', reminder.id, updateError);
-          }
-        } finally {
-          aiReminderTriggerLocks.delete(reminder.id);
-        }
-      }
-
-      logAiReminderDebug('AI_REMINDER_SCAN_DONE', null, {
-        reason,
-        now,
-        scannedCount,
-        dueCount,
-        invalidCount,
-        processedCount: dueReminders.length
-      });
-    } catch (error) {
-      logAiReminderDebug('AI_REMINDER_SCAN_ERROR', null, {
-        reason,
-        now,
-        scannedCount,
-        dueCount,
-        invalidCount,
-        error: error?.message || String(error)
-      });
-      console.warn('[AI定时提醒] 扫描到点提醒失败:', error);
-    } finally {
-      aiReminderScanInProgress = false;
-    }
-  }
-
-  function runAIReminderImmediateScan(reason = 'manual') {
-    return scanDueAiReminders(reason);
-  }
-
-  function bindAIReminderSchedulerEvents() {
-    if (aiReminderSchedulerEventsBound) return;
-    aiReminderSchedulerEventsBound = true;
-
-    window.addEventListener('pageshow', () => {
-      runAIReminderImmediateScan('pageshow');
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        runAIReminderImmediateScan('visibility_visible');
-      }
-    });
-  }
-
-  function startAIReminderScheduler() {
-    if (aiReminderSchedulerIntervalId) return;
-
-    bindAIReminderSchedulerEvents();
-    logAiReminderDebug('AI_REMINDER_SCHEDULER_START', null, {
-      intervalMs: AI_REMINDER_SCHEDULER_INTERVAL_MS
-    });
-    runAIReminderImmediateScan('scheduler_start');
-    aiReminderSchedulerIntervalId = setInterval(() => {
-      runAIReminderImmediateScan('interval');
-    }, AI_REMINDER_SCHEDULER_INTERVAL_MS);
-  }
-
-  function stopAIReminderScheduler() {
-    if (!aiReminderSchedulerIntervalId) return;
-    clearInterval(aiReminderSchedulerIntervalId);
-    aiReminderSchedulerIntervalId = null;
-  }
+  // 哪些活动项要走 LLM (要花 API 调用) —— 这些才吃 20% 的唤醒概率
+  const BG_LLM_ACT_KEYS = [
+    'msg', 'call', 'avatar', 'sing', 'buy',
+    'peek', 'qzonePost', 'qzoneInteract', 'qzoneDelete'
+  ];
 
   async function runBackgroundSimulationTick() {
-    console.log("模拟器心跳 Tick...");
-    if (!state.globalSettings.enableBackgroundActivity) {
-      stopBackgroundSimulation();
-      return;
-    }
-
-    await scanDueAiReminders();
-
-
     const allSingleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
     allSingleChats.forEach(chat => {
+      const cfg = getChatBgConfig(chat);
+
       if (chat.relationship?.status === 'blocked_by_user') {
         const blockedTimestamp = chat.relationship.blockedTimestamp;
         if (!blockedTimestamp) return;
         const blockedDuration = Date.now() - blockedTimestamp;
-        const cooldownMilliseconds = (state.globalSettings.blockCooldownHours || 1) * 60 * 60 * 1000;
+        // 拉黑冷静期 2026-11-27: 从全局下沉到角色级 (bgActivity.blockCooldownHours)
+        const cooldownMilliseconds = (cfg.blockCooldownHours || 1) * 60 * 60 * 1000;
         if (blockedDuration > cooldownMilliseconds) {
           chat.relationship.status = 'pending_system_reflection';
           triggerAiFriendApplication(chat.id);
         }
-      } else if (chat.relationship?.status === 'friend' && chat.id !== state.activeChatId) {
-        if (chat.settings.enableBackgroundActivity === false) {
-          console.log(`角色 "${chat.name}" 的独立后台活动开关已关闭，本次跳过。`);
-          return;
-        }
-        if (Math.random() < 0.20) {
-          console.log(`角色 "${chat.name}" 被唤醒，准备独立行动...`);
-          triggerInactiveAiAction(chat.id);
-        }
-        // 检查是否可以帮助用户清空购物车
+        return;
+      }
+
+      if (chat.relationship?.status !== 'friend') return;
+
+      if (!cfg.enabled) return;
+
+      // ★ 2026-11-27: 删掉了 `chat.id !== state.activeChatId` 这个排除。
+      //   原来"你盯着谁聊, 谁就绝对没有后台活动" —— 改完之后正在聊的角色一样参与。
+      const acts = cfg.acts || {};
+
+      // 要花 API 的活动项才吃唤醒概率
+      const anyLlmAct = BG_LLM_ACT_KEYS.some(k => acts[k]);
+      if (anyLlmAct && Math.random() < 0.20) {
+        console.log(`角色 "${chat.name}" 被唤醒，准备独立行动...`);
+        triggerInactiveAiAction(chat.id);
+      }
+      // 帮我清空购物车 (不用 LLM, 不吃概率)
+      if (acts.clearCart) {
         checkAndClearShoppingCart(chat.id);
-        // 情侣空间 AI 自主决定模式 - 后台触发
-        if (typeof triggerCoupleSpaceAiDecide === 'function') {
-          try { triggerCoupleSpaceAiDecide(chat.id, 'background'); } catch(e) {}
-        }
+      }
+      // 情侣空间 AI 自主决定模式 - 后台触发
+      if (cfg.couple && cfg.couple.enabled && typeof triggerCoupleSpaceAiDecide === 'function') {
+        try { triggerCoupleSpaceAiDecide(chat.id, 'background'); } catch(e) {}
       }
     });
 
@@ -1303,7 +105,16 @@ ${linkedContents}
       const allRecentPosts = await db.qzonePosts.orderBy('timestamp').reverse().limit(10).toArray();
 
       for (const npc of allNpcs) {
-        if (npc.enableBackgroundActivity === false) continue;
+        // 2026-11-27: NPC 独立后台活动 —— 拆成【发动态】和【评论动态】两个独立开关。
+        //   旧版只有一个 enableBackgroundActivity, 发动态和评论捆在一起;
+        //   而且老代码里 generateNpcActions 【完全不查】enableQzoneActions,
+        //   → 关掉角色的「动态功能」, NPC 照样在朋友圈发帖评论 (越权)。
+        //   现在: NPC 只受自己的两个开关管, 跟角色的朋友圈开关彻底解耦。
+        const npcPostOn = npc.enablePost !== undefined ? npc.enablePost !== false : npc.enableBackgroundActivity !== false;
+        const npcCommentOn = npc.enableComment !== undefined ? npc.enableComment !== false : npc.enableBackgroundActivity !== false;
+        // 两个开关都关才跳过。旧的 enableBackgroundActivity 总闸不再单独拦截 ——
+        // 否则「只开发动态」会被旧字段 false 挡掉。
+        if (!npcPostOn && !npcCommentOn) continue;
         const cooldownMinutes = npc.actionCooldownMinutes || 15;
         if (npc.lastActionTimestamp) {
           const minutesSinceLastAction = (Date.now() - npc.lastActionTimestamp) / (1000 * 60);
@@ -1363,6 +174,8 @@ ${linkedContents}
           if (generatedActions && generatedActions.length > 0) {
             for (const action of generatedActions) {
               if (action.type === 'qzone_comment') {
+                // 2026-11-27: 评论受 NPC 自己的「评论动态」开关管
+                if (!npcCommentOn) continue;
 
                 const post = await db.qzonePosts.get(action.postId);
                 if (post) {
@@ -1379,6 +192,8 @@ ${linkedContents}
                   updateUnreadIndicator(unreadPostsCount + 1);
                 }
               } else if (action.type === 'qzone_post') {
+                // 2026-11-27: 发帖受 NPC 自己的「发动态」开关管
+                if (!npcPostOn) continue;
 
                 const newPost = {
                   type: action.postType || 'shuoshuo',
@@ -1501,6 +316,29 @@ ${commentsString || '(暂无评论)'}
     }
 
 
+    // 2026-11-27: NPC 的「发动态」/「评论动态」两个独立开关
+    //   (跟 runBackgroundSimulationTick 里的判断一致 —— 别让 AI 白生成被丢弃的行动)
+    const npcPostOn = npc.enablePost !== undefined ? npc.enablePost !== false : npc.enableBackgroundActivity !== false;
+    const npcCommentOn = npc.enableComment !== undefined ? npc.enableComment !== false : npc.enableBackgroundActivity !== false;
+
+    const npcActionFormatRules = [
+      npcPostOn ? '      -   **发布新动态**: \\`{"type": "qzone_post", "postType": "shuoshuo", "content": "你的新动态内容。"}\\`' : '',
+      npcCommentOn ? '      -   **发表评论**: \\`{"type": "qzone_comment", "postId": 123, "commentText": "你的新评论内容。"}\\` 或 \\`{"type": "qzone_comment", "postId": 123, "replyTo": "被回复者的【本名】", "commentText": "你的回复内容。"}\\`' : ''
+    ].filter(Boolean).join('\n');
+
+    const npcCoreRules = [
+      '1.  **【角色扮演】**: 你的所有行为都【必须】严格符合你的角色设定。',
+      npcCommentOn ? '2.  **【互动逻辑】**: 你的首要任务是检查"待处理的帖子列表"。如果列表中有你可以回应的帖子（特别是那些有新评论或提到你的），你【必须】优先进行评论或回复，而不是发布新动态。' : '',
+      '3.  **【格式铁律 (最高优先级)】**: ',
+      '    -   你的回复【必须且只能】是一个JSON数组格式的字符串。',
+      '    -   数组中可以包含【一个或多个】行动对象。',
+      `    -   每个行动对象的格式【必须】是以下${npcPostOn && npcCommentOn ? '两种' : '一种'}之一：`,
+      npcActionFormatRules,
+      '4.  **【行为组合指南】**:',
+      '    -   你可以自由组合不同的行动，例如，先发布一条自己的动态，再去评论别人的动态。',
+      '    -   为了模拟真实行为，你本次生成的行动数量建议在【1到3个】之间。'
+    ].filter(Boolean).join('\n');
+
     const systemPrompt = `
 # 你的任务
 你是一个虚拟社区的AI。你的核心任务是扮演角色"${npc.name}"，并根据其人设，通过【发布新动态】或【评论/回复帖子】来参与社区互动。
@@ -1508,17 +346,7 @@ ${commentsString || '(暂无评论)'}
 ${postingCooldownInstruction}
 
 # 核心规则
-1.  **【角色扮演】**: 你的所有行为都【必须】严格符合你的角色设定。
-2.  **【互动逻辑】**: 你的首要任务是检查"待处理的帖子列表"。如果列表中有你可以回应的帖子（特别是那些有新评论或提到你的），你【必须】优先进行评论或回复，而不是发布新动态。
-3.  **【格式铁律 (最高优先级)】**: 
-    -   你的回复【必须且只能】是一个JSON数组格式的字符串。
-    -   数组中可以包含【一个或多个】行动对象。
-    -   每个行动对象的格式【必须】是以下两种之一：
-      -   **发布新动态**: \`{"type": "qzone_post", "postType": "shuoshuo", "content": "你的新动态内容。"}\`
-      -   **发表评论**: \`{"type": "qzone_comment", "postId": 123, "commentText": "你的新评论内容。"}\` 或 \`{"type": "qzone_comment", "postId": 123, "replyTo": "被回复者的【本名】", "commentText": "你的回复内容。"}\`
-4.  **【行为组合指南】**:
-    -   你可以自由组合不同的行动，例如，先发布一条自己的动态，再去评论别人的动态。
-    -   为了模拟真实行为，你本次生成的行动数量建议在【1到3个】之间。
+${npcCoreRules}
 
 # 你的角色设定
 - **昵称**: ${npc.name}
@@ -1900,7 +728,8 @@ ${tasksString}
 
     const activeCharacters = Object.values(state.chats).filter(chat =>
       !chat.isGroup &&
-      chat.settings.enableBackgroundActivity &&
+      // 2026-11-27: 改读角色级 bgActivity.enabled (全局总闸已删)
+      getChatBgConfig(chat).enabled &&
       chat.relationship?.status === 'friend'
     );
     const proactiveCharacters = Object.values(state.chats).filter(chat =>
@@ -1915,7 +744,11 @@ ${tasksString}
 
     for (const char of activeCharacters) {
 
-      const cooldownMinutes = char.settings.actionCooldownMinutes || 15;
+      // 🔴 2026-11-27: 冷却改读面板里的 bgActivity.cooldownMinutes (旧字段兜底)
+      const charBgCfg = getChatBgConfig(char);
+      const cooldownMinutes = (charBgCfg && typeof charBgCfg.cooldownMinutes === 'number' && charBgCfg.cooldownMinutes > 0)
+        ? charBgCfg.cooldownMinutes
+        : (char.settings.actionCooldownMinutes || 15);
       const timeSinceLastAction = char.lastActionTimestamp ?
         (Date.now() - char.lastActionTimestamp) / (1000 * 60) :
         Infinity;
@@ -1971,6 +804,7 @@ ${tasksString}
     try {
       const blob = await window.AIMusic.generateSong({
         chatId: chat.id,
+        title: songTitle,
         prompt: defaultPrompt,
         lyrics: '',
         instrumental: false,
@@ -2115,8 +949,8 @@ ${tasksString}
   //
   // 宿主除了画面那些动画, 还有这几个【一直跑着的定时器】:
   //   · 后台活动模拟   (每 60 秒, 可能发 AI 调用)
-  //   · AI 提醒扫描    (每 30 秒)
-  //   (无声智能保活 2026-11-19 已整个删掉 —— 见上面那段)
+  // (无声智能保活 2026-11-19 已整个删掉 —— 见上面那段)
+  //   (本地 AI 定时提醒 2026-11-27 已整个删掉 —— UI 从未挂载, 表永远是空的)
   // 影院开着的时候它们一个都用不上 → 一起停, 退出影院再原样恢复。
   //
   // 【恢复原则】只恢复【进影院之前就在跑】的那些,
@@ -2127,11 +961,9 @@ ${tasksString}
   function pauseHostBackgroundTasks() {
     if (hostTaskPauseState) return;
     hostTaskPauseState = {
-      simulation: !!simulationIntervalId,
-      reminder: !!aiReminderSchedulerIntervalId
+      simulation: !!simulationIntervalId
     };
     try { stopBackgroundSimulation(); } catch (e) { /* noop */ }
-    try { stopAIReminderScheduler(); } catch (e) { /* noop */ }
   }
 
   function resumeHostBackgroundTasks() {
@@ -2141,22 +973,9 @@ ${tasksString}
     if (was.simulation) {
       try { startBackgroundSimulation(); } catch (e) { /* noop */ }
     }
-    if (was.reminder) {
-      try { startAIReminderScheduler(); } catch (e) { /* noop */ }
-    }
   }
 
   // ========== 全局暴露 ==========
-  window.generateAiReminderText = generateAiReminderText;
-  window.scanDueAiReminders = scanDueAiReminders;
-  window.startAIReminderScheduler = startAIReminderScheduler;
-  window.stopAIReminderScheduler = stopAIReminderScheduler;
-  window.runAIReminderImmediateScan = runAIReminderImmediateScan;
-  window.getAIReminderDebugLogs = readAiReminderDebugLogs;
-  window.clearAIReminderDebugLogs = function clearAIReminderDebugLogs() {
-    writeAiReminderDebugLogs([]);
-  };
-  window.logAiReminderDebug = logAiReminderDebug;
   window.simulateBackgroundActivity = simulateBackgroundActivity;
   window.startBackgroundSimulation = startBackgroundSimulation;
   window.stopBackgroundSimulation = stopBackgroundSimulation;

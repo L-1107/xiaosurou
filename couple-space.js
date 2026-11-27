@@ -221,67 +221,208 @@ function checkAndRunMissed(timeStr, lastKey, callback) {
   } catch(e) { console.error('checkAndRunMissed error:', e); }
 }
 
+// ========== 2026-11-27: 情侣空间后台活动 —— 统一配置 + 统一调度器 ==========
+// 【改前】13 个功能各有一份 localStorage settings, 里面混着 4~5 个【调度】开关
+//   (autoEnabled / autoTime / aiDecide / aiDecideChatProb / aiDecideBgProb)
+//   + 13 个 setupCoupleSpaceXxxAutoTimer + 13 个 scheduleXxxAutoPost
+//   → 52 个开关, 藏在 localStorage 里, 用户根本不知道在哪设。
+// 【改后】调度开关全收进 chat.settings.bgActivity.couple:
+//   { enabled, mode: 'off'|'scheduled'|'ai'|'both', time: '21:00', prob: 5, chatProb: 15, feats: {11 项} }
+//   内容相关设置 (可见条数 / 自定义 prompt / 图片模式 …) 仍留在原 localStorage, 一行没动。
+// ============================================================
+
+/** 各功能的运行时入口 (生成逻辑没动, 只是调度统一了) */
+const COUPLE_FEATURE_RUNTIME = {
+  diary:     { fn: triggerAutoDiaryWrite,         lastKey: 'coupleDiaryAutoLast_' },
+  album:     { fn: triggerAutoAlbumPost,          lastKey: 'coupleAlbumAutoLast_' },
+  checklist: { fn: triggerAutoChecklistRecommend, lastKey: 'coupleChecklistAutoLast_' },
+  message:   { fn: triggerAutoMessagePost,        lastKey: 'coupleMessageAutoLast_' },
+  mood:      { fn: triggerAutoMoodPost,           lastKey: 'coupleMoodAutoLast_' },
+  timeline:  { fn: triggerAutoTimelinePost,       lastKey: 'coupleTimelineAutoLast_' },
+  letter:    { fn: triggerAutoLetterPost,         lastKey: 'coupleLetterAutoLast_' },
+  garden:    { fn: triggerAutoGardenWater,        lastKey: 'coupleGardenAutoLast_' },
+  location:  { fn: triggerAutoLocationPost,       lastKey: 'coupleLocAutoLast_' },
+  finance:   { fn: triggerAutoFinancePost,        lastKey: 'coupleFinanceAutoLast_' }
+};
+
+/** 取某个角色的情侣空间后台配置 (读 chat.settings.bgActivity.couple) */
+function getCoupleBgConfig(charId) {
+  const chat = state.chats[charId];
+  if (chat && window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function') {
+    try {
+      const cfg = window.BgActivityConfig.getBgActivityConfig(chat);
+      if (cfg.couple) return cfg.couple;
+    } catch (e) { /* fallthrough */ }
+  }
+  return { enabled: false, mode: 'off', time: '21:00', prob: 5, chatProb: 15, feats: {} };
+}
+
+/** 把情侣空间后台配置写回角色 */
+function saveCoupleBgConfig(charId, patch) {
+  const chat = state.chats[charId];
+  if (!chat) return null;
+  if (!window.BgActivityConfig || typeof window.BgActivityConfig.getBgActivityConfig !== 'function') return null;
+  try {
+    const cfg = window.BgActivityConfig.getBgActivityConfig(chat);
+    cfg.couple = Object.assign({}, cfg.couple, patch || {});
+    window.BgActivityConfig.saveBgActivityConfig(chat);
+    return cfg.couple;
+  } catch (e) {
+    console.error('[情侣空间] 保存后台配置失败:', e);
+    return null;
+  }
+}
+
+/** AI 自主决定模式下, 某功能是否由 AI 决定要不要做 (mode 含 ai 才算) */
+function isCoupleAiDecideMode(charId) {
+  const cfg = getCoupleBgConfig(charId);
+  return !!(cfg.enabled && (cfg.mode === 'ai' || cfg.mode === 'both'));
+}
+
+/**
+ * 把角色级情侣空间配置同步回某个功能的旧 localStorage settings。
+ *
+ * 2026-11-27: 子页面(330--main/index.html)已经删掉「定时自动 / 时间 /
+ *   AI自主决定 / 概率」这几行 UI —— 调度统一由 chat.settings.bgActivity.couple 接管。
+ *   但旧字段还留在 localStorage 里, 迁移逻辑和「当天已执行」标记都还指着它们,
+ *   所以每次调度器启动 / 子页面保存设置时, 把新配置映射回旧字段, 两边保持一致。
+ */
+function syncCoupleFeatureLegacySettings(charId, featureKey) {
+  const list = (window.BgActivityConfig && window.BgActivityConfig.COUPLE_FEATURES) || [];
+  const feat = list.find(f => f.key === featureKey);
+  if (!feat) return null;
+  const cfg = getCoupleBgConfig(charId);
+  const couple = cfg.couple || {};
+  const on = !!(cfg.enabled && couple.feats && couple.feats[featureKey]);
+  const mode = couple.mode || 'off';
+
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(feat.settingsKey + charId) || '{}') || {}; } catch (e) { s = {}; }
+
+  s.autoEnabled = on && (mode === 'scheduled' || mode === 'both');
+  if (!s.autoTime) s.autoTime = couple.time || '21:00';
+  s.aiDecide = on && (mode === 'ai' || mode === 'both');
+  if (typeof s.aiDecideChatProb !== 'number') s.aiDecideChatProb = (typeof couple.chatProb === 'number') ? couple.chatProb : 15;
+  if (typeof s.aiDecideBgProb !== 'number') s.aiDecideBgProb = (typeof couple.prob === 'number') ? couple.prob : 5;
+
+  try { localStorage.setItem(feat.settingsKey + charId, JSON.stringify(s)); } catch (e) { /* ignore */ }
+  return s;
+}
+
+/** 把某个角色所有情侣空间功能的旧字段都同步一遍 */
+function syncCoupleAllLegacySettings(charId) {
+  const list = (window.BgActivityConfig && window.BgActivityConfig.COUPLE_FEATURES) || [];
+  list.forEach(f => { try { syncCoupleFeatureLegacySettings(charId, f.key); } catch (e) { /* ignore */ } });
+}
+
+// ---------- 统一调度器 ----------
+let coupleSpaceAutoTimer = null;
+
+/** 启动/重启统一调度器 (每 60 秒检查一次所有情侣空间的定时任务) */
+function setupCoupleSpaceAutoTimer() {
+  if (coupleSpaceAutoTimer) {
+    clearInterval(coupleSpaceAutoTimer);
+    coupleSpaceAutoTimer = null;
+  }
+  const runAll = () => {
+    getCoupleSpaces().forEach(sp => {
+      try {
+        // 旧 localStorage 字段跟着新配置走 (子页面已删掉那几行 UI)
+        syncCoupleAllLegacySettings(sp.charId);
+        runCoupleScheduledCheck(sp.charId);
+      } catch (e) { /* ignore */ }
+    });
+  };
+  runAll();
+  coupleSpaceAutoTimer = setInterval(runAll, 60000);
+}
+
+/** 检查某个角色的定时任务是否到点 (到点且今天没跑过 → 触发) */
+function runCoupleScheduledCheck(charId) {
+  const cfg = getCoupleBgConfig(charId);
+  if (!cfg.enabled) return;
+  if (cfg.mode !== 'scheduled' && cfg.mode !== 'both') return;
+  if (!cfg.time) return;
+
+  Object.keys(COUPLE_FEATURE_RUNTIME).forEach(key => {
+    try {
+      if (!cfg.feats || !cfg.feats[key]) return;
+      const rt = COUPLE_FEATURE_RUNTIME[key];
+      if (!rt.fn || !rt.lastKey) return;
+      checkAndRunMissed(cfg.time, rt.lastKey + charId, () => {
+        console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 ${key} 的自动生成`);
+        rt.fn(charId, true);
+      });
+    } catch (e) { console.error(`[情侣空间] ${key} 定时触发失败:`, e); }
+  });
+
+  // 睡眠特殊: 入睡和起床是两个不同时刻, 时间继续用旧 localStorage 里的
+  // autoSleepTime / autoWakeTime (新配置的单一 time 不适合表达两个点)
+  try {
+    if (cfg.feats && cfg.feats.sleep) {
+      const sleepSettings = JSON.parse(localStorage.getItem('coupleSleepSettings_' + charId) || '{}');
+      if (sleepSettings.autoEnabled) {
+        if (sleepSettings.autoSleepTime) {
+          checkAndRunMissed(sleepSettings.autoSleepTime, 'coupleSleepAuto_sleep_' + charId, () => {
+            triggerAutoSleepPost(charId, 'sleep', true);
+          });
+        }
+        if (sleepSettings.autoWakeTime) {
+          checkAndRunMissed(sleepSettings.autoWakeTime, 'coupleSleepAuto_wake_' + charId, () => {
+            triggerAutoSleepPost(charId, 'wake', true);
+          });
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
 // ========== AI 自主决定模式 - 事件驱动触发 ==========
 // 通过聊天消息或后台活动触发，而非固定定时
 // source: 'chat' = 聊天消息后触发, 'background' = 后台活动触发
+// 2026-11-27: 改读 chat.settings.bgActivity.couple (原来读 13 份 localStorage)
 function triggerCoupleSpaceAiDecide(charId, source) {
   const spaces = getCoupleSpaces();
   if (!spaces.find(s => s.charId === charId)) return;
 
-  const featureConfigs = [
-    { settingsKey: 'coupleDiarySettings_', lastKey: 'coupleDiaryAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoDiaryWrite },
-    { settingsKey: 'coupleAlbumSettings_', lastKey: 'coupleAlbumAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoAlbumPost },
-    { settingsKey: 'coupleChecklistSettings_', lastKey: 'coupleChecklistAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoChecklistRecommend },
-    { settingsKey: 'coupleMessageSettings_', lastKey: 'coupleMessageAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoMessagePost },
-    { settingsKey: 'coupleMoodSettings_', lastKey: 'coupleMoodAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoMoodPost },
-    { settingsKey: 'coupleTimelineSettings_', lastKey: 'coupleTimelineAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoTimelinePost },
-    { settingsKey: 'coupleLetterSettings_', lastKey: 'coupleLetterAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoLetterPost },
-    { settingsKey: 'coupleGardenSettings_', lastKey: 'coupleGardenAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoGardenWater },
-    { settingsKey: 'coupleLocSettings_', lastKey: 'coupleLocAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoLocationPost },
-    { settingsKey: 'coupleFinanceSettings_', lastKey: 'coupleFinanceAutoLast_', chatProb: 'aiDecideChatProb', bgProb: 'aiDecideBgProb', trigger: triggerAutoFinancePost },
-  ];
+  const cfg = getCoupleBgConfig(charId);
+  if (!cfg.enabled) return;
+  if (cfg.mode !== 'ai' && cfg.mode !== 'both') return;
 
   const todayStr = new Date().toISOString().split('T')[0];
 
-  featureConfigs.forEach(cfg => {
+  Object.keys(COUPLE_FEATURE_RUNTIME).forEach(key => {
     try {
-      const settings = JSON.parse(localStorage.getItem(cfg.settingsKey + charId) || '{}');
-      if (!settings.aiDecide) return;
+      if (!cfg.feats || !cfg.feats[key]) return;
+      const rt = COUPLE_FEATURE_RUNTIME[key];
+      if (!rt.fn || !rt.lastKey) return;
 
       // 今天已经执行过随机触发就跳过（与定时触发Key隔离）
-      const randomLastKey = cfg.lastKey + 'random_' + charId;
-      const lastDate = localStorage.getItem(randomLastKey);
-      if (lastDate === todayStr) return;
+      const randomLastKey = rt.lastKey + 'random_' + charId;
+      if (localStorage.getItem(randomLastKey) === todayStr) return;
 
-      // 根据来源取对应概率（默认聊天15%，后台5%）
-      const prob = source === 'chat'
-        ? (settings[cfg.chatProb] ?? 15) / 100
-        : (settings[cfg.bgProb] ?? 5) / 100;
+      // 聊天 15% / 后台 5% (原来每功能各存一份, 现在全局一份)
+      const prob = (source === 'chat' ? (cfg.chatProb ?? 15) : (cfg.prob ?? 5)) / 100;
 
       if (Math.random() < prob) {
         localStorage.setItem(randomLastKey, todayStr);
-        console.log(`[情侣空间] 🎲 随机模式：AI决定触发 ${cfg.settingsKey} (${source}, 概率${(prob*100).toFixed(0)}%)`);
-        cfg.trigger(charId);
+        console.log(`[情侣空间] 🎲 随机模式：AI决定触发 ${key} (${source}, 概率${(prob*100).toFixed(0)}%)`);
+        rt.fn(charId, false);
       }
     } catch(e) { console.error('aiDecide trigger error:', e); }
   });
 
   // 睡眠单独处理（有sleep/wake两个phase）
   try {
-    const sleepSettings = JSON.parse(localStorage.getItem('coupleSleepSettings_' + charId) || '{}');
-    if (sleepSettings.aiDecide) {
-      const prob = source === 'chat'
-        ? (sleepSettings.aiDecideChatProb ?? 15) / 100
-        : (sleepSettings.aiDecideBgProb ?? 5) / 100;
-
+    if (cfg.feats && cfg.feats.sleep) {
+      const prob = (source === 'chat' ? (cfg.chatProb ?? 15) : (cfg.prob ?? 5)) / 100;
       ['sleep', 'wake'].forEach(phase => {
         const lastKey = 'coupleSleepAuto_' + phase + '_random_' + charId;
-        const lastDate = localStorage.getItem(lastKey);
-        if (lastDate === todayStr) return;
+        if (localStorage.getItem(lastKey) === todayStr) return;
         if (Math.random() < prob) {
           localStorage.setItem(lastKey, todayStr);
           console.log(`[情侣空间] 🎲 随机模式：AI决定触发 sleep-${phase} (${source})`);
-          triggerAutoSleepPost(charId, phase);
+          triggerAutoSleepPost(charId, phase, false);
         }
       });
     }
@@ -749,8 +890,8 @@ async function handleCoupleSpaceDiaryAiRequest(data) {
   // 移除手动触发限制，允许无限手动生成
   
   // 检查AI自主决定设置（仅用于手动触发时）
-  const settings = JSON.parse(localStorage.getItem('coupleDiarySettings_' + data.charId) || '{}');
-  if (settings.aiDecide) {
+  // 2026-11-27: 改读新配置 (原来读 localStorage 的 settings.aiDecide)
+  if (isCoupleAiDecideMode(data.charId)) {
     try {
       const shouldWrite = await askAiIfShouldWriteDiary(chat);
       if (!shouldWrite) {
@@ -803,7 +944,7 @@ function handleCoupleSpaceDiarySettingsChanged(data) {
   localStorage.setItem('coupleDiarySettings_' + data.charId, JSON.stringify(data.settings));
   localStorage.removeItem('coupleDiaryAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 日记 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceDiaryAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceDiarySummaryRequest(data) {
@@ -1362,48 +1503,14 @@ ${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Diary Scheduler ==========
-let coupleSpaceDiaryTimers = {};
-
-function setupCoupleSpaceDiaryAutoTimer() {
-  // Clear existing timers
-  Object.values(coupleSpaceDiaryTimers).forEach(t => clearInterval(t));
-  coupleSpaceDiaryTimers = {};
-
-  const spaces = getCoupleSpaces();
-  spaces.forEach(sp => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleDiarySettings_' + sp.charId)) || {};
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 日记 的定时器，新的定时时间为：${settings.autoTime}`);
-        // Check if missed today's execution on startup
-        checkAndRunMissed(settings.autoTime, 'coupleDiaryAutoLast_' + sp.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 日记 的自动生成`);
-          triggerAutoDiaryWrite(sp.charId, true);
-        });
-        scheduleDiaryAutoWrite(sp.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleDiaryAutoWrite(charId, timeStr) {
-  coupleSpaceDiaryTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleDiaryAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 日记 的自动生成`);
-      triggerAutoDiaryWrite(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Diary ==========
 async function triggerAutoDiaryWrite(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
 
-  const settings = JSON.parse(localStorage.getItem('coupleDiarySettings_' + charId) || '{}');
-
   // 如果开启了AI自主决定，先询问AI是否要写日记 (定时器触发时强制跳过)
-  if (settings.aiDecide && !isTimer) {
+  // 2026-11-27: 改读新配置 (原来读 localStorage 的 settings.aiDecide)
+  if (isCoupleAiDecideMode(charId) && !isTimer) {
     try {
       const shouldWrite = await askAiIfShouldWriteDiary(chat);
       if (!shouldWrite) {
@@ -1501,13 +1608,28 @@ ${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
   }
 }
 
-// Initialize auto diary timers when app loads
+// 2026-11-27: 11 个功能的定时器合并成一个统一调度器 (原各自一个 setInterval)
 if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceDiaryAutoTimer, 5000);
-  setTimeout(setupCoupleSpaceAlbumAutoTimer, 6000);
+  setTimeout(setupCoupleSpaceAutoTimer, 5000);
 }
 
 // ========== Album AI Integration ==========
+
+// 🔴 2026-11-27: 相册生图失败原来是【全静默】的 —— catch 里只 console.error,
+//   用户永远只看到灰色占位, 根本不知道是没填 API / 没保存 / 还是接口报错。
+//   这里把失败原因直接弹出来 (同一原因 60 秒内只提醒一次, 免得刷屏)。
+let coupleSpaceImageGenNoticeAt = 0;
+function coupleSpaceImageGenNotice(err) {
+  const now = Date.now();
+  if (now - coupleSpaceImageGenNoticeAt < 60000) return;
+  coupleSpaceImageGenNoticeAt = now;
+  const msg = (err && err.message) ? err.message : String(err || '未知错误');
+  const text = '相册生图失败: ' + msg;
+  try {
+    if (typeof window.showToast === 'function') window.showToast(text, 'error', 8000);
+  } catch (e) { /* ignore */ }
+  console.error('[情侣空间相册生图]', msg);
+}
 
 async function handleCoupleSpaceAlbumAiRequest(data) {
   const iframe = document.getElementById('couple-space-iframe');
@@ -1546,7 +1668,7 @@ async function handleCoupleSpaceAlbumAiRequest(data) {
         if (naiResult && naiResult.base64) {
           imageData = 'data:image/png;base64,' + naiResult.base64;
         }
-      } catch(e) { console.error('Album NAI gen failed:', e); }
+      } catch(e) { console.error('Album NAI gen failed:', e); coupleSpaceImageGenNotice(e); }
     } else if (genMode === 'imagen' && result.imagePrompt) {
       try {
         const imagenResult = await generateGoogleImagenFromPrompt(result.imagePrompt);
@@ -1575,7 +1697,10 @@ async function handleCoupleSpaceAlbumAiRequest(data) {
             }
           }
         }
-      } catch(e) { console.error('Album OpenAI compat gen failed:', e); }
+      } catch(e) {
+        console.error('Album OpenAI compat gen failed:', e);
+        coupleSpaceImageGenNotice(e);
+      }
     }
 
     iframe.contentWindow.postMessage({
@@ -1595,7 +1720,7 @@ function handleCoupleSpaceAlbumSettingsChanged(data) {
   localStorage.setItem('coupleAlbumSettings_' + data.charId, JSON.stringify(data.settings));
   localStorage.removeItem('coupleAlbumAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 相册 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceAlbumAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceAlbumRecognize(data) {
@@ -1774,45 +1899,15 @@ ${ctx.currentTime}
   return JSON.parse(raw);
 }
 
-// ========== Auto Album Scheduler ==========
-let coupleSpaceAlbumTimers = {};
-
-function setupCoupleSpaceAlbumAutoTimer() {
-  Object.values(coupleSpaceAlbumTimers).forEach(t => clearInterval(t));
-  coupleSpaceAlbumTimers = {};
-
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleAlbumSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 相册 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleAlbumAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 相册 的自动生成`);
-          triggerAutoAlbumPost(space.charId, true);
-        });
-        scheduleAlbumAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleAlbumAutoPost(charId, timeStr) {
-  coupleSpaceAlbumTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleAlbumAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 相册 的自动生成`);
-      triggerAutoAlbumPost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Album ==========
 async function triggerAutoAlbumPost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
 
   const albumSettings = JSON.parse(localStorage.getItem('coupleAlbumSettings_' + charId) || '{}');
 
-  if (albumSettings.aiDecide && !isTimer) {
+  // 2026-11-27: 改读新配置 (原来读 localStorage 的 albumSettings.aiDecide)
+  if (isCoupleAiDecideMode(charId) && !isTimer) {
     try {
       const shouldPost = await askAiIfShouldPostPhoto(chat);
       if (!shouldPost) return;
@@ -2260,7 +2355,7 @@ function handleCoupleSpaceChecklistSettingsChanged(data) {
   localStorage.setItem('coupleChecklistSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleChecklistAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 清单 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceChecklistAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceChecklistAiRequest(data) {
@@ -2538,38 +2633,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Checklist Scheduler ==========
-let coupleSpaceChecklistTimers = {};
-
-function setupCoupleSpaceChecklistAutoTimer() {
-  Object.values(coupleSpaceChecklistTimers).forEach(t => clearInterval(t));
-  coupleSpaceChecklistTimers = {};
-
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleChecklistSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 清单 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleChecklistAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 清单 的自动生成`);
-          triggerAutoChecklistRecommend(space.charId, true);
-        });
-        scheduleChecklistAutoRecommend(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleChecklistAutoRecommend(charId, timeStr) {
-  coupleSpaceChecklistTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleChecklistAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 清单 的自动生成`);
-      triggerAutoChecklistRecommend(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Checklist ==========
 async function triggerAutoChecklistRecommend(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -2610,10 +2674,6 @@ async function triggerAutoChecklistRecommend(charId, isTimer = false) {
   }
 }
 
-// Initialize checklist timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceChecklistAutoTimer, 7000);
-}
 
 // ========== Message Board AI Integration ==========
 
@@ -2625,7 +2685,7 @@ function handleCoupleSpaceMessageSettingsChanged(data) {
   localStorage.setItem('coupleMessageSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleMessageAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 留言板 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceMessageAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceMessageAiRequest(data) {
@@ -2908,38 +2968,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Message Scheduler ==========
-let coupleSpaceMessageTimers = {};
-
-function setupCoupleSpaceMessageAutoTimer() {
-  Object.values(coupleSpaceMessageTimers).forEach(t => clearInterval(t));
-  coupleSpaceMessageTimers = {};
-
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleMessageSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 留言板 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleMessageAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 留言板 的自动生成`);
-          triggerAutoMessagePost(space.charId, true);
-        });
-        scheduleMessageAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleMessageAutoPost(charId, timeStr) {
-  coupleSpaceMessageTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleMessageAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 留言板 的自动生成`);
-      triggerAutoMessagePost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Message ==========
 async function triggerAutoMessagePost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -2974,10 +3003,6 @@ async function triggerAutoMessagePost(charId, isTimer = false) {
   }
 }
 
-// Initialize message timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceMessageAutoTimer, 8000);
-}
 
 // ========== Mood (心情) Integration ==========
 
@@ -2989,7 +3014,7 @@ function handleCoupleSpaceMoodSettingsChanged(data) {
   localStorage.setItem('coupleMoodSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleMoodAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 心情 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceMoodAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceMoodAiRequest(data) {
@@ -3223,37 +3248,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Mood Scheduler ==========
-let coupleSpaceMoodTimers = {};
-
-function setupCoupleSpaceMoodAutoTimer() {
-  Object.values(coupleSpaceMoodTimers).forEach(t => clearInterval(t));
-  coupleSpaceMoodTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleMoodSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 心情 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleMoodAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 心情 的自动生成`);
-          triggerAutoMoodPost(space.charId, true);
-        });
-        scheduleMoodAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleMoodAutoPost(charId, timeStr) {
-  coupleSpaceMoodTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleMoodAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 心情 的自动生成`);
-      triggerAutoMoodPost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Mood ==========
 async function triggerAutoMoodPost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -3285,10 +3280,6 @@ async function triggerAutoMoodPost(charId, isTimer = false) {
   }
 }
 
-// Initialize mood timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceMoodAutoTimer, 9000);
-}
 
 // ========== Timeline (时光轴) Integration ==========
 
@@ -3300,7 +3291,7 @@ function handleCoupleSpaceTimelineSettingsChanged(data) {
   localStorage.setItem('coupleTimelineSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleTimelineAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 时光轴 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceTimelineAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceTimelineAiRequest(data) {
@@ -3579,38 +3570,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Timeline Scheduler ==========
-let coupleSpaceTimelineTimers = {};
-
-function setupCoupleSpaceTimelineAutoTimer() {
-  Object.values(coupleSpaceTimelineTimers).forEach(t => clearInterval(t));
-  coupleSpaceTimelineTimers = {};
-
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleTimelineSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 时光轴 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleTimelineAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 时光轴 的自动生成`);
-          triggerAutoTimelinePost(space.charId, true);
-        });
-        scheduleTimelineAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleTimelineAutoPost(charId, timeStr) {
-  coupleSpaceTimelineTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleTimelineAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 时光轴 的自动生成`);
-      triggerAutoTimelinePost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Timeline ==========
 async function triggerAutoTimelinePost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -3646,10 +3606,6 @@ async function triggerAutoTimelinePost(charId, isTimer = false) {
   }
 }
 
-// Initialize timeline timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceTimelineAutoTimer, 9000);
-}
 
 // ========== Letter (信件) Integration ==========
 
@@ -3661,7 +3617,7 @@ function handleCoupleSpaceLetterSettingsChanged(data) {
   localStorage.setItem('coupleLetterSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleLetterAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 信件 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceLetterAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceLetterAiRequest(data) {
@@ -3984,37 +3940,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Letter Scheduler ==========
-let coupleSpaceLetterTimers = {};
-
-function setupCoupleSpaceLetterAutoTimer() {
-  Object.values(coupleSpaceLetterTimers).forEach(t => clearInterval(t));
-  coupleSpaceLetterTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleLetterSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 信件 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleLetterAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 信件 的自动生成`);
-          triggerAutoLetterPost(space.charId, true);
-        });
-        scheduleLetterAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleLetterAutoPost(charId, timeStr) {
-  coupleSpaceLetterTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleLetterAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 信件 的自动生成`);
-      triggerAutoLetterPost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Letter ==========
 async function triggerAutoLetterPost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -4050,10 +3976,6 @@ async function triggerAutoLetterPost(charId, isTimer = false) {
   }
 }
 
-// Initialize letter timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceLetterAutoTimer, 10000);
-}
 
 // ========== Chat Screenshot for Album ==========
 
@@ -4369,7 +4291,7 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// ========== Auto Screenshot Scheduler ==========
+// ========== Auto Screenshot ==========
 let coupleSpaceScreenshotTimers = {};
 
 function setupCoupleSpaceScreenshotTimer() {
@@ -4440,7 +4362,7 @@ function handleCoupleSpaceGardenSettingsChanged(data) {
   localStorage.setItem('coupleGardenSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleGardenAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 浇水 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceGardenAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceGardenWaterReward(data) {
@@ -4698,37 +4620,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Garden Scheduler ==========
-let coupleSpaceGardenTimers = {};
-
-function setupCoupleSpaceGardenAutoTimer() {
-  Object.values(coupleSpaceGardenTimers).forEach(t => clearInterval(t));
-  coupleSpaceGardenTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleGardenSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 浇水 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleGardenAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 浇水 的自动生成`);
-          triggerAutoGardenWater(space.charId, true);
-        });
-        scheduleGardenAutoWater(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleGardenAutoWater(charId, timeStr) {
-  coupleSpaceGardenTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleGardenAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 浇水 的自动生成`);
-      triggerAutoGardenWater(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Garden ==========
 async function triggerAutoGardenWater(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -4772,14 +4664,9 @@ async function triggerAutoGardenWater(charId, isTimer = false) {
   }
 }
 
-// Initialize garden timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceGardenAutoTimer, 10000);
-}
 
 // ========== Location (定位) Integration ==========
 
-let coupleSpaceLocationTimers = {};
 
 function handleCoupleSpaceLocationChanged(data) {
   localStorage.setItem('coupleLocations_' + data.charId, JSON.stringify(data.items || []));
@@ -4789,7 +4676,7 @@ function handleCoupleSpaceLocationSettingsChanged(data) {
   localStorage.setItem('coupleLocSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleLocAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 定位 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceLocationAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceLocationAiRequest(data) {
@@ -5017,37 +4904,7 @@ ${ctx.aiPersona}
   if (!response.ok) throw new Error('API请求失败: ' + response.status);
   const respData = await response.json();
   return getGeminiResponseText(respData).trim();
-}
-
-function setupCoupleSpaceLocationAutoTimer() {
-  Object.values(coupleSpaceLocationTimers).forEach(t => clearInterval(t));
-  coupleSpaceLocationTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleLocSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 定位 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleLocAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 定位 的自动生成`);
-          triggerAutoLocationPost(space.charId, true);
-        });
-        scheduleLocationAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleLocationAutoPost(charId, timeStr) {
-  coupleSpaceLocationTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleLocAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 定位 的自动生成`);
-      triggerAutoLocationPost(charId, true);
-    });
-  }, 60000);
-}
-
-async function triggerAutoLocationPost(charId, isTimer = false) {
+}async function triggerAutoLocationPost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
   const settings = JSON.parse(localStorage.getItem('coupleLocSettings_' + charId) || '{}');
@@ -5082,10 +4939,6 @@ async function triggerAutoLocationPost(charId, isTimer = false) {
   }
 }
 
-// Initialize location timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceLocationAutoTimer, 11000);
-}
 
 // ========== Sleep (睡眠) Integration ==========
 
@@ -5098,7 +4951,7 @@ function handleCoupleSpaceSleepSettingsChanged(data) {
   localStorage.removeItem('coupleSleepAuto_sleep_' + data.charId);
   localStorage.removeItem('coupleSleepAuto_wake_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 睡眠 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceSleepAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceSleepAiRequest(data) {
@@ -5484,48 +5337,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Sleep Scheduler ==========
-let coupleSpaceSleepTimers = {};
-
-function setupCoupleSpaceSleepAutoTimer() {
-  Object.values(coupleSpaceSleepTimers).forEach(t => clearInterval(t));
-  coupleSpaceSleepTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleSleepSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled) {
-        if (settings.autoSleepTime) {
-          console.log(`✅ [情侣空间] 已重置 睡眠(入睡) 的定时器，新的定时时间为：${settings.autoSleepTime}`);
-          checkAndRunMissed(settings.autoSleepTime, 'coupleSleepAuto_sleep_' + space.charId, () => {
-            console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 睡眠(入睡) 的自动生成`);
-            triggerAutoSleepPost(space.charId, 'sleep', true);
-          });
-          scheduleSleepAutoPost(space.charId, settings.autoSleepTime, 'sleep');
-        }
-        if (settings.autoWakeTime) {
-          console.log(`✅ [情侣空间] 已重置 睡眠(起床) 的定时器，新的定时时间为：${settings.autoWakeTime}`);
-          checkAndRunMissed(settings.autoWakeTime, 'coupleSleepAuto_wake_' + space.charId, () => {
-            console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 睡眠(起床) 的自动生成`);
-            triggerAutoSleepPost(space.charId, 'wake', true);
-          });
-          scheduleSleepAutoPost(space.charId, settings.autoWakeTime, 'wake');
-        }
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleSleepAutoPost(charId, timeStr, phase) {
-  const timerKey = charId + '_' + phase;
-  coupleSpaceSleepTimers[timerKey] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleSleepAuto_' + phase + '_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 睡眠(${phase}) 的自动生成`);
-      triggerAutoSleepPost(charId, phase, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Sleep ==========
 async function triggerAutoSleepPost(charId, phase, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -5624,10 +5436,6 @@ async function triggerAutoSleepPost(charId, phase, isTimer = false) {
   }
 }
 
-// Initialize sleep timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceSleepAutoTimer, 12000);
-}
 
 // ========== Finance (记账) AI Integration ==========
 
@@ -5639,7 +5447,7 @@ function handleCoupleSpaceFinanceSettingsChanged(data) {
   localStorage.setItem('coupleFinanceSettings_' + data.charId, JSON.stringify(data.settings || {}));
   localStorage.removeItem('coupleFinanceAutoLast_' + data.charId);
   console.log(`[情侣空间] ⚙️ 已保存 记账 设置并清除当天执行记录，重新初始化定时器`);
-  setupCoupleSpaceFinanceAutoTimer();
+  setupCoupleSpaceAutoTimer();
 }
 
 async function handleCoupleSpaceFinanceAiRequest(data) {
@@ -5921,37 +5729,7 @@ ${ctx.currentTime}
   return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
 }
 
-// ========== Auto Finance Scheduler ==========
-let coupleSpaceFinanceTimers = {};
-
-function setupCoupleSpaceFinanceAutoTimer() {
-  Object.values(coupleSpaceFinanceTimers).forEach(t => clearInterval(t));
-  coupleSpaceFinanceTimers = {};
-  const spaces = getCoupleSpaces();
-  spaces.forEach(space => {
-    try {
-      const settings = JSON.parse(localStorage.getItem('coupleFinanceSettings_' + space.charId) || '{}');
-      if (settings.autoEnabled && settings.autoTime) {
-        console.log(`✅ [情侣空间] 已重置 记账 的定时器，新的定时时间为：${settings.autoTime}`);
-        checkAndRunMissed(settings.autoTime, 'coupleFinanceAutoLast_' + space.charId, () => {
-          console.log(`⏰ [情侣空间] 定时补执行时间已到！开始强制触发 记账 的自动生成`);
-          triggerAutoFinancePost(space.charId, true);
-        });
-        scheduleFinanceAutoPost(space.charId, settings.autoTime);
-      }
-    } catch(e) {}
-  });
-}
-
-function scheduleFinanceAutoPost(charId, timeStr) {
-  coupleSpaceFinanceTimers[charId] = setInterval(() => {
-    checkAndRunMissed(timeStr, 'coupleFinanceAutoLast_' + charId, () => {
-      console.log(`⏰ [情侣空间] 定时时间已到！开始强制触发 记账 的自动生成`);
-      triggerAutoFinancePost(charId, true);
-    });
-  }, 60000);
-}
-
+// ========== Auto Finance ==========
 async function triggerAutoFinancePost(charId, isTimer = false) {
   const chat = state.chats[charId];
   if (!chat) return;
@@ -5989,10 +5767,6 @@ async function triggerAutoFinancePost(charId, isTimer = false) {
   }
 }
 
-// Initialize finance timers
-if (typeof setTimeout !== 'undefined') {
-  setTimeout(setupCoupleSpaceFinanceAutoTimer, 13000);
-}
 
 // 初始化情侣空间未读角标(DOM ready 后跑)
 if (typeof document !== 'undefined') {

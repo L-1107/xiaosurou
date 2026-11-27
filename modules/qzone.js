@@ -154,7 +154,7 @@
 
         const postImageUrl = state.globalSettings.enableAiDrawing && targetPost.image_prompt ? getPollinationsImageUrl(targetPost.image_prompt) : 'https://i.postimg.cc/KYr2qRCK/1.jpg';
         innerContentHtml = publicTextHtml ? `${publicTextHtml}<div style="margin-top:10px;"><img src="${postImageUrl}" class="chat-image" style="cursor: pointer;" data-hidden-text="${targetPost.hiddenContent}"></div>` : `<img src="${postImageUrl}" class="chat-image" style="cursor: pointer;" data-hidden-text="${targetPost.hiddenContent}">`;
-      } else if (targetPost.type === 'naiimag' || targetPost.type === 'googleimag') {
+      } else if (targetPost.type === 'naiimag' || targetPost.type === 'googleimag' || targetPost.type === 'openaiimag' || targetPost.type === 'ai_image') {
 
         const imageUrls = targetPost.imageUrls || (targetPost.imageUrl ? [targetPost.imageUrl] : []);
 
@@ -632,8 +632,12 @@
         } else if (post.type === 'text_image') {
           const postImageUrl = state.globalSettings.enableAiDrawing && post.image_prompt ? getPollinationsImageUrl(post.image_prompt) : 'https://i.postimg.cc/KYr2qRCK/1.jpg';
           contentHtml = publicTextHtml ? `${publicTextHtml}<div style="margin-top:10px;"><img src="${postImageUrl}" class="chat-image" style="cursor: pointer;" data-hidden-text="${post.hiddenContent}"></div>` : `<img src="${postImageUrl}" class="chat-image" style="cursor: pointer;" data-hidden-text="${post.hiddenContent}">`;
+        } else if (post.type === 'naiimag' || post.type === 'googleimag' || post.type === 'openaiimag' || post.type === 'ai_image') {
+          const favImageUrls = post.imageUrls || (post.imageUrl ? [post.imageUrl] : []);
+          if (favImageUrls.length > 0) {
+            contentHtml = publicTextHtml + `<div style="margin-top:10px;"><img src="${favImageUrls[0]}" class="chat-image"></div>`;
+          }
         }
-
 
 
 

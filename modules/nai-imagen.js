@@ -1352,7 +1352,7 @@
       for (const chat of allChats) {
         if (chat.history && chat.history.length > 0) {
           chat.history.forEach(msg => {
-            if ((msg.type === 'naiimag' || msg.type === 'googleimag') && msg.imageUrl) {
+            if ((msg.type === 'naiimag' || msg.type === 'googleimag' || msg.type === 'openaiimag' || msg.type === 'ai_image') && msg.imageUrl) {
               allNaiImages.push({ sourceType: 'chat', imageUrl: msg.imageUrl, prompt: msg.prompt || msg.fullPrompt || 'NAI Image', chatId: chat.id, msgTimestamp: msg.timestamp });
             }
           });
@@ -1362,7 +1362,7 @@
     try {
       const allPosts = await db.qzonePosts.toArray();
       allPosts.forEach(post => {
-        if (post.type === 'naiimag' || post.type === 'googleimag') {
+        if (post.type === 'naiimag' || post.type === 'googleimag' || post.type === 'openaiimag' || post.type === 'ai_image') {
           const urls = post.imageUrls || (post.imageUrl ? [post.imageUrl] : []);
           const prompts = Array.isArray(post.prompt) ? post.prompt : [post.prompt || 'NAI Image'];
           urls.forEach((url, index) => {

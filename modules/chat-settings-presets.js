@@ -21,6 +21,11 @@
       maxReplyCount: chat.settings.maxReplyCount || 5,
       injectThought: chat.settings.injectThought || false,
       enableBackgroundActivity: chat.settings.enableBackgroundActivity || false,
+      // 2026-11-27: 后台活动开关全部收敛到 bgActivity 结构, 模板要带上它,
+      //   否则「用模板覆盖设置」会把新面板的开关全打回旧值。
+      bgActivity: (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function')
+        ? JSON.parse(JSON.stringify(window.BgActivityConfig.getBgActivityConfig(chat)))
+        : null,
       allowAutoCartClear: chat.settings.allowAutoCartClear || false,
       viewMyPhoneInBackground: chat.settings.viewMyPhoneInBackground || null,
       viewMyPhoneChance: chat.settings.viewMyPhoneChance || null,
@@ -151,7 +156,7 @@
     }
     
     // 后台活动
-    if (settings.enableBackgroundActivity) {
+    if ((settings.bgActivity && settings.bgActivity.enabled) || settings.enableBackgroundActivity) {
       features.push('后台活动');
     }
     

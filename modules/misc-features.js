@@ -3042,7 +3042,8 @@
     const associationListEl = document.getElementById('npc-association-list');
 
     const groupSelectEl = document.getElementById('npc-group-select');
-    const activitySwitch = document.getElementById('npc-background-activity-switch');
+    const postSwitch = document.getElementById('npc-post-switch');
+    const commentSwitch = document.getElementById('npc-comment-switch');
     const cooldownInput = document.getElementById('npc-action-cooldown-input');
 
     associationListEl.innerHTML = '';
@@ -3068,7 +3069,10 @@
         nameInput.value = npc.name;
         personaInput.value = npc.persona;
         avatarPreview.src = npc.avatar || defaultGroupMemberAvatar;
-        activitySwitch.checked = npc.enableBackgroundActivity !== false;
+        // 2026-11-27: NPC 后台活动拆成【发动态】+【评论动态】两个独立开关。
+        //   老数据只有 enableBackgroundActivity → 两个都按它回退, 行为不变。
+        postSwitch.checked = npc.enablePost !== undefined ? npc.enablePost !== false : npc.enableBackgroundActivity !== false;
+        commentSwitch.checked = npc.enableComment !== undefined ? npc.enableComment !== false : npc.enableBackgroundActivity !== false;
         cooldownInput.value = npc.actionCooldownMinutes || 15;
         groupSelectEl.value = npc.npcGroupId || '';
 
@@ -3084,7 +3088,8 @@
       nameInput.value = '';
       personaInput.value = '';
       avatarPreview.src = defaultGroupMemberAvatar;
-      activitySwitch.checked = true;
+      postSwitch.checked = true;
+      commentSwitch.checked = true;
       cooldownInput.value = 15;
       groupSelectEl.value = '';
 
@@ -3104,7 +3109,11 @@
     }
 
     const selectedAssociations = Array.from(document.querySelectorAll('#npc-association-list input:checked')).map(cb => cb.value);
-    const enableBackgroundActivity = document.getElementById('npc-background-activity-switch').checked;
+    // 2026-11-27: 拆成【发动态】+【评论动态】两个独立开关。
+    //   enableBackgroundActivity 保留写入 = 两个开关的「与」, 老代码/老数据仍能读懂。
+    const npcPostEnabled = document.getElementById('npc-post-switch').checked;
+    const npcCommentEnabled = document.getElementById('npc-comment-switch').checked;
+    const enableBackgroundActivity = npcPostEnabled || npcCommentEnabled;
     const actionCooldownMinutes = parseInt(document.getElementById('npc-action-cooldown-input').value) || 15;
     const npcGroupId = parseInt(document.getElementById('npc-group-select').value) || null;
 
@@ -3114,6 +3123,8 @@
       avatar: document.getElementById('npc-avatar-preview').src,
       associatedWith: selectedAssociations,
       enableBackgroundActivity: enableBackgroundActivity,
+      enablePost: npcPostEnabled,
+      enableComment: npcCommentEnabled,
       actionCooldownMinutes: actionCooldownMinutes,
       npcGroupId: npcGroupId
     };

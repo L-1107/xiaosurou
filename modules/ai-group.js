@@ -49,41 +49,58 @@
     if (!chat) return;
 
 
-    const actionCooldownMinutes = chat.settings.actionCooldownMinutes || 10;
-
-    if (chat.lastActionTimestamp) {
-      const minutesSinceLastAction = (Date.now() - chat.lastActionTimestamp) / (1000 * 60);
-
-      if (minutesSinceLastAction < actionCooldownMinutes) {
-        console.log(`角色 "${chat.name}" 处于行动冷却中 (还剩 ${Math.round(actionCooldownMinutes - minutesSinceLastAction)} 分钟)，本次独立行动跳过。`);
-        return;
-      }
+    // 🔴 2026-11-27: 冷却改成【读面板那个值】并且【朋友圈 / 通用行动 各算各的】。
+    //   改前: 只有一个 chat.settings.actionCooldownMinutes(旧字段, 默认10), 面板里填的那个数字
+    //         写的是 bgActivity.cooldownMinutes, 没有任何人读 → 填了白填;
+    //         而且发动态 / 评论 / 点赞 跟 发消息 / 打电话 共用同一个时间戳 → 互相占机会。
+    //   改后: 同一个数值, 两套独立计时:
+    //         · chat.lastActionTimestamp       管 发消息/打电话/换头像/唱歌/购物/偷看
+    //         · chat.lastQzoneActionTimestamp  管 发动态/评论/点赞/删动态
+    //   情侣空间本来就不走这里 (它有自己「每功能每天一次 + 每次心跳掷概率」的模型)。
+    const bgCfgEarly = (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function')
+      ? window.BgActivityConfig.getBgActivityConfig(chat)
+      : null;
+    const actionCooldownMinutes = (bgCfgEarly && typeof bgCfgEarly.cooldownMinutes === 'number' && bgCfgEarly.cooldownMinutes > 0)
+      ? bgCfgEarly.cooldownMinutes
+      : (chat.settings.actionCooldownMinutes || 10);
+    const cooldownNow = Date.now();
+    const generalLast = chat.lastActionTimestamp || 0;
+    const qzoneLast = chat.lastQzoneActionTimestamp || 0;
+    const generalReady = (cooldownNow - generalLast) / 60000 >= actionCooldownMinutes;
+    const qzoneReady = (cooldownNow - qzoneLast) / 60000 >= actionCooldownMinutes;
+    if (!generalReady && !qzoneReady) {
+      console.log(`角色 "${chat.name}" 两个通道都在冷却中 (冷却 ${actionCooldownMinutes} 分钟)，本次独立行动跳过。`);
+      return;
     }
-    
-    // ===== 新增：后台查看用户手机逻辑 =====
-    // 1. 判断是否启用后台查看手机功能
-    const enableViewMyPhoneInBg = chat.settings.enableViewMyPhoneInBackground !== null
-      ? chat.settings.enableViewMyPhoneInBackground
-      : state.globalSettings.enableViewMyPhoneInBackground;
-    
-    // 2. 获取查看概率
-    let viewMyPhoneChance = null;
-    if (chat.settings.viewMyPhoneChance !== null && chat.settings.viewMyPhoneChance !== undefined) {
-      viewMyPhoneChance = chat.settings.viewMyPhoneChance;
-    } else {
-      viewMyPhoneChance = state.globalSettings.viewMyPhoneChance;
+
+    // ===== 后台查看用户手机逻辑 (2026-11-27 改: 三个旧开关合并成一个) =====
+    // 旧: enableViewMyPhoneInBackground 决定"是否强制触发", viewMyPhoneChance 决定概率
+    //     enableViewMyPhone           决定"prompt 里有没有 view_myphone 指令"
+    //     → 两个开关各管一半, 会出现"关了偷看但 AI 还能看" / "开了却拿不到指令"的错位。
+    // 新: bgActivity.acts.peek 决定"能不能看", bgActivity.peekChance 决定概率
+    //     (null = AI 自主决定; 0-100 = 按概率强制)
+    // 复用上面已经读到的配置; 再按「这一组是否已过冷却」过滤掉不该出现的活动项
+    const bgCfg = bgCfgEarly || { enabled: true, acts: {}, peekChance: null };
+    const bgActsRaw = bgCfg.acts || {};
+    const bgActs = Object.assign({}, bgActsRaw);
+    // 🔴 2026-11-27: 这两个集合用来把「朋友圈动作」和「通用动作」分开计时
+    const QZONE_ACT_KEYS = ['qzonePost', 'qzoneInteract', 'qzoneDelete'];
+    const QZONE_ACTION_TYPES = new Set(['qzone_post', 'repost', 'qzone_comment', 'qzone_like', 'qzone_delete_post']);
+    if (!qzoneReady) QZONE_ACT_KEYS.forEach(k => { bgActs[k] = false; });
+    if (!generalReady) {
+      ['msg', 'call', 'avatar', 'sing', 'buy', 'peek'].forEach(k => { bgActs[k] = false; });
     }
-    
-    // 3. 判断是否触发查看
+
     let shouldForceViewPhone = false;
     let viewMyPhonePromptHint = '';
-    
-    if (enableViewMyPhoneInBg) {
-      if (viewMyPhoneChance !== null && viewMyPhoneChance !== undefined) {
-        // 有设置概率，进行随机判断
+
+    if (bgActs.peek) {
+      const peekChance = bgCfg.peekChance;
+      if (peekChance !== null && peekChance !== undefined) {
+        // 设了概率 → 按概率强制触发
         const randomValue = Math.random() * 100;
-        shouldForceViewPhone = randomValue < viewMyPhoneChance;
-        
+        shouldForceViewPhone = randomValue < peekChance;
+
         if (shouldForceViewPhone) {
           const userNickname = chat.settings.myNickname || (state.qzoneSettings.nickname === '{{user}}' ? '用户' : state.qzoneSettings.nickname) || '用户';
           viewMyPhonePromptHint = `
@@ -94,10 +111,10 @@
 
 提示：使用 {"type": "view_myphone", "apps": ["qq", "album", ...]} 来查看手机。
 `;
-          console.log(`角色 "${chat.name}" 触发了后台查看用户手机 (概率: ${viewMyPhoneChance}%)`);
+          console.log(`角色 "${chat.name}" 触发了后台查看用户手机 (概率: ${peekChance}%)`);
         }
       }
-      // 如果概率为null，则不强制，让AI自主决定（原有行为）
+      // peekChance 为 null → 不强制, 让 AI 自主决定
     }
     // ===== 后台查看用户手机逻辑结束 =====
     
@@ -418,6 +435,9 @@ ${linkedContents}
           const prompts = Array.isArray(post.prompt) ? post.prompt : [post.prompt];
           contentSummary = (post.publicText || '') + ` [包含${prompts.length}张NovelAI图片: ${prompts.join(', ')}]`;
         } else if (post.type === 'googleimag' && post.prompt) {
+        } else if ((post.type === 'openaiimag' || post.type === 'ai_image') && post.prompt) {
+          const ocPrompts = Array.isArray(post.prompt) ? post.prompt : [post.prompt];
+          contentSummary = (post.publicText || '') + ` [包含${ocPrompts.length}张AI生成图片: ${ocPrompts.join(', ')}]`;
           contentSummary = (post.publicText || '') + ` [包含1张Google Imagen图片: ${post.prompt}]`;
         } else {
 
@@ -493,31 +513,71 @@ ${(() => {
 - 你和我有一张支付宝亲属卡，本月剩余额度：¥${remaining.toFixed(2)}。
 - **行为指南**: 如果你想买符合你人设的物品（零食、游戏、衣服等），或者单纯想消费，你可以使用 \`buy_item\` 指令。消费会直接扣除此卡额度，且用户会收到通知。不用太客气，这是你们亲密关系的体现。`;
     }
-    // 判断是否启用动态功能
-    const enableQzoneActions = chat.settings.enableQzoneActions !== null
-      ? chat.settings.enableQzoneActions
-      : state.globalSettings.enableQzoneActions;
-
-    // 判断是否启用查看User手机功能（后台活动中主动窥屏）
-    const enableViewMyPhoneBg = chat.settings.enableViewMyPhone !== null
-      ? chat.settings.enableViewMyPhone
-      : state.globalSettings.enableViewMyPhone;
-
-    // 构建查看User手机的prompt部分（后台活动版）
-    const viewMyPhonePromptForBg = enableViewMyPhoneBg ? `
--   **查看${userNickname}的手机**: \`{"type": "view_myphone", "apps": ["qq", "album", "taobao", "amap", "browser", "memo", "diary", "music", "app_usage"]}\`
-    - 你可以主动查看${userNickname}的手机APP，了解TA的生活动态。查看后，你可以根据看到的内容在下次对话中给出感想、询问或关心。
-    - apps可选: "qq"(QQ聊天), "album"(相册), "taobao"(淘宝订单), "amap"(高德地图), "browser"(浏览器历史), "memo"(备忘录), "diary"(日记), "music"(音乐), "app_usage"(APP使用记录), 或 "all"(全部)
-    - **使用建议**: 根据你的人设和当前情绪选择性查看。查看后的数据是${userNickname}手机的【真实数据】，你必须基于这些真实数据做出反应！
-    - **重要**: 查看手机后，你【应该】结合看到的内容给${userNickname}发消息（用text指令），表达你的感想或关心。
+    // ===== 2026-11-27: 后台活动指令按 chat.settings.bgActivity.acts 逐项拼装 =====
+    // 改前: 朋友圈那一坨 (发说说/转发/表情/文字图/评论×4/点赞) 捆在一个 enableQzoneActions 开关上,
+    //       而且 "发送表情" 和 "删除动态" 放错了地方 ——
+    //         · sticker 被塞在朋友圈开关【里面】→ 关掉动态功能, 角色连表情都发不出来
+    //         · qzone_delete_post 写在模板【外面】→ 就算关掉动态功能, AI 照样能删动态
+    // 改后: 一项活动一个开关, 谁开谁进 prompt。
+    const actMsgPrompt = bgActs.msg ? `
+-   **发消息+更新状态**: '[{"type": "update_status", "status_text": "正在做的事", "is_busy": true}, {"type": "text", "content": "你想对用户说的话..."}]'
+-   **发送表情**: '[{"type": "sticker", "meaning": "表情的含义(从可用表情列表选择)"}]'
 ` : '';
 
-    // 构建动态指令prompt部分（仅在启用时包含）
-    const qzoneActionsPromptForBg = enableQzoneActions ? `
+    const actCallPrompt = bgActs.call ? `
+-   **打视频**: '[{"type": "initiate_video_call"}]'
+-   **打语音**: '[{"type": "initiate_voice_call"}]'
+` : '';
+
+    const actAvatarPrompt = bgActs.avatar ? `
+-   **更换头像**: '{"type": "change_avatar", "name": "头像名"}' (头像名必须从下面的"可用头像列表"中选择)
+` : '';
+
+    // 🔴 2026-11-27 音乐渠道换成阶跃星辰后, 提示词跟着改: caption 决定曲风和人声,
+    //   必须写全 5 个维度(含男声/女声); 歌词优先自己写 —— 留空是交给阶跃服务端按曲风瞎编。
+    const actSingPrompt = bgActs.sing ? `
+-   **给用户唱首歌**: '[{"type": "sing_song", "title": "", "prompt": "", "lyrics": ""}]'
+    - prompt 直接决定成品听感，必须一次写全这 5 个维度，用逗号连成一句话：
+      ① 曲风/流派
+      ② 演唱人声【必须写清性别和音色】，与自己的性别、音色一致
+      ③ 律动速度
+      ④ 主要乐器与编曲
+      ⑤ 情绪与调式
+    - lyrics: 【优先你自己写完整歌词】，带上你的性格和你们之间的经历，别写通用情话；
+      结构标签各占一行（语法要求，原样使用）：[Intro] [Verse 1] [Chorus 1] [Bridge] [Outro]。不要偷懒留空。
+    - 仅在用户很久没收到你的主动互动、且氛围合适时用，不要滥用
+    - 一次行动只能唱一首，不要连续唱
+    - 唱完后可以不配 text 消息（sing_song 本身就会发一条系统提示）
+` : '';
+
+    const actBuyPrompt = bgActs.buy ? `
+-   **使用亲属卡购物**:  '[{"type": "buy_item", "item_name": "商品名称", "price": 价格(数字), "reason": "购买理由/想法"}]'
+` : '';
+
+    // 🔴 2026-11-27: 后台发动态也支持发真实图片 (跟随全局生图开关)
+    //   改前这里只有「说说 / 文字图 / 转发」, 压根没有图片选项 → 后台从来不发带图动态。
+    const bgQzoneImageLine = (() => {
+      if (!bgActs.qzonePost) return '';
+      const route = (typeof window.getCurrentEnabledImageProvider === 'function')
+        ? window.getCurrentEnabledImageProvider()
+        : null;
+      if (!route || route.status !== 'ok' || !route.provider) return '';
+      const example = '[' + JSON.stringify({
+        type: 'qzone_post',
+        postType: route.provider.type,
+        publicText: '(可选)动态的配文',
+        prompt: '详细的英文生图描述词...'
+      }) + ']';
+      return "-   **发布真实图片动态（" + route.provider.name + "）**: '" + example + "'";
+    })();
+    const actQzonePostPrompt = bgActs.qzonePost ? `
 -   **发说说 (原创内容)**: '[{"type": "qzone_post", "postType": "shuoshuo", "content": "动态的文字内容..."}]'
--   **【重要：转发动态】**: **严禁**自己拼接"//转发"文字！你【必须】使用此专用指令来转发：'[{"type": "repost", "postId": (要转发的动态ID), "comment": "你的转发评论..."}]'
--   **发送表情**: '[{"type": "sticker", "meaning": "表情的含义(从可用表情列表选择)"}]'
 -   **发布文字图**: '[{"type": "qzone_post", "postType": "text_image", "publicText": "(可选)动态的公开文字", "hiddenContent": "对于图片的具体【中文】描述...", "image_prompt": "图片的【英文】关键词, 用%20分隔, 风格为风景/动漫/插画/二次元等, 禁止真人"}]'
+${bgQzoneImageLine}
+-   **【重要：转发动态】**: **严禁**自己拼接"//转发"文字！你【必须】使用此专用指令来转发：'[{"type": "repost", "postId": (要转发的动态ID), "comment": "你的转发评论..."}]'
+` : '';
+
+    const actQzoneInteractPrompt = bgActs.qzoneInteract ? `
 -   **【评论动态的四种方式】**:
     -   **方式1 (单条文字)**: '[{"type": "qzone_comment", "name": "${chat.originalName}", "postId": 123, "commentText": "这太有趣了！"}]'
     -   **方式2 (多条文字)**: '[{"type": "qzone_comment", "name": "${chat.originalName}", "postId": 123, "comments": ["哇！", "这是什么？", "看起来好棒！"]}]'
@@ -525,6 +585,40 @@ ${(() => {
     -   **方式4 (回复评论)**: '[{"type": "qzone_comment", "name": "${chat.originalName}", "postId": 123, "replyTo": "被回复者的本名", "commentText": "你的回复内容。请注意：在commentText中如果要@对方，你【必须】使用@[[被回复者的本名]]这种特殊格式，程序会自动将其替换为正确的昵称。"}]'
     -   **【警告】name字段必须填你自己的本名"${chat.originalName}"，绝对禁止填写用户的名字！**
 -   **点赞**: '[{"type": "qzone_like", "postId": 456}]'
+` : '';
+
+    const actQzoneDeletePrompt = bgActs.qzoneDelete ? `
+-   **删除动态**: '{"type": "qzone_delete_post", "postId": (要删除的、你自己的动态ID)}'
+` : '';
+
+    // 构建查看User手机的prompt部分（后台活动版）
+    const viewMyPhonePromptForBg = bgActs.peek ? `
+-   **查看${userNickname}的手机**: \`{"type": "view_myphone", "apps": ["qq", "album", "taobao", "amap", "browser", "memo", "diary", "music", "app_usage"]}\`
+    - 你可以主动查看${userNickname}的手机APP，了解TA的生活动态。查看后，你可以根据看到的内容在下次对话中给出感想、询问或关心。
+    - apps可选: "qq"(QQ聊天), "album"(相册), "taobao"(淘宝订单), "amap"(高德地图), "browser"(浏览器历史), "memo"(备忘录), "diary"(日记), "music"(音乐), "app_usage"(APP使用记录), 或 "all"(全部)
+    - **使用建议**: 根据你的人设和当前情绪选择性查看。查看后的数据是${userNickname}手机的【真实数据】，你必须基于这些真实数据做出反应！
+    - **重要**: 查看手机后，你【应该】结合看到的内容给${userNickname}发消息（用text指令），表达你的感想或关心。
+` : '';
+
+    // 朋友圈相关的指导语 —— 一个朋友圈活动都没开就不该出现 (否则 AI 会被引导去做没权限的事)
+    const hasQzoneActs = !!(bgActs.qzonePost || bgActs.qzoneInteract || bgActs.qzoneDelete);
+
+    const qzoneSocialGuide = hasQzoneActs ? `
+        # 【社交义务指南 】
+        1.  **【社交互动】**: 当你发现"最近的动态列表"中有你感兴趣的帖子时，**可以考虑**去评论或点赞，这是一种很好的互动方式。
+        2.  **【自我表达 (同样重要！)】**: 如果你此刻有强烈的想法或情绪想要分享，或者觉得没有帖子值得回应，那么**你应该优先发布自己的新动态**。不要总是等待别人，要主动分享你的生活！当你决定要发布新动态时，你【必须】尝试使用不同的帖子类型来丰富你的主页！
+        3.  特别是当一条动态【没有任何评论】时，你的评论会是第一个，这会让作者感到开心。
+        4.  **【回复铁律 (终极版)】**:
+            -   当你决定回复动态中的某条评论时，你【必须】使用"方式4 (回复评论)"的指令格式。你【必须】正确填写 'replyTo' 字段为被回复者的"本名"。
+            -   **即使你之前已经评论过某条动态，但如果现在看到了【新的、你感兴趣的】评论，你【也应该】主动去回复他们，以保持对话的持续性！**
+` : '';
+
+    const qzoneStickerGuide = bgActs.qzoneInteract ? `
+        # 【表情评论指南 】
+        你现在拥有了评论表情的能力，你应该更频繁地使用它！这能让你的角色更加生动、富有个性。
+        -   **表达情绪时**: 当你感到开心、惊讶、疑惑或有趣时，优先考虑使用表情评论。
+        -   **混合使用**: 不要总是只发文字。尝试将你的评论行为混合起来，大约有 30-40% 的评论应该是表情。
+        -   **无话可说时**: 如果你觉得一条动态很有趣但又不知道该说什么文字，发送一个相关的表情是最好的互动方式。
 ` : '';
 
 
@@ -535,7 +629,7 @@ ${(() => {
 ${viewMyPhonePromptHint}
      
         # 【最高优先级指令：情感维系】
-        **你与用户的关系是最重要的！** 相比于在动态区闲逛，你应该【优先考虑】是否需要主动给用户发消息来维系你们的感情。
+        **你与用户的关系是最重要的！** ${hasQzoneActs ? '相比于在动态区闲逛，' : ''}你应该【优先考虑】是否需要主动给用户发消息来维系你们的感情。
 ${chat.settings.enableTimePerception ? `
 # 【情景感知】
 - **时间**: 感知到当前是${currentTime} (${timeOfDayGreeting})}。
@@ -547,44 +641,26 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
         
         # 核心规则
         1.  **【决策依据】**: 你的所有行动都【必须深度结合你的角色设定、核心世界观、以及你们最后的对话摘要】。
-        2.  **【内容多样性铁律】**: 你的行动【必须】具有逻辑和多样性。你【绝对不能】发布与下方"内容禁忌"列表或"最近的动态列表"中内容相似或主题重复的动态。
+        2.  **【内容多样性铁律】**: 你的行动【必须】具有逻辑和多样性。${bgActs.qzonePost ? '你【绝对不能】发布与下方"内容禁忌"列表或"最近的动态列表"中内容相似或主题重复的动态。' : ''}
         3.  **【行为多样性指南 (至关重要)】**:
             - 你的上一次独立行动是：**${chat.lastActionType || '无'}**。
-            - 为了让你的行为看起来更真实，你本次的行动【必须】选择一个与上次【不同类型】的指令。例如，如果上次是发动态(qzone_post)，这次就应该优先考虑评论(qzone_comment)、点赞(qzone_like)或发消息(text)。
+            - 为了让你的行为看起来更真实，你本次的行动【必须】选择一个与上次【不同类型】的指令。${bgActs.qzonePost ? '例如，如果上次是发动态(qzone_post)，这次就应该优先考虑评论(qzone_comment)、点赞(qzone_like)或发消息(text)。' : ''}
             - 如果上次是 sing_song（唱歌），这次【必须】换别的类型；唱歌是稀有事件，不要连续触发。
         4.  **【行为组合指南 (最高级技巧)】**:
             -   你可以在一次行动中执行【多个不同类型的指令】，同时可以搭配【更新状态】来展现自己，让你的行为更丰富、更主动。
-            -   你可以根据你的性格，决定在发动态后是否要私信提醒用户。例如，一个外向、渴望关注的角色可能会这么做，而一个内向、安静的角色则可能更喜欢默默分享，等待用户自己发现。
-        # 【社交义务指南 】
-        1.  **【社交互动】**: 当你发现"最近的动态列表"中有你感兴趣的帖子时，**可以考虑**去评论或点赞，这是一种很好的互动方式。
-        2.  **【自我表达 (同样重要！)】**: 如果你此刻有强烈的想法或情绪想要分享，或者觉得没有帖子值得回应，那么**你应该优先发布自己的新动态**。不要总是等待别人，要主动分享你的生活！当你决定要发布新动态时，你【必须】尝试使用不同的帖子类型来丰富你的主页！
-        3.  特别是当一条动态【没有任何评论】时，你的评论会是第一个，这会让作者感到开心。
-        4.  **【回复铁律 (终极版)】**:
-            -   当你决定回复动态中的某条评论时，你【必须】使用"方式4 (回复评论)"的指令格式。你【必须】正确填写 'replyTo' 字段为被回复者的"本名"。
-            -   **即使你之前已经评论过某条动态，但如果现在看到了【新的、你感兴趣的】评论，你【也应该】主动去回复他们，以保持对话的持续性！**
-        
+            -   你可以根据你的性格，决定在${bgActs.qzonePost ? '发动态' : '行动'}后是否要私信提醒用户。例如，一个外向、渴望关注的角色可能会这么做，而一个内向、安静的角色则可能更喜欢默默分享，等待用户自己发现。
+${qzoneSocialGuide}
         6.  你的回复【必须】是一个JSON数组，必须包含多个行动对象。
-        
-        # 【表情评论指南 】
-        你现在拥有了评论表情的能力，你应该更频繁地使用它！这能让你的角色更加生动、富有个性。
-        -   **表达情绪时**: 当你感到开心、惊讶、疑惑或有趣时，优先考虑使用表情评论。
-        -   **混合使用**: 不要总是只发文字。尝试将你的评论行为混合起来，大约有 30-40% 的评论应该是表情。
-        -   **无话可说时**: 如果你觉得一条动态很有趣但又不知道该说什么文字，发送一个相关的表情是最好的互动方式。
-        -   **删除动态**: 如果你觉得你之前发的某条动态不妥或过时了，你可以选择删除它。
-        
+${qzoneStickerGuide}
         # 你的可选行动指令
-        -   **发消息+更新状态**: '[{"type": "update_status", "status_text": "正在做的事", "is_busy": true}, {"type": "text", "content": "你想对用户说的话..."}]'
-        ${qzoneActionsPromptForBg}
-        -   **打视频**: '[{"type": "initiate_video_call"}]'
-        -   **打语音**: '[{"type": "initiate_voice_call"}]'
-        -   **更换头像**: '{"type": "change_avatar", "name": "头像名"}' (头像名必须从下面的"可用头像列表"中选择)
-        -   **删除动态**: '{"type": "qzone_delete_post", "postId": (要删除的、你自己的动态ID)}'
-        -   **更新状态**: '[{"type": "update_status", "status_text": "正在做的事", "is_busy": true}]'
-       - **使用亲属卡购物**:  '[{"type": "buy_item", "item_name": "商品名称", "price": 价格(数字), "reason": "购买理由/想法"}]'
-        -   **给用户唱首歌**: '{"type": "sing_song", "title": "歌名", "prompt": "风格描述", "lyrics": "[Verse]...\\n[Chorus]..."}'
-           - 仅在用户很久没收到你的主动互动、且氛围合适时用，不要滥用
-           - 一次行动只能唱一首，不要连续唱
-           - 唱完后可以不配 text 消息（sing_song 本身就会发一条系统提示）
+        ${actMsgPrompt}
+        ${actCallPrompt}
+        ${actAvatarPrompt}
+        ${actSingPrompt}
+        ${actBuyPrompt}
+        ${actQzonePostPrompt}
+        ${actQzoneInteractPrompt}
+        ${actQzoneDeletePrompt}
         ${viewMyPhonePromptForBg}
         ${contentTabooPrompt}
         ${myPostsContext}
@@ -703,7 +779,14 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
       }
       for (const action of processedActions) {
         chat.lastActionType = action.type;
-        chat.lastActionTimestamp = actionTimestamp;
+        // 🔴 2026-11-27: 按动作类型写到各自的计时器 —— 朋友圈和通用行动各算各的,
+        //   这样「刚发过消息」不会把「发动态」的机会一起吃掉, 反之亦然。
+        //   (情侣空间不在这里, 它有自己的每功能每日标记)
+        if (QZONE_ACTION_TYPES.has(action.type)) {
+          chat.lastQzoneActionTimestamp = actionTimestamp;
+        } else {
+          chat.lastActionTimestamp = actionTimestamp;
+        }
 
         let aiMessage = null;
         const baseMessage = {
@@ -801,6 +884,42 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
               authorGroupId: chat.groupId,
               visibleGroupIds: null
             };
+            // 🔴 2026-11-27: 后台发动态现在真的会生成图片 (跟随全局生图开关)
+            //   改前这里只存 postType 就完事, 一个图片生成分支都没有。
+            if (action.postType && action.postType !== 'shuoshuo' && action.postType !== 'text_image' && action.prompt) {
+              try {
+                let bgImgUrl = '';
+                if (action.postType === 'naiimag') {
+                  if (typeof generateNaiImageFromPrompt !== 'function') throw new Error('NovelAI生图函数未加载');
+                  const r = await generateNaiImageFromPrompt(action.prompt, chat.id);
+                  bgImgUrl = (r && r.base64) ? ('data:image/png;base64,' + r.base64) : '';
+                } else if (action.postType === 'googleimag') {
+                  if (typeof generateGoogleImagenFromPrompt !== 'function') throw new Error('Google Imagen生图函数未加载');
+                  const r = await generateGoogleImagenFromPrompt(action.prompt);
+                  bgImgUrl = (r && r.imageUrl) ? r.imageUrl : ((r && r.base64) ? ('data:image/png;base64,' + r.base64) : '');
+                } else if (action.postType === 'openaiimag') {
+                  if (typeof window.generateOpenAICompatibleImageFromPrompt !== 'function') throw new Error('OpenAI兼容生图函数未加载');
+                  const r = await window.generateOpenAICompatibleImageFromPrompt(action.prompt);
+                  bgImgUrl = (r && r.imageUrl) ? r.imageUrl : '';
+                } else if (action.postType === 'ai_image') {
+                  bgImgUrl = (typeof getPollinationsImageUrl === 'function')
+                    ? getPollinationsImageUrl(action.prompt)
+                    : ('https://image.pollinations.ai/prompt/' + encodeURIComponent(action.prompt));
+                } else {
+                  throw new Error('未知生图类型: ' + action.postType);
+                }
+                if (!bgImgUrl) throw new Error('生图返回空结果');
+                newPost.imageUrls = [bgImgUrl];
+                newPost.imageUrl = bgImgUrl;
+                newPost.prompt = action.prompt;
+                newPost.imageCount = 1;
+                console.log('✅ 后台动态图片生成完成 (' + action.postType + ')');
+              } catch (err) {
+                console.error('❌ 后台动态图片生成失败:', err);
+                newPost.content = (newPost.content || newPost.publicText || '') + '\n[图片生成失败: ' + err.message + ']';
+              }
+            }
+
             await db.qzonePosts.add(newPost);
             updateUnreadIndicator(unreadPostsCount + 1);
             console.log(`后台活动: 角色 "${chat.name}" 发布了动态`);
@@ -1059,6 +1178,7 @@ ${longTimeNoSee ? `【重要提示】你们已经很久没聊天了！你【必�
             try {
               const blob = await window.AIMusic.generateSong({
                 chatId: chatId,
+                title: songTitle,
                 prompt: songPrompt,
                 lyrics: songLyrics,
                 instrumental: instrumental,

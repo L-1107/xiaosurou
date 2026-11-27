@@ -3179,11 +3179,6 @@ function openDiarySettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'diary-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var autoTime = settings.autoTime || '21:00';
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visibleUserDiaryCount = settings.visibleUserDiaryCount || 3;
   var visibleCharDiaryCount = settings.visibleCharDiaryCount || 3;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -3192,36 +3187,10 @@ function openDiarySettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">日记设置</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">定时自动写日记</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动写一篇日记</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="diary-toggle-auto" onclick="toggleDiarySetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item" id="diary-time-row" style="' + (autoEnabled ? '' : 'opacity:0.4;pointer-events:none') + '">' +
-      '<div class="diary-setting-label">写日记时间</div>' +
-      '<input type="time" class="diary-time-select" id="diary-auto-time" value="' + autoTime + '" onchange="updateDiaryTimeSetting()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定是否写日记</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="diary-toggle-decide" onclick="toggleDiarySetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="diary-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateDiaryAiDecideProb()" id="diary-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateDiaryAiDecideProb()" id="diary-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -3288,52 +3257,6 @@ function closeDiarySettings() {
   var el = document.getElementById('diary-settings-overlay');
   if (el) el.remove();
 }
-function toggleDiarySetting(key) {
-  var settings = getDiarySettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    var toggle = document.getElementById('diary-toggle-auto');
-    toggle.classList.toggle('on', settings.autoEnabled);
-    var timeRow = document.getElementById('diary-time-row');
-    timeRow.style.opacity = settings.autoEnabled ? '' : '0.4';
-    timeRow.style.pointerEvents = settings.autoEnabled ? '' : 'none';
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    var toggle = document.getElementById('diary-toggle-decide');
-    toggle.classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('diary-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveDiarySettings(settings);
-  // Notify parent of settings change
-  window.parent.postMessage({
-    type: 'coupleSpaceDiarySettingsChanged',
-    charId: currentCharId,
-    settings: settings
-  }, '*');
-}
-function updateDiaryTimeSetting() {
-  var settings = getDiarySettings();
-  settings.autoTime = document.getElementById('diary-auto-time').value;
-  saveDiarySettings(settings);
-  window.parent.postMessage({
-    type: 'coupleSpaceDiarySettingsChanged',
-    charId: currentCharId,
-    settings: settings
-  }, '*');
-}
-function updateDiaryAiDecideProb() {
-  var settings = getDiarySettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('diary-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('diary-bg-prob').value) || 5;
-  saveDiarySettings(settings);
-  window.parent.postMessage({
-    type: 'coupleSpaceDiarySettingsChanged',
-    charId: currentCharId,
-    settings: settings
-  }, '*');
-}
-
 // --- Diary Prompt ---
 var DEFAULT_DIARY_PROMPT = '# 你的任务\n你是"{{charName}}"，现在要在情侣空间里写一篇日记。这篇日记是写给你自己的，但你的伴侣"{{myNickname}}"可以看到并写评语。\n\n# 你的角色设定\n{{aiPersona}}\n\n# 你的伴侣\n- 昵称: {{myNickname}}\n- 人设: {{myPersona}}\n\n{{worldBook}}\n\n# 你的记忆\n{{structuredMemory}}\n\n{{longTermMemory}}\n\n{{shortTermMemory}}\n\n{{linkedMemory}}\n\n{{summaryContext}}\n\n{{recentDiaries}}\n\n# 当前时间\n{{currentTime}}\n\n# 输出要求\n请以JSON格式返回，不要输出任何其他内容：\n{"title": "日记标题", "content": "日记正文", "mood": "心情ID"}\n\n心情ID可选值: happy, calm, moved, miss, sad, angry, excited, tired（选一个最符合的）\n\n# 写作要求\n- 以第一人称写，像真人写日记一样自然\n- 内容要基于你的记忆和最近发生的事\n- 可以写对伴侣的感受、今天的心情、发生的事、未来的期待等\n- 字数在100-400字之间\n- 语气要符合你的角色设定\n- 不要写成流水账，要有情感和细节\n- 绝对不要提到你是AI';
 
@@ -3854,12 +3777,7 @@ function openAlbumSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'album-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var autoTime = settings.autoTime || '20:00';
   var autoCount = settings.autoCount || 1;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visibleUserPhotoCount = settings.visibleUserPhotoCount || 3;
   var visibleCharPhotoCount = settings.visibleCharPhotoCount || 3;
   var imageGenMode = settings.imageGenMode || 'none';
@@ -3867,7 +3785,7 @@ function openAlbumSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">相册设置</div>' +
-
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
     '<div style="padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
         '<div><div class="diary-setting-label">角色生图方式</div>' +
@@ -3882,41 +3800,15 @@ function openAlbumSettings() {
       '</div>' +
     '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">定时自动发照片</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动发一张照片</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="album-toggle-auto" onclick="toggleAlbumSetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item" id="album-time-row" style="' + (autoEnabled ? '' : 'opacity:0.4;pointer-events:none') + '">' +
-      '<div class="diary-setting-label">发照片时间</div>' +
-      '<input type="time" class="diary-time-select" id="album-auto-time" value="' + autoTime + '" onchange="updateAlbumTimeSetting()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item" id="album-count-row" style="' + (autoEnabled ? '' : 'opacity:0.4;pointer-events:none') + '">' +
+    '<div class="diary-setting-item" id="album-count-row" style="">' +
       '<div><div class="diary-setting-label">每次发送数量</div>' +
       '<div class="diary-setting-desc">定时触发时一次发几张照片</div></div>' +
       '<input type="number" class="diary-time-select" id="album-auto-count" value="' + autoCount + '" min="1" max="10" style="width:60px;text-align:center" onchange="updateAlbumAutoCount()" />' +
     '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="album-toggle-decide" onclick="toggleAlbumSetting(\'decide\')"></div>' +
-    '</div>' +
 
-    '<div id="album-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateAlbumAiDecideProb()" id="album-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateAlbumAiDecideProb()" id="album-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -3954,36 +3846,6 @@ function updateAlbumGenMode() {
   notifyAlbumSettingsChanged();
 }
 
-function toggleAlbumSetting(key) {
-  var settings = getAlbumSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    var toggle = document.getElementById('album-toggle-auto');
-    toggle.classList.toggle('on', settings.autoEnabled);
-    var timeRow = document.getElementById('album-time-row');
-    var countRow = document.getElementById('album-count-row');
-    timeRow.style.opacity = settings.autoEnabled ? '' : '0.4';
-    timeRow.style.pointerEvents = settings.autoEnabled ? '' : 'none';
-    countRow.style.opacity = settings.autoEnabled ? '' : '0.4';
-    countRow.style.pointerEvents = settings.autoEnabled ? '' : 'none';
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    var toggle = document.getElementById('album-toggle-decide');
-    toggle.classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('album-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveAlbumSettings(settings);
-  notifyAlbumSettingsChanged();
-}
-
-function updateAlbumTimeSetting() {
-  var settings = getAlbumSettings();
-  settings.autoTime = document.getElementById('album-auto-time').value;
-  saveAlbumSettings(settings);
-  notifyAlbumSettingsChanged();
-}
-
 function updateAlbumAutoCount() {
   var settings = getAlbumSettings();
   var val = parseInt(document.getElementById('album-auto-count').value) || 1;
@@ -3991,14 +3853,6 @@ function updateAlbumAutoCount() {
   if (val > 10) val = 10;
   document.getElementById('album-auto-count').value = val;
   settings.autoCount = val;
-  saveAlbumSettings(settings);
-  notifyAlbumSettingsChanged();
-}
-
-function updateAlbumAiDecideProb() {
-  var settings = getAlbumSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('album-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('album-bg-prob').value) || 5;
   saveAlbumSettings(settings);
   notifyAlbumSettingsChanged();
 }
@@ -5441,46 +5295,16 @@ function openClSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'cl-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharItems = settings.visibleCharItems ?? 10;
   var visUserItems = settings.visibleUserItems ?? 10;
 
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">清单设置</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动推荐</div>' +
-      '<div class="diary-setting-desc">角色会定期推荐想一起做的事</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="cl-toggle-auto" onclick="toggleClSetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动推荐时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="cl-auto-time" value="' + (settings.autoTime || '20:00') + '" onchange="updateClAutoTime()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="cl-toggle-decide" onclick="toggleClSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="cl-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateClAiDecideProb()" id="cl-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateClAiDecideProb()" id="cl-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div class="diary-setting-item">' +
       '<div><div class="diary-setting-label">AI可见角色清单数</div>' +
@@ -5506,40 +5330,10 @@ function closeClSettings() {
   if (el) el.remove();
 }
 
-function toggleClSetting(key) {
-  var settings = getClSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('cl-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('cl-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('cl-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveClSettings(settings);
-  notifyClSettingsChanged();
-}
-
-function updateClAutoTime() {
-  var settings = getClSettings();
-  settings.autoTime = document.getElementById('cl-auto-time').value;
-  saveClSettings(settings);
-  notifyClSettingsChanged();
-}
-
 function updateClVisibility() {
   var settings = getClSettings();
   settings.visibleCharItems = parseInt(document.getElementById('cl-vis-char').value) || 10;
   settings.visibleUserItems = parseInt(document.getElementById('cl-vis-user').value) || 10;
-  saveClSettings(settings);
-  notifyClSettingsChanged();
-}
-
-function updateClAiDecideProb() {
-  var settings = getClSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('cl-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('cl-bg-prob').value) || 5;
   saveClSettings(settings);
   notifyClSettingsChanged();
 }
@@ -6206,10 +6000,6 @@ function openMsgSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'msg-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharMsgs = settings.visibleCharMessages ?? 10;
   var visUserMsgs = settings.visibleUserMessages ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -6218,36 +6008,10 @@ function openMsgSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">留言设置</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动留言</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动留言</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="msg-toggle-auto" onclick="toggleMsgSetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动留言时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="msg-auto-time" value="' + (settings.autoTime || '20:00') + '" onchange="updateMsgAutoTime()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="msg-toggle-decide" onclick="toggleMsgSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="msg-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateMsgAiDecideProb()" id="msg-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateMsgAiDecideProb()" id="msg-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -6288,36 +6052,6 @@ function openMsgSettings() {
 function closeMsgSettings() {
   var el = document.getElementById('msg-settings-overlay');
   if (el) el.remove();
-}
-
-function toggleMsgSetting(key) {
-  var settings = getMsgSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('msg-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('msg-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('msg-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveMsgSettings(settings);
-  notifyMsgSettingsChanged();
-}
-
-function updateMsgAutoTime() {
-  var settings = getMsgSettings();
-  settings.autoTime = document.getElementById('msg-auto-time').value;
-  saveMsgSettings(settings);
-  notifyMsgSettingsChanged();
-}
-
-function updateMsgAiDecideProb() {
-  var settings = getMsgSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('msg-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('msg-bg-prob').value) || 5;
-  saveMsgSettings(settings);
-  notifyMsgSettingsChanged();
 }
 
 function updateMsgVisibility() {
@@ -6813,10 +6547,6 @@ function openTlSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'tl-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharItems = settings.visibleCharItems ?? 10;
   var visUserItems = settings.visibleUserItems ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -6825,36 +6555,10 @@ function openTlSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">时光轴设置</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动记录</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动记录时光</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="tl-toggle-auto" onclick="toggleTlSetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动记录时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="tl-auto-time" value="' + (settings.autoTime || '21:00') + '" onchange="updateTlAutoTime()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="tl-toggle-decide" onclick="toggleTlSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="tl-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateTlAiDecideProb()" id="tl-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateTlAiDecideProb()" id="tl-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -6895,36 +6599,6 @@ function openTlSettings() {
 function closeTlSettings() {
   var el = document.getElementById('tl-settings-overlay');
   if (el) el.remove();
-}
-
-function toggleTlSetting(key) {
-  var settings = getTlSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('tl-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('tl-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('tl-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveTlSettings(settings);
-  notifyTlSettingsChanged();
-}
-
-function updateTlAutoTime() {
-  var settings = getTlSettings();
-  settings.autoTime = document.getElementById('tl-auto-time').value;
-  saveTlSettings(settings);
-  notifyTlSettingsChanged();
-}
-
-function updateTlAiDecideProb() {
-  var settings = getTlSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('tl-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('tl-bg-prob').value) || 5;
-  saveTlSettings(settings);
-  notifyTlSettingsChanged();
 }
 
 function updateTlVisibility() {
@@ -7501,10 +7175,6 @@ function openMoodSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'mood-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharMoods = settings.visibleCharMoods ?? 10;
   var visUserMoods = settings.visibleUserMoods ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -7513,33 +7183,7 @@ function openMoodSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">心情设置</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动记录心情</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动记录心情</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="mood-toggle-auto" onclick="toggleMoodSetting(\'auto\')"></div>' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动记录时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="mood-auto-time" value="' + (settings.autoTime || '21:00') + '" onchange="updateMoodAutoTime()" />' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="mood-toggle-decide" onclick="toggleMoodSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="mood-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateMoodAiDecideProb()" id="mood-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateMoodAiDecideProb()" id="mood-bg-prob" />' +
-      '</div>' +
-    '</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -7578,33 +7222,6 @@ function openMoodSettings() {
 function closeMoodSettings() {
   var el = document.getElementById('mood-settings-overlay');
   if (el) el.remove();
-}
-function toggleMoodSetting(key) {
-  var settings = getMoodSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('mood-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('mood-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('mood-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveMoodSettings(settings);
-  notifyMoodSettingsChanged();
-}
-function updateMoodAutoTime() {
-  var settings = getMoodSettings();
-  settings.autoTime = document.getElementById('mood-auto-time').value;
-  saveMoodSettings(settings);
-  notifyMoodSettingsChanged();
-}
-function updateMoodAiDecideProb() {
-  var settings = getMoodSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('mood-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('mood-bg-prob').value) || 5;
-  saveMoodSettings(settings);
-  notifyMoodSettingsChanged();
 }
 function updateMoodVisibility() {
   var settings = getMoodSettings();
@@ -8078,10 +7695,6 @@ function openLetterSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'letter-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharLetters = settings.visibleCharLetters ?? 5;
   var visUserLetters = settings.visibleUserLetters ?? 5;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -8090,36 +7703,10 @@ function openLetterSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">信件设置</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动写信</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动写信</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="letter-toggle-auto" onclick="toggleLetterSetting(\'auto\')"></div>' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动写信时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="letter-auto-time" value="' + (settings.autoTime || '21:00') + '" onchange="updateLetterAutoTime()" />' +
-    '</div>' +
 
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="letter-toggle-decide" onclick="toggleLetterSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="letter-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateLetterAiDecideProb()" id="letter-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateLetterAiDecideProb()" id="letter-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -8160,36 +7747,6 @@ function openLetterSettings() {
 function closeLetterSettings() {
   var el = document.getElementById('letter-settings-overlay');
   if (el) el.remove();
-}
-
-function toggleLetterSetting(key) {
-  var settings = getLetterSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('letter-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('letter-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('letter-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveLetterSettings(settings);
-  notifyLetterSettingsChanged();
-}
-
-function updateLetterAutoTime() {
-  var settings = getLetterSettings();
-  settings.autoTime = document.getElementById('letter-auto-time').value;
-  saveLetterSettings(settings);
-  notifyLetterSettingsChanged();
-}
-
-function updateLetterAiDecideProb() {
-  var settings = getLetterSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('letter-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('letter-bg-prob').value) || 5;
-  saveLetterSettings(settings);
-  notifyLetterSettingsChanged();
 }
 
 function updateLetterVisibility() {
@@ -8745,7 +8302,7 @@ function openGardenWrite() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up" style="max-height:70vh">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">浇水</div>' +
-    (special ? '<div style="text-align:center;margin-bottom:12px"><span class="garden-water-special" style="font-size:12px;padding:4px 12px">' + escHtml(special.name) + '</span></div>' : '') +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
     '<div style="text-align:center;margin-bottom:12px;font-size:13px;color:#d97706">' + SVG_COIN + ' 浇水奖励: ' + rewardText + '</div>' +
     '<textarea class="cl-write-note-input" id="garden-write-input" placeholder="写点什么挂在树上..." style="min-height:100px" oninput="updateGardenWriteBtn()"></textarea>' +
     '<button class="album-upload-btn disabled" id="garden-write-btn" onclick="submitGardenWrite()">浇水</button>' +
@@ -9011,10 +8568,6 @@ function openGardenSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'garden-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharWaters = settings.visibleCharWaters ?? 10;
   var visUserWaters = settings.visibleUserWaters ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -9023,33 +8576,7 @@ function openGardenSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">情侣树设置</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动浇水</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动浇水</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="garden-toggle-auto" onclick="toggleGardenSetting(\'auto\')"></div>' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动浇水时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="garden-auto-time" value="' + (settings.autoTime || '20:00') + '" onchange="updateGardenAutoTime()" />' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="garden-toggle-decide" onclick="toggleGardenSetting(\'decide\')"></div>' +
-    '</div>' +
 
-    '<div id="garden-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateGardenAiDecideProb()" id="garden-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateGardenAiDecideProb()" id="garden-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -9095,33 +8622,6 @@ function openGardenSettings() {
 function closeGardenSettings() {
   var el = document.getElementById('garden-settings-overlay');
   if (el) el.remove();
-}
-function toggleGardenSetting(key) {
-  var settings = getGardenSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('garden-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('garden-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('garden-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveGardenSettings(settings);
-  notifyGardenSettingsChanged();
-}
-function updateGardenAutoTime() {
-  var settings = getGardenSettings();
-  settings.autoTime = document.getElementById('garden-auto-time').value;
-  saveGardenSettings(settings);
-  notifyGardenSettingsChanged();
-}
-function updateGardenAiDecideProb() {
-  var settings = getGardenSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('garden-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('garden-bg-prob').value) || 5;
-  saveGardenSettings(settings);
-  notifyGardenSettingsChanged();
 }
 function updateGardenVisibility() {
   var settings = getGardenSettings();
@@ -10069,10 +9569,6 @@ function openLocSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'loc-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visChar = settings.visibleCharLocations ?? 10;
   var visUser = settings.visibleUserLocations ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -10081,33 +9577,7 @@ function openLocSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">\u5B9A\u4F4D\u8BBE\u7F6E</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">\u89D2\u8272\u81EA\u52A8\u5206\u4EAB\u5730\u70B9</div>' +
-      '<div class="diary-setting-desc">\u89D2\u8272\u4F1A\u5728\u8BBE\u5B9A\u65F6\u95F4\u81EA\u52A8\u5206\u4EAB\u5730\u70B9</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="loc-toggle-auto" onclick="toggleLocSetting(\'auto\')"></div>' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">\u81EA\u52A8\u5206\u4EAB\u65F6\u95F4</div></div>' +
-      '<input type="time" class="diary-time-select" id="loc-auto-time" value="' + (settings.autoTime || '20:00') + '" onchange="updateLocAutoTime()" />' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI \u81EA\u4E3B\u51B3\u5B9A</div>' +
-      '<div class="diary-setting-desc">\u804A\u5929\u6216\u540E\u53F0\u6D3B\u52A8\u65F6\u968F\u673A\u89E6\u53D1\uFF0CAI \u81EA\u5DF1\u51B3\u5B9A</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="loc-toggle-decide" onclick="toggleLocSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="loc-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">\u804A\u5929\u89E6\u53D1\u6982\u7387 (%)</div>' +
-        '<div class="diary-setting-desc">\u6BCF\u6B21\u804A\u5929\u6D88\u606F\u540E\u89E6\u53D1\u7684\u6982\u7387</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateLocAiDecideProb()" id="loc-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">\u540E\u53F0\u89E6\u53D1\u6982\u7387 (%)</div>' +
-        '<div class="diary-setting-desc">\u540E\u53F0\u6D3B\u52A8\u6BCF\u6B21\u5FC3\u8DF3\u89E6\u53D1\u7684\u6982\u7387</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateLocAiDecideProb()" id="loc-bg-prob" />' +
-      '</div>' +
-    '</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -10146,28 +9616,6 @@ function openLocSettings() {
 function closeLocSettings() {
   var el = document.getElementById('loc-settings-overlay');
   if (el) el.remove();
-}
-function toggleLocSetting(key) {
-  var s = getLocSettings();
-  if (key === 'auto') { s.autoEnabled = !s.autoEnabled; document.getElementById('loc-toggle-auto').classList.toggle('on'); }
-  if (key === 'decide') {
-    s.aiDecide = !s.aiDecide;
-    document.getElementById('loc-toggle-decide').classList.toggle('on');
-    var probsDiv = document.getElementById('loc-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = s.aiDecide ? '' : 'none';
-  }
-  saveLocSettings(s);
-}
-function updateLocAutoTime() {
-  var s = getLocSettings();
-  s.autoTime = document.getElementById('loc-auto-time').value;
-  saveLocSettings(s);
-}
-function updateLocAiDecideProb() {
-  var settings = getLocSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('loc-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('loc-bg-prob').value) || 5;
-  saveLocSettings(settings);
 }
 function updateLocVisibility() {
   var s = getLocSettings();
@@ -11276,10 +10724,6 @@ function openSleepSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'sleep-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visChar = settings.visibleCharSleeps ?? 10;
   var visUser = settings.visibleUserSleeps ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -11288,12 +10732,7 @@ function openSleepSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">睡眠设置</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动记录睡眠</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动入睡和起床</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="sleep-toggle-auto" onclick="toggleSleepSetting(\'auto\')"></div>' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
       '<div><div class="diary-setting-label">自动入睡时间</div></div>' +
       '<input type="time" class="diary-time-select" id="sleep-auto-sleep-time" value="' + (settings.autoSleepTime || '23:00') + '" onchange="updateSleepAutoTime(\'sleep\')" />' +
     '</div>' +
@@ -11301,24 +10740,7 @@ function openSleepSettings() {
       '<div><div class="diary-setting-label">自动起床时间</div></div>' +
       '<input type="time" class="diary-time-select" id="sleep-auto-wake-time" value="' + (settings.autoWakeTime || '07:00') + '" onchange="updateSleepAutoTime(\'wake\')" />' +
     '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="sleep-toggle-decide" onclick="toggleSleepSetting(\'decide\')"></div>' +
-    '</div>' +
 
-    '<div id="sleep-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateSleepAiDecideProb()" id="sleep-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateSleepAiDecideProb()" id="sleep-bg-prob" />' +
-      '</div>' +
-    '</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -11359,33 +10781,10 @@ function closeSleepSettings() {
   if (el) el.remove();
 }
 
-function toggleSleepSetting(key) {
-  var settings = getSleepSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('sleep-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('sleep-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('sleep-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveSleepSettings(settings);
-  notifySleepSettingsChanged();
-}
-
 function updateSleepAutoTime(which) {
   var settings = getSleepSettings();
   if (which === 'sleep') settings.autoSleepTime = document.getElementById('sleep-auto-sleep-time').value;
   else settings.autoWakeTime = document.getElementById('sleep-auto-wake-time').value;
-  saveSleepSettings(settings);
-  notifySleepSettingsChanged();
-}
-
-function updateSleepAiDecideProb() {
-  var settings = getSleepSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('sleep-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('sleep-bg-prob').value) || 5;
   saveSleepSettings(settings);
   notifySleepSettingsChanged();
 }
@@ -12006,10 +11405,6 @@ function openFinSettings() {
   overlay.className = 'diary-settings-overlay animate-fade-in';
   overlay.id = 'fin-settings-overlay';
 
-  var autoEnabled = settings.autoEnabled || false;
-  var aiDecide = settings.aiDecide || false;
-  var aiDecideChatProb = settings.aiDecideChatProb ?? 15;
-  var aiDecideBgProb = settings.aiDecideBgProb ?? 5;
   var visCharItems = settings.visibleCharItems ?? 10;
   var visUserItems = settings.visibleUserItems ?? 10;
   var enableCustomPrompt = settings.enableCustomPrompt || false;
@@ -12018,33 +11413,7 @@ function openFinSettings() {
   overlay.innerHTML = '<div class="diary-settings-sheet animate-slide-up">' +
     '<div class="diary-settings-handle"></div>' +
     '<div class="diary-settings-title">记账设置</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">角色自动记账</div>' +
-      '<div class="diary-setting-desc">角色会在设定时间自动记一笔账</div></div>' +
-      '<div class="diary-toggle' + (autoEnabled ? ' on' : '') + '" id="fin-toggle-auto" onclick="toggleFinSetting(\'auto\')"></div>' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">自动记账时间</div></div>' +
-      '<input type="time" class="diary-time-select" id="fin-auto-time" value="' + (settings.autoTime || '22:00') + '" onchange="updateFinAutoTime()" />' +
-    '</div>' +
-    '<div class="diary-setting-item">' +
-      '<div><div class="diary-setting-label">AI 自主决定</div>' +
-      '<div class="diary-setting-desc">聊天或后台活动时随机触发，AI 自己决定</div></div>' +
-      '<div class="diary-toggle' + (aiDecide ? ' on' : '') + '" id="fin-toggle-decide" onclick="toggleFinSetting(\'decide\')"></div>' +
-    '</div>' +
-
-    '<div id="fin-ai-decide-probs" style="' + (aiDecide ? '' : 'display:none') + '">' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">聊天触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">每次聊天消息后触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideChatProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateFinAiDecideProb()" id="fin-chat-prob" />' +
-      '</div>' +
-      '<div class="diary-setting-item">' +
-        '<div><div class="diary-setting-label">后台触发概率 (%)</div>' +
-        '<div class="diary-setting-desc">后台活动每次心跳触发的概率</div></div>' +
-        '<input type="number" value="' + aiDecideBgProb + '" class="diary-time-select" style="width:70px;text-align:center" onchange="updateFinAiDecideProb()" id="fin-bg-prob" />' +
-      '</div>' +
-    '</div>' +
+    '<div style="font-size:11px;color:#a8a29e;line-height:1.5;margin-bottom:10px;padding:8px 10px;background:#faf9f7;border-radius:6px;">💡 后台自动生成（定时 / AI 自主决定）请到【角色聊天设置 → AI 后台活动 → 情侣空间】统一设置</div>' +
 
     '<div style="padding-top:16px;margin-top:8px;border-top:1px solid #f0efed">' +
       '<div class="diary-setting-item">' +
@@ -12082,33 +11451,6 @@ function openFinSettings() {
 function closeFinSettings() {
   var el = document.getElementById('fin-settings-overlay');
   if (el) el.remove();
-}
-function toggleFinSetting(key) {
-  var settings = getFinSettings();
-  if (key === 'auto') {
-    settings.autoEnabled = !settings.autoEnabled;
-    document.getElementById('fin-toggle-auto').classList.toggle('on', settings.autoEnabled);
-  } else if (key === 'decide') {
-    settings.aiDecide = !settings.aiDecide;
-    document.getElementById('fin-toggle-decide').classList.toggle('on', settings.aiDecide);
-    var probsDiv = document.getElementById('fin-ai-decide-probs');
-    if (probsDiv) probsDiv.style.display = settings.aiDecide ? '' : 'none';
-  }
-  saveFinSettings(settings);
-  notifyFinSettingsChanged();
-}
-function updateFinAutoTime() {
-  var settings = getFinSettings();
-  settings.autoTime = document.getElementById('fin-auto-time').value;
-  saveFinSettings(settings);
-  notifyFinSettingsChanged();
-}
-function updateFinAiDecideProb() {
-  var settings = getFinSettings();
-  settings.aiDecideChatProb = parseInt(document.getElementById('fin-chat-prob').value) || 15;
-  settings.aiDecideBgProb = parseInt(document.getElementById('fin-bg-prob').value) || 5;
-  saveFinSettings(settings);
-  notifyFinSettingsChanged();
 }
 function updateFinVisibility() {
   var settings = getFinSettings();

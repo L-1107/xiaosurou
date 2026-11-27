@@ -385,8 +385,7 @@ ${interjectionList}
     '.back-button',
     '[data-action="back"]',
     '[data-screen="settings-screen"]',
-    '[data-screen="wallpaper-screen"]',
-    '[data-screen="ai-reminders-screen"]'
+    '[data-screen="wallpaper-screen"]'
   ];
 
   function setElementsDisabled(selectors, disabled) {
@@ -653,6 +652,9 @@ ${interjectionList}
   window.updateStopGenerationButtonVisibility = updateStopGenerationButtonVisibility;
   window.getCurrentAiGenerationController = () => currentAiGenerationController;
   window.restoreAiInputControls = restoreAiInputControls;
+
+  // 🔴 2026-11-27: 生图路由给 ai-group.js 的后台发动态复用
+  window.getCurrentEnabledImageProvider = getCurrentEnabledImageProvider;
 
 // ai-response.js
 // AI 响应模块：toGeminiRequestData、uploadImageToImgBB、uploadFileToCatbox、
@@ -1379,38 +1381,6 @@ ${interjectionList}
     });
   }
 
-  // ============================================================
-  // Hook: AI 主动消息 (function calling 风格)
-  // 解析 LLM 输出后, 检测 type='create_push_task' 指令 → 调 ProactiveWake.createTask()
-  // 替换为 visible text 提示气泡 (user 看到 AI "悄悄设了提醒")
-  // 调用方在 parseAiResponse 之后调这个函数
-  // ============================================================
-  function hookProactiveWakeInMessages(messagesArray, chat) {
-    if (!Array.isArray(messagesArray)) return messagesArray;
-    for (const msg of messagesArray) {
-      if (msg && msg.type === 'create_push_task') {
-        // 异步触发 ProactiveWake.createTask (fire-and-forget, 不阻塞)
-        if (window.ProactiveWake && typeof window.ProactiveWake.tryHandleAction === 'function') {
-          try {
-            window.ProactiveWake.tryHandleAction(msg, chat).catch(e => {
-              console.warn('[hookProactiveWake] create_push_task 触发失败:', e.message);
-            });
-          } catch (e) {
-            console.warn('[hookProactiveWake] 同步错误:', e.message);
-          }
-        } else {
-          console.warn('[hookProactiveWake] ProactiveWake 模块未加载');
-        }
-        // 永远静默: create_push_task 是 AI 主动消息的幕后触发, 物理上不让 user 在 chat 里看到任何气泡
-        // 原因: 活人感来自"AI 突然想起你", 看到"🌸已悄悄设提醒"就直接破坏体验
-        // 双保险: 不管 AI 传 visible_hint=true 还是 false, 这里都强制 _pwRemove
-        msg._pwRemove = true;
-      }
-    }
-    // 过滤掉 _pwRemove 的
-    return messagesArray.filter(m => !m._pwRemove);
-  }
-
   function parseAiResponse(content) {
     if (!content) return [{
       type: 'text',
@@ -2096,7 +2066,7 @@ ${linkedContents}
       const data = await response.json();
       const aiResponseContent = getGeminiResponseText(data);
       lastRawAiResponse = aiResponseContent;
-      const messagesArray = hookProactiveWakeInMessages(parseAiResponse(aiResponseContent), chat);
+      const messagesArray = parseAiResponse(aiResponseContent);
 
 
 
@@ -2395,7 +2365,7 @@ ${linkedContents}
 
           const data = await response.json();
           const aiResponseContent = getGeminiResponseText(data);
-          const responseArray = hookProactiveWakeInMessages(parseAiResponse(aiResponseContent), chat);
+          const responseArray = parseAiResponse(aiResponseContent);
 
 
           let callHasBeenHandled = false;
@@ -2999,29 +2969,47 @@ ${linkedContents}
       // 【2026-07-04 新增】AI 音乐工具说明 ——
       // 移到 musicContext if 块外，让 AI 在 session 没启动时也知道有 add_song_to_playlist 工具
       // （add_song_to_playlist 内部会自动启动一起听 session）
+      // 🔴 2026-11-27 音乐渠道换成阶跃星辰后, 提示词跟着改:
+      //   · 阶跃是按 caption 决定曲风 + 演唱人声的 → 必须逼模型写全 5 个维度(含男声/女声)
+      //   · 歌词改成"优先自己写" —— 留空是交给阶跃服务端按曲风瞎编, 它根本不认识这个角色
+      //   · 音乐生成开关关着时, 干脆别把这个工具告诉模型(否则它调用了只会失败)
+      const musicGenEnabled = !!(window.state && window.state.globalSettings && window.state.globalSettings.enableMusicGeneration);
+      const requestSongBlock = musicGenEnabled ? `3. **request_song** - 主动给用户唱一首歌（真实生成音频、按音频时长收费，别滥用）
+           { "type": "request_song", "title": "", "prompt": "", "lyrics": "", "instrumental": false }
+           - title: 你给这首歌起的名字（必填，会显示在聊天流）
+           - prompt: 【曲风描述，必填】它直接决定成品听感，必须一次写全这 5 个维度，用逗号连成一句话：
+               ① 曲风/流派
+               ② 演唱人声【必须写清性别和音色】，要和你自己的性别、音色设定一致
+               ③ 律动速度
+               ④ 主要乐器与编曲
+               ⑤ 情绪与调式
+           - lyrics: 【优先你自己写完整歌词】，要写出你自己的性格、口吻和你们之间的经历，不要写成通用情话。
+               结构标签各占一行（语法要求，原样使用）：[Intro] [Verse 1] [Pre-Chorus] [Chorus 1] [Bridge] [Instrumental] [Outro]
+               只有 instrumental=true（纯音乐）时才不写歌词。
+               ⚠️ 不要偷懒留空 —— 留空等于交给"不认识你的陌生写词人"按曲风瞎编，唱出来跟你没关系。
+           - instrumental: 是否纯音乐（default false）。为 true 时不写 lyrics
+           适用场景：用户说"给我唱首歌" / "唱一首关于X的歌" / 你觉得氛围合适主动唱一首
+        注意：request_song 只在单聊可用，调用会自动播放 + 推一条 "AI 为你唱了《XX》" 的消息到聊天流。
+        ` : '';
+
       const musicToolsContext = `
         # 你的音乐能力
-        你有两个音乐工具：
+        你可以用下面这些音乐工具（按需选用，不要一次全上）：
         1. **change_music** - 切到 playlist 里已有的歌
-           { "type": "music_action", "action": "change_music", "song_name": "歌名" }
+           { "type": "music_action", "action": "change_music", "song_name": "" }
+           - song_name: 要切到的那首歌的名字（必须是 playlist 里已有的）
            适用：playlist 已有歌，用户想切到另一首
         2. **add_song_to_playlist** - 全网易云搜歌 + 加 playlist + 自动播放 + 自动启动一起听
-           { "type": "music_action", "action": "add_song_to_playlist", "keyword": "搜索词（歌名/歌手/歌词）", "level": "exhigh" }
-           - keyword: 你想找的歌（如"晴天 周杰伦"、"适合下雨天的歌"）
+           { "type": "music_action", "action": "add_song_to_playlist", "keyword": "", "level": "exhigh" }
+           - keyword: 你要找的歌。歌名 / 歌手 / 歌词片段都可以，按用户这次真正说的内容来写
            - level: standard / exhigh / lossless / hires / jymaster（默认 exhigh）
            适用场景：
            - 用户说"给我放首歌" / "放一首xxx" / "听xxx"
-           - 你觉得对话氛围合适，主动推荐（如"这首我很喜欢，给你放一首类似的"）
+           - 你觉得对话氛围合适，主动推荐
            - playlist 为空时用它
+           ⚠️ 搜不到（网易云没有版权或已下架）就换一首再试，不要反复搜同一首。
         注意：add_song_to_playlist 会**自动播放 + 自动启动一起听**（不需要再发 change_music）。
-        3. **request_song** - 主动给用户唱一首歌
-           { "type": "request_song", "title": "歌名", "prompt": "风格描述", "lyrics": "[Verse]...\\n[Chorus]...", "instrumental": false }
-           - title: 你给这首歌起的名字（必填，会显示在聊天流）
-           - prompt: 风格/情绪/场景描述（如 "温柔民谣，吉他伴奏，温暖治愈"，必填）
-           - lyrics: 完整歌词（带 [Verse]/[Chorus]/[Bridge] 等结构标签）。传 "" 或省略 → AI 自动写词
-           - instrumental: 是否纯音乐（default false）
-           适用场景：用户说"给我唱首歌" / "唱一首关于X的歌" / 你觉得氛围合适主动唱一首
-        注意：request_song 只在单聊可用，调用会自动播放 + 推一条 "AI 为你唱了《XX》" 的消息到聊天流。
+        ${requestSongBlock}
         `;
       // 把工具说明附加到 musicContext（如果 musicContext 是空的，工具说明仍然会被附加）
       musicContext = (musicContext || '') + musicToolsContext;
@@ -4062,6 +4050,9 @@ ${enabledEntries}
                 const prompts = Array.isArray(post.prompt) ? post.prompt : [post.prompt];
                 contentSummary = (post.publicText || '') + ` [包含${prompts.length}张NovelAI图片: ${prompts.join(', ')}]`;
               } else if (post.type === 'googleimag' && post.prompt) {
+              } else if ((post.type === 'openaiimag' || post.type === 'ai_image') && post.prompt) {
+                const ocPrompts = Array.isArray(post.prompt) ? post.prompt : [post.prompt];
+                contentSummary = (post.publicText || '') + ` [包含${ocPrompts.length}张AI生成图片: ${ocPrompts.join(', ')}]`;
                 contentSummary = (post.publicText || '') + ` [包含1张Google Imagen图片: ${post.prompt}]`;
               } else {
 
@@ -4352,26 +4343,36 @@ ${taskListString}
 ${getActiveThoughtsPrompt()}
 ` : '';
           // 新增：判断是否启用动态功能
-          const enableQzoneActions = chat.settings.enableQzoneActions !== null
-            ? chat.settings.enableQzoneActions
-            : state.globalSettings.enableQzoneActions;
+          // 2026-11-27: 动态/查看手机改读【角色级】新开关 (原来读全局 enableQzoneActions / enableViewMyPhone)
+          //   新开关同时管【后台活动】和【普通聊天回复】两条路 → 主设置里那俩全局键可以彻底删掉。
+          const chatBgCfg = (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function')
+            ? window.BgActivityConfig.getBgActivityConfig(chat)
+            : { acts: {} };
+          const chatBgActs = chatBgCfg.acts || {};
 
-          // 新增：构建动态指令prompt部分
-          const qzoneActionsPrompt = enableQzoneActions ? `
+          // 新增：构建动态指令prompt部分 (发自己的动态 / 互动别人的动态 分开)
+          // 🔴 2026-11-27: 朋友圈「发真实图片动态」改成跟随【全局生图开关】(统一路由, 四渠道都认)
+          //   改前这两行把 ${ 转义成了字面量 —— 每次都在提示词里塞一段没被求值的 JS 源码,
+          //   而且只认 NAI / Google, OpenAI 兼容压根没接。
+          //   → 用户就算开着生图, AI 也从来没被告知"可以发图片动态", 所以永远只发纯文字。
+          const qzoneImagePostLine = (() => {
+            const route = getCurrentEnabledImageProvider();
+            if (!route || route.status !== 'ok' || !route.provider) return '';
+            const pType = route.provider.type;
+            return '-   **公开发布' + route.provider.name + '真实图片动态**: `{"type": "qzone_post", "postType": "' + pType + '", "publicText": "(可选)动态的配文", "prompt": "详细的英文描述词..."}`';
+          })();
+          const qzoneActionsPrompt = (chatBgActs.qzonePost || chatBgActs.qzoneInteract) ? `
 ### C. 社交与动态 (Qzone)
--   **发动态(说说)**: \`[{"type": "qzone_post", "postType": "shuoshuo", "content": "文字内容"}]\`
+${chatBgActs.qzonePost ? `-   **发动态(说说)**: \`[{"type": "qzone_post", "postType": "shuoshuo", "content": "文字内容"}]\`
 -   **发动态(文字图)**: \`[{"type": "qzone_post", "postType": "text_image", "publicText": "(可选)公开文字", "hiddenContent": "图片描述", "image_prompt": "图片的【英文】关键词, 用%20分隔, 风格为风景/动漫/插画/二次元等, 禁止真人"}]\`
-\${localStorage.getItem('novelai-enabled') === 'true' ? \`-   **公开发布NovelAI真实图片动态**: \\\`{"type": "qzone_post", "postType": "naiimag", "publicText": "(可选)动态的配文", "prompt": "详细的英文描述词..."}\\\`\` : ''}
-\${localStorage.getItem('google-imagen-enabled') === 'true' ? \`-   **公开发布Google Imagen真实图片动态**: \\\`{"type": "qzone_post", "postType": "googleimag", "publicText": "(可选)动态的配文", "prompt": "详细的英文描述词..."}\\\`\` : ''}
--   **转发动态**: \`[{"type": "repost", "postId": 动态ID, "comment": "转发评论"}]\`
+${qzoneImagePostLine}
+-   **转发动态**: \`[{"type": "repost", "postId": 动态ID, "comment": "转发评论"}]\`` : ''}${chatBgActs.qzoneInteract ? `
 -   **评论动态**: \`[{"type": "qzone_comment", "name": "\${chat.originalName}", "postId": 123, "commentText": "评论内容"}]\` (name必须填你自己的本名"\${chat.originalName}"，绝对不能填用户的名字)
--   **点赞动态**: \`{"type": "qzone_like", "postId": 456}\`
+-   **点赞动态**: \`{"type": "qzone_like", "postId": 456}\`` : ''}
 ` : '';
 
-          // 新增：判断是否启用查看User手机功能
-          const enableViewMyPhone = chat.settings.enableViewMyPhone !== null
-            ? chat.settings.enableViewMyPhone
-            : state.globalSettings.enableViewMyPhone;
+          // 新增：判断是否启用查看User手机功能 (2026-11-27 改读角色级 acts.peek)
+          const enableViewMyPhone = !!chatBgActs.peek;
 
           // 新增：构建查看User手机的prompt部分
           const viewMyPhonePrompt = enableViewMyPhone ? `
@@ -4889,24 +4890,8 @@ ${getActiveThoughtsPrompt()}
 
       const mainChatCompletionsUrl = `${proxyUrl.replace(/\/+$/, '')}/chat/completions`;
 
-      // 记录API请求数据
-      const requestData = {
-        timestamp: Date.now(),
-        chatId: chatId,
-        chatName: chat.name,
-        model: model,
-        systemPrompt: systemPrompt,
-        messages: isGemini ? messagesPayload : [{
-          role: 'system',
-          content: systemPrompt
-        }, ...messagesPayload],
-        temperature: state.globalSettings.apiTemperature || 0.8,
-        top_p: state.globalSettings.apiTopP !== undefined ? state.globalSettings.apiTopP : 1.0,
-        presence_penalty: state.globalSettings.apiPresencePenalty !== undefined ? state.globalSettings.apiPresencePenalty : 0.0,
-        frequency_penalty: state.globalSettings.apiFrequencyPenalty !== undefined ? state.globalSettings.apiFrequencyPenalty : 0.0,
-        isGemini: isGemini,
-        apiUrl: isGemini ? geminiConfig.url : mainChatCompletionsUrl
-      };
+      // 🔴 2026-11-27 「记录API请求数据」(requestData) 删掉 —— API调用历史功能整体下线，
+      //   不再采集调试数据，也就不会往 chat 里塞几十条原始 prompt（省数据库体积）。
 
       let response;
       let responseJsonData = null;
@@ -5126,29 +5111,7 @@ ${getActiveThoughtsPrompt()}
         }
       }
 
-      // 记录API响应数据
-      const responseData = {
-        ...requestData,
-        responseTimestamp: Date.now(),
-        responseData: responseJsonData,
-        aiResponseContent: aiResponseContent,
-        responseStatus: response ? response.status : null,
-        responseStatusText: response ? response.statusText : ''
-      };
-
-      // 方案4：只有在全局设置中启用API历史记录时才保存
-      if (state.globalSettings.enableApiHistory) {
-        // 保存到聊天的API历史中
-        if (!chat.apiHistory) {
-          chat.apiHistory = [];
-        }
-        chat.apiHistory.push(responseData);
-
-        // 限制历史记录数量，只保留最近50条
-        if (chat.apiHistory.length > 50) {
-          chat.apiHistory = chat.apiHistory.slice(-50);
-        }
-      }
+      // 🔴 2026-11-27 「记录API响应数据」+ 写 chat.apiHistory 删掉 (功能整体下线)
 
       // 保存到数据库
       await db.chats.put(chat);
@@ -5159,7 +5122,7 @@ ${getActiveThoughtsPrompt()}
       const imageDirective = parseAiImageDirectiveText(aiResponseContent);
       const messagesArray = imageDirective
         ? [imageDirective]
-        : hookProactiveWakeInMessages(parseAiResponse(aiResponseContent), chat).map(action =>
+        : parseAiResponse(aiResponseContent).map(action =>
             chat.settings.isOfflineMode && action.type === 'text'
               ? { ...action, type: 'offline_text' }
               : action
@@ -6546,6 +6509,35 @@ ${getActiveThoughtsPrompt()}
               }
             }
 
+
+            // 🔴 2026-11-27: OpenAI 兼容 / 通用AI 也能发图片动态 (跟随全局生图开关)
+            //   改前只有 naiimag / googleimag 两个分支, 开了 OpenAI 兼容也画不出图。
+            if ((msgData.postType === 'openaiimag' || msgData.postType === 'ai_image') && msgData.prompt) {
+              try {
+                let imgUrl = '';
+                if (msgData.postType === 'openaiimag') {
+                  if (typeof window.generateOpenAICompatibleImageFromPrompt !== 'function') {
+                    throw new Error('OpenAI兼容生图函数未加载');
+                  }
+                  const ocResult = await window.generateOpenAICompatibleImageFromPrompt(msgData.prompt);
+                  imgUrl = (ocResult && ocResult.imageUrl) ? ocResult.imageUrl : '';
+                } else {
+                  imgUrl = typeof window.getPollinationsImageUrl === 'function'
+                    ? window.getPollinationsImageUrl(msgData.prompt)
+                    : ('https://image.pollinations.ai/prompt/' + encodeURIComponent(msgData.prompt));
+                }
+                if (!imgUrl) throw new Error('生图返回空结果');
+                newPost.imageUrls = [imgUrl];
+                newPost.imageUrl = imgUrl;
+                newPost.prompt = msgData.prompt;
+                newPost.imageCount = 1;
+                console.log('✅ 动态' + msgData.postType + '图片生成完成');
+              } catch (error) {
+                console.error('❌ 动态' + msgData.postType + '图片生成失败:', error);
+                newPost.content = (newPost.content || newPost.publicText || '') + '\n[图片生成失败: ' + error.message + ']';
+              }
+            }
+
             await db.qzonePosts.add(newPost);
             updateUnreadIndicator(unreadPostsCount + 1);
             if (isViewingThisChat && document.getElementById('qzone-screen').classList.contains('active')) {
@@ -6890,6 +6882,7 @@ ${getActiveThoughtsPrompt()}
               };
               const blob = await window.AIMusic.generateSong({
                 chatId: chatId,
+                title: songTitle,
                 prompt: songPrompt,
                 lyrics: songLyrics,
                 instrumental: instrumental,
@@ -8491,7 +8484,7 @@ ${linkedContents}
 
       const aiResponseContent = getGeminiResponseText(data);
 
-      const messagesArray = hookProactiveWakeInMessages(parseAiResponse(aiResponseContent), chat);
+      const messagesArray = parseAiResponse(aiResponseContent);
       const processedActions = [];
       for (const action of messagesArray) {
         if (action.type === 'text' && typeof action.content === 'string' && action.content.includes('\n')) {
