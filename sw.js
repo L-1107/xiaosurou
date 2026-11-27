@@ -1695,7 +1695,18 @@
 //              reading-sandbox 里 reading-sandbox.js 0.1.7→0.1.8。
 //   新增回归: tests/gemini-key-pool.test.cjs (69 条)。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.142.0';
+// v0.2.143.0 (2026-11-27): 修 Key 池卡片把主设置页撑到「左右摆动」。
+//   现象 (user 实测): 「最后那个展开错误和收起的按钮太靠右了，超出了原卡片区域，
+//   导致现在整个主设置页都在左右摆动」。
+//   根因: 「Key 状态」「最近错误」两行用了 .settings-right 当容器, 并给它写了
+//   【行内 style="width:100%"】。.settings-right 在手机媒体查询
+//   (@media max-width:768px, features-1.css:1787) 里是 flex-shrink:0 + width:120px,
+//   行内宽度赢过媒体查询, 又因为 flex-shrink:0 永远缩不回去 →
+//   整行比卡片宽 60~70px → 设置页出横向滚动条, 页面一晃一晃。
+//   修法: 这两行改成【堆叠】布局(跟「池成员」「生效范围」一样), 彻底不用 .settings-right。
+//   index.html 的 ?v=：css/features-1.css 0.0.43→0.0.44。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.143.0';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

@@ -166,11 +166,35 @@
       <p>之前有人建议我把330的更新日志做个日志放上去，问题是我的更新日志文件因为换电脑不慎丢失了，所以更新日志从本次（明天）更新后开始记录。</p>
     </div>
 
+    <!-- 4.67 版本 -->
+    <div class="version-card">
+      <div class="version-header">
+        <span class="version-number">v4.67</span>
+        <span class="version-date">最新版本</span>
+      </div>
+      <div class="section">
+        <div class="section-title fix">修：Key 池卡片把主设置页撑到「左右摆动」</div>
+        <ul class="item-list">
+          <li><strong>你反馈</strong> —— 「<strong>最后那个展开错误和收起的按钮太靠右了，超出了原卡片区域，导致现在整个主设置页都在左右摆动</strong>」。</li>
+          <li><strong>真凶</strong> —— Key 池卡片里的「<strong>Key 状态</strong>」和「<strong>最近错误</strong>」这两行，容器用的是设置页通用的「右对齐区」，并且给它写了<strong>行内的 <code>width:100%</code></strong>。而那个右对齐区在<strong>手机宽度下</strong>（<code>@media max-width:768px</code>）是<strong>不许收缩</strong>的（<code>flex-shrink:0</code>）—— 行内宽度又赢过媒体查询，于是这两行<strong>永远缩不回去</strong>，每行比卡片宽 <strong>65~68px</strong>，设置页就出了横向滚动条，页面一晃一晃。</li>
+          <li><strong>修法</strong> —— 这两行改成<strong>堆叠布局</strong>（跟同一张卡里的「池成员」「生效范围」一样）：标签一行，内容另起一行，右对齐区整个不用了。顺便把「展开 / 收起」按钮改成<strong>靠左的自然宽度</strong>，错误日志占满整行、<strong>超长会自动折行</strong>，不再被裁掉。</li>
+          <li><strong>怎么验的</strong> —— 拿<strong>真实 index.html</strong> 在 <strong>390px 窄框</strong>里复现（手机宽度才会走那条媒体查询，桌面上复现不出来），逐行量「自身溢出」和「超出卡片右边缘多少像素」：<strong>改之前</strong>「Key 状态」超 65px、「最近错误」超 68px、其余 7 行正常；<strong>改之后</strong> <strong>9 行全部 0px</strong>。</li>
+        </ul>
+      </div>
+      <div class="section">
+        <div class="section-title fix">这一版的边界</div>
+        <ul class="item-list">
+          <li><strong>只动了这两行的排版</strong> —— 功能、按钮行为、错误日志内容一个字没改，Key 池的逻辑也没碰。</li>
+          <li><strong>本地验过的</strong> —— 窄屏逐行溢出测量（改前 65px/68px → 改后全 0）；全项目测试 25 个文件 <strong>24 绿 1 红</strong>（唯一那个红是抠图的老账）。</li>
+          <li><strong>我验不了的</strong> —— <strong>真机上的观感</strong>（我这边是 390px 的模拟框，不是你的手机屏幕）。你强刷一次看看还晃不晃。</li>
+        </ul>
+      </div>
+    </div>
     <!-- 4.66 版本 -->
     <div class="version-card">
       <div class="version-header">
         <span class="version-number">v4.66</span>
-        <span class="version-date">最新版本</span>
+        <span class="version-date">2026-11-26</span>
       </div>
       <div class="section">
         <div class="section-title feat">Key 池改成「一目了然」：开关打开 = 主聊天直接走谷歌轮询</div>

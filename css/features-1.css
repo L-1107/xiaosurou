@@ -4734,6 +4734,32 @@
                /* pre-wrap：保留 \n 的同时长行照样折行（生效范围那几行要分行显示） */
                white-space: pre-wrap;
            }
+           /* 🔴 2026-11-26 「Key 状态」「最近错误」两行把整个主设置页撑到左右摆动。
+              根因: .settings-right 在手机媒体查询(@media max-width:768px)里是
+              flex-shrink:0 + width:120px, 而这两行给它写了【行内 width:100%】——
+              行内宽度赢过媒体查询, 又因为 flex-shrink:0 永远缩不回去,
+              整行比卡片宽 60~70px → 设置页出现横向滚动, 页面一晃一晃。
+              修法: 这两行改成【堆叠】布局(跟「池成员」「生效范围」一样),
+              彻底不用 .settings-right 这个右对齐容器。 */
+           .gemini-pool-status {
+               width: 100%;
+               min-width: 0;
+           }
+           .gemini-pool-error-toggle {
+               /* 堆叠容器是 align-items:stretch, 按钮会被拉成满宽 —— 改回自然宽度靠左 */
+               align-self: flex-start;
+               flex: 0 0 auto;
+           }
+           .gemini-pool-error-log {
+               width: 100%;
+               min-width: 0;
+               max-height: 220px;
+               overflow: auto;
+           }
+           .gemini-pool-status-row > span:first-child {
+               min-width: 0;
+               word-break: break-all;
+           }
            .gemini-pool-multi {
                position: relative;
                width: 100%;

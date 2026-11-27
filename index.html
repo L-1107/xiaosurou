@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.43">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.44">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -2154,18 +2154,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     <input type="number" id="gemini-pool-cooldown" class="settings-num-input" min="5" max="3600" step="5">
                 </div>
             </div>
-            <div class="settings-item">
+            <div class="settings-item gemini-pool-stacked-item">
                 <label>Key 状态</label>
-                <div class="settings-right" style="width: 100%;">
-                    <div id="gemini-pool-status-list" class="settings-description" style="width: 100%;"></div>
-                </div>
+                <div id="gemini-pool-status-list" class="settings-description gemini-pool-status"></div>
             </div>
-            <div class="settings-item">
+            <div class="settings-item gemini-pool-stacked-item">
                 <label>最近错误</label>
-                <div class="settings-right" style="width: 100%;">
-                    <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn">展开 / 收起</button>
-                    <div id="gemini-pool-error-log" class="settings-description" style="display: none; width: 100%; max-height: 220px; overflow: auto;"></div>
-                </div>
+                <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn gemini-pool-error-toggle">展开 / 收起</button>
+                <div id="gemini-pool-error-log" class="settings-description gemini-pool-error-log" style="display: none;"></div>
             </div>
         </div>
 
