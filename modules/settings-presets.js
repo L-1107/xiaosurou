@@ -1869,6 +1869,23 @@
 
   window.renderWallpaperScreenProxy = renderWallpaperScreen;
 
+  // 把一张壁纸挂到某个容器上（inline background-image）
+  // 区分 CSS 表达式（渐变 / 已包装的 url()）和裸 URL —— 默认值是 linear-gradient(...)
+  // 字符串，直接包到 url() 里会变成无效 CSS
+  function applyWallpaperToSurface(el, wallpaper) {
+    if (!el) return;
+    if (wallpaper) {
+      const trimmed = String(wallpaper).trim();
+      if (/^(linear-gradient|radial-gradient|conic-gradient)\(/i.test(trimmed) || /^url\(/i.test(trimmed)) {
+        el.style.backgroundImage = trimmed;
+      } else {
+        el.style.backgroundImage = `url("${trimmed}")`;
+      }
+    } else {
+      el.style.removeProperty('background-image');
+    }
+  }
+
   function applyGlobalWallpaper() {
     const homeScreen = document.getElementById('home-screen');
     const wallpaper = state.globalSettings.wallpaper;
@@ -1888,6 +1905,10 @@
       homeScreen.style.removeProperty('background-image');
       homeScreen.style.removeProperty('background-color');
     }
+
+    // 「消息」角色列表页 + 「动态」朋友圈 用同一张主屏壁纸
+    // （样式见 css/wallpaper-surfaces.css）
+    applyWallpaperToSurface(document.getElementById('chat-list-screen'), wallpaper);
   }
 
 

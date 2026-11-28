@@ -1848,7 +1848,20 @@
 //     → 拉黑之后聊天界面和列表都不刷新。
 //   index.html 的 ?v=: init-event-bindingsA 0.0.54→0.0.55、init-event-bindingsB 0.0.45→0.0.46。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.143.10';
+// v0.2.143.11 (2026-11-28): 「消息」角色列表页 + 「动态」朋友圈 壁纸玻璃化。
+//   新增 css/wallpaper-surfaces.css: 角色列表页和朋友圈都直接铺用户在
+//   【外观设置 → 主屏壁纸】里上传的那张壁纸, 上面盖暗化层 + 玻璃卡片。
+//   · 壁纸本体: settings-presets.js 的 applyGlobalWallpaper() 多挂一个
+//     #chat-list-screen (inline background-image), 跟 home-screen 用同一张。
+//   · 朋友圈原来写死 background-color:#f0f2f5 (chat-list.js switchToChatListView)
+//     —— 那就是"白糊糊"的根源, 改成 transparent 露出壁纸。
+//   · 朋友圈卡片【不用 backdrop-filter】(会跟左滑删除按钮的绘制顺序打架,
+//     红色删除条会透出来), 改成整页暗化层 + 卡片半透明底色;
+//     删除按钮默认 translateX(100%) 藏起来, .swiped 才滑回来。
+//   · 回忆/收藏/NPC 三个 tab 保持原样 (显式给不透明底色, 别透出壁纸)。
+//   index.html 的 ?v=: chat-list 0.0.37→0.0.38、settings-presets 0.0.94→0.0.95。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.143.11';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [
@@ -1957,7 +1970,10 @@ const URLS_TO_CACHE = [
   './assets/reading-room/reading-page-bg-thumb.webp',
   // v0.2.104.0 新增: 卡片菜单的羊皮纸卷轴 (45KB)。
   // 不预缓存的话, 第一次点 ⋯ 会有一下白闪 (菜单底图是异步拉的)。
-  './assets/reading-room/menu-scroll.webp'
+  './assets/reading-room/menu-scroll.webp',
+  // v0.2.143.11 新增: 「消息」角色列表页 + 「动态」朋友圈 的壁纸玻璃化样式。
+  // 不预缓存的话, 断网时这两个页面会退回纯白底 (旧 CSS 才是白底, 用户说的"白糊糊")。
+  './css/wallpaper-surfaces.css'
 ];
 
 self.addEventListener('install', event => {

@@ -159,7 +159,9 @@
 
     switch (viewId) {
       case 'qzone-screen':
-        views['qzone-screen'].style.backgroundColor = '#f0f2f5';
+        // 朋友圈背景改成透明，露出主屏壁纸（样式见 css/wallpaper-surfaces.css）
+        // 不要再写死 #f0f2f5 —— 那是"白糊糊"的根源
+        views['qzone-screen'].style.backgroundColor = 'transparent';
         updateUnreadIndicator(0);
         renderQzoneScreen();
         renderQzonePosts();

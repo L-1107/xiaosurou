@@ -150,7 +150,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 第二层半：消息数据访问层（需先于聊天核心模块加载） -->
   <script src="modules/message-store.js?v=0.0.38" defer></script>
   <!-- 第三层：核心聊天功能 -->
-  <script src="modules/chat-list.js?v=0.0.37" defer></script>
+  <script src="modules/chat-list.js?v=0.0.38" defer></script>
   <script src="modules/chat-interface.js?v=0.0.39" defer></script>
   <script src="modules/chat-input.js?v=0.0.36" defer></script>
   <!-- 第四层：AI 核心 -->
@@ -175,7 +175,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
   <script src="modules/nai-imagen.js?v=0.0.37" defer></script>
   <script src="modules/backup-import-export.js?v=0.0.40" defer></script>
-  <script src="modules/settings-presets.js?v=0.0.94" defer></script>
+  <script src="modules/settings-presets.js?v=0.0.95" defer></script>
   <script src="modules/chat-settings-presets.js?v=0.0.37" defer></script>
   <!-- 🔴 2026-11-27 新增: 角色设置页「AI 后台活动」面板 UI -->
   <script src="modules/bg-activity-panel.js?v=0.1.0" defer></script>
@@ -424,6 +424,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <link rel="stylesheet" href="css/live2d-manager.css?v=0.0.2">
   <!-- v0.5.0 P11: 通话舞台背景管理页 CSS -->
   <link rel="stylesheet" href="css/live2d-bg-manager.css?v=0.0.1">
+  <!-- v0.2.143.11 「消息」角色列表页 + 「动态」朋友圈 壁纸玻璃化 (排最后, 要压住前面的基础样式) -->
+  <link rel="stylesheet" href="css/wallpaper-surfaces.css?v=0.0.1">
 </head>
 <body>
   <div id="phone-screen">
