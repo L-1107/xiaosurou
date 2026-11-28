@@ -1683,7 +1683,12 @@ window.initEventBindingsB = function(state, db) {
       document.getElementById('group-management-modal').classList.remove('visible');
 
       const chatSettingsBtn = document.getElementById('chat-settings-btn');
-      if (document.getElementById('chat-settings-modal').classList.contains('visible')) {
+      // 🔴 2026-11-28: 原来这里直接 document.getElementById('chat-settings-modal').classList
+      //   —— 这个 id 在项目里【从来没有存在过】(聊天设置早就从 modal 改成整屏 screen 了),
+      //   getElementById 返回 null → null.classList 抛 TypeError →
+      //   后面 chatSettingsBtn.click() 永远执行不到。加个 null 保护。
+      const chatSettingsModal = document.getElementById('chat-settings-modal');
+      if (chatSettingsModal && chatSettingsModal.classList.contains('visible')) {
         chatSettingsBtn.click();
       }
     });
@@ -2067,7 +2072,11 @@ window.initEventBindingsB = function(state, db) {
         await db.chats.put(chat);
 
 
-        document.getElementById('chat-settings-modal').classList.remove('visible');
+        // 🔴 2026-11-28: 同上, chat-settings-modal 这个 id 从来没存在过 →
+        //   null.classList 抛 TypeError, 会把后面 renderChatInterface / renderChatList
+        //   一起带掉 → 拉黑之后聊天界面和列表都不刷新。加 null 保护。
+        const chatSettingsModal = document.getElementById('chat-settings-modal');
+        if (chatSettingsModal) chatSettingsModal.classList.remove('visible');
         renderChatInterface(state.activeChatId);
 
         renderChatList();

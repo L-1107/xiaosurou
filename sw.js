@@ -1827,7 +1827,28 @@
 //   · 补一条：搜不到（没有版权/已下架）就换一首再试，别反复搜同一首。
 //   index.html 的 ?v=: ai-response 0.0.64→0.0.65。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.143.9';
+// v0.2.143.10 (2026-11-28): 修「聊天详情 / AI 个人设置」点不开。
+//   根因: v0.2.143.9 把「独立行动冷却」搬进【AI 后台活动】面板时, index.html 里
+//   id="ai-cooldown-group" 那个 settings-item 区块被删了, 但
+//   modules/init-event-bindingsA.js 里还有一行裸访问它:
+//     document.getElementById('ai-cooldown-group').style.display = ...
+//   getElementById 返回 null → null.style 抛 TypeError →
+//   chat-settings-btn 的整个点击处理函数在这里中断, 后面第 3862 行的
+//   showScreen('chat-settings-screen') 永远执行不到 →
+//   点对话框右上角按钮「完全没动静」(控制台只有一条 unhandled rejection)。
+//   连带失效的还有 4 处 .click() 跳转: 导出角色后 / 成员管理后 /
+//   init-event-bindingsB / chat-interface.openChatSettings()。
+//   修法: 删掉那行死代码 (DOM 已由新面板取代; 群聊那个 group-cooldown-group 保留)。
+//   顺手修了 2 处【历史遗留】的同类裸访问 (不是这次改出来的, 但同一个病):
+//     modules/init-event-bindingsB.js 关闭群组管理弹窗 / 「拉黑」按钮里
+//       document.getElementById('chat-settings-modal').classList...
+//     —— chat-settings-modal 这个 id 在项目里从来没存在过 (聊天设置早就从
+//     modal 改成整屏 screen 了), null.classList 抛 TypeError。
+//     其中「拉黑」那处会把后面的 renderChatInterface / renderChatList 一起带掉
+//     → 拉黑之后聊天界面和列表都不刷新。
+//   index.html 的 ?v=: init-event-bindingsA 0.0.54→0.0.55、init-event-bindingsB 0.0.45→0.0.46。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.143.10';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

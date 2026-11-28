@@ -3460,7 +3460,14 @@ window.initEventBindingsA = async function(state, db) {
       document.getElementById('inject-thought-group').style.display = isGroup ? 'none' : 'block';
       document.getElementById('todo-list-setting-group').style.display = isGroup ? 'none' : 'flex';
       document.getElementById('offline-mode-group').style.display = isGroup ? 'none' : 'block';
-      document.getElementById('ai-cooldown-group').style.display = isGroup ? 'none' : 'block';
+      // 🔴 2026-11-28: 删掉 ai-cooldown-group 那行。
+      //   背景: 「独立行动冷却」搬进【AI 后台活动】面板时, index.html 里这个
+      //   settings-item 区块被删了, 但这行 JS 还在裸访问它 →
+      //   getElementById 返回 null → null.style 抛 TypeError →
+      //   整个 chat-settings-btn 的点击处理函数在这里中断, 后面的
+      //   showScreen('chat-settings-screen') 永远执行不到 →
+      //   「聊天详情 / AI 个人设置」点右上角按钮完全没反应。
+      //   (群聊那个 group-cooldown-group 还在, 保留。)
       document.getElementById('group-cooldown-group').style.display = isGroup ? 'block' : 'none';
       document.getElementById('export-character-full-btn').style.display = isGroup ? 'none' : 'block';
       document.getElementById('chat-name-input').value = chat.name;
