@@ -1,11 +1,14 @@
 /* ============================================================
  * wallpaper-surfaces.css
- * 「消息」角色列表页 + 「动态」朋友圈 —— 壁纸玻璃化
+ * 聊天列表屏的五个 tab 统一成一套质感 —— 壁纸玻璃化
+ *   消息(角色列表) / 动态(朋友圈) / 回忆 / 收藏 / NPC
  * ------------------------------------------------------------
  * 壁纸来源：外观设置 → 主屏壁纸（用户自己上传的那张）
  *   壁纸本体由 settings-presets.js 的 applyGlobalWallpaper()
  *   写成 inline background-image 挂到 #chat-list-screen 上；
  *   本文件只负责「壁纸之上」的层：暗化层 + 玻璃卡片。
+ *
+ * 五个 tab 统一成：壁纸糊底 + 玻璃顶栏 + 玻璃圆角卡
  *
  * ⚠️ 踩过的坑（别改回去）：
  *  1) 朋友圈卡片【不能】用 backdrop-filter —— 会跟左滑删除按钮
@@ -14,8 +17,10 @@
  *  2) 删除按钮默认 translateX(100%) 藏起来，.swiped 时滑回来。
  *  3) .last-msg / .post-content 等元素带 inline style，
  *     必须 !important 才压得住。
- *  4) 只改「消息」「动态」两个 tab。回忆/收藏/NPC 三个 tab 保持原样，
- *     所以要显式给它们不透明底色，否则会透出壁纸。
+ *  4) 收藏卡复用朋友圈那套 .post-* 类名，颜色要单独再改一遍，
+ *     不然正文还是 #333 深灰、"觉得很赞"还是白底。
+ *  5) base.css 把 .header .action-btn 写死成 width:30px，
+ *     收藏页的「编辑」两个字会被挤成竖排 —— 这里放开宽度。
  * ============================================================ */
 
 /* ------------------------------------------------------------
@@ -131,11 +136,238 @@
 }
 
 /* ------------------------------------------------------------
- * 4. 其它三个 tab 保持原样（别让壁纸透出来）
+ * 4. 回忆 / 收藏 / NPC 三个 tab —— 跟朋友圈一个格局
+ *    (壁纸糊底 + 玻璃顶栏 + 玻璃卡)
  * ------------------------------------------------------------ */
+
+/* 三个 tab 也要壁纸糊底 —— 跟朋友圈用同一层做法:
+   整页 ::before 模糊 + 暗化，卡片只做半透明底色 */
+#memories-view::before,
+#favorites-view::before,
+#npc-list-view::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(8, 10, 18, .30);
+    -webkit-backdrop-filter: blur(22px) saturate(130%);
+    backdrop-filter: blur(22px) saturate(130%);
+    pointer-events: none;
+    z-index: 0;
+}
+
 #memories-view,
+#favorites-view,
 #npc-list-view {
-    background-color: var(--secondary-bg);
+    background-color: transparent !important;
+}
+
+/* 顶栏: 玻璃条 */
+#memories-view>.header,
+#favorites-view>.header,
+#npc-list-view>.header {
+    background-color: rgba(10, 12, 22, .52) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    border-bottom-color: rgba(255, 255, 255, .10) !important;
+}
+
+#memories-view>.header span,
+#favorites-view>.header span,
+#npc-list-view>.header span {
+    color: #fff !important;
+}
+
+/* 顶栏的文字按钮: base.css 把 .header .action-btn 写死成 width:30px,
+   「编辑」两个字会被挤成竖排(黑市页早就单独修过, 收藏页漏了)。
+   这里放开宽度 + 禁止换行。 */
+#favorites-view>.header .action-btn {
+    width: auto !important;
+    min-width: 30px;
+    padding: 4px 12px !important;
+    white-space: nowrap;
+}
+
+/* 内容要压在模糊层上面
+   （注意: #favorites-action-bar 原本就是 position:absolute 贴底的,
+     这里别加 position, 否则它会掉到列表下面去) */
+#memories-list,
+#favorites-list,
+#npc-list,
+#favorites-view .search-bar-container {
+    position: relative;
+    z-index: 1;
+}
+
+/* 空列表提示（inline color 用的是 --text-secondary，深底上要提亮） */
+#memories-view>p,
+#favorites-view>p,
+#npc-list-view>p {
+    color: rgba(255, 255, 255, .55) !important;
+}
+
+/* ---- 收藏 ---- */
+#favorites-view .search-bar-container {
+    background-color: rgba(10, 12, 22, .32) !important;
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(255, 255, 255, .08) !important;
+}
+
+#favorites-search-input {
+    background-color: rgba(255, 255, 255, .12) !important;
+    border: 1px solid rgba(255, 255, 255, .16) !important;
+    color: #fff !important;
+}
+
+#favorites-search-input::placeholder {
+    color: rgba(255, 255, 255, .45) !important;
+}
+
+#favorites-view .search-clear-btn {
+    background: rgba(255, 255, 255, .25) !important;
+    color: #fff !important;
+}
+
+#favorites-list {
+    padding: 15px !important;
+}
+
+#favorites-list .favorite-item-card {
+    background-color: rgba(16, 19, 32, .60) !important;
+    border: 1px solid rgba(255, 255, 255, .13) !important;
+    border-radius: 18px !important;
+    padding: 15px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .30) !important;
+}
+
+#favorites-list .fav-card-header .name {
+    color: #fff !important;
+}
+
+#favorites-list .fav-card-header .source {
+    color: rgba(255, 255, 255, .55) !important;
+}
+
+#favorites-list .fav-card-content {
+    color: rgba(255, 255, 255, .93) !important;
+}
+
+/* 收藏卡复用朋友圈那套 .post-* 类名 —— 颜色要再改一遍,
+   不然正文还是 #333 深灰、"觉得很赞"还是白底, 深底上根本看不清 */
+#favorites-list .post-content,
+#favorites-list .diary-title,
+#favorites-list .memo-title,
+#favorites-list .diary-content-preview,
+#favorites-list .memo-content-preview,
+#favorites-list .fav-card-content-full {
+    color: rgba(255, 255, 255, .93) !important;
+}
+
+#favorites-list .post-likes-section {
+    background-color: rgba(0, 229, 255, .12) !important;
+    border-color: rgba(255, 255, 255, .10) !important;
+    color: rgba(255, 255, 255, .88) !important;
+}
+
+#favorites-list .post-comments-container,
+#favorites-list .comment-text,
+#favorites-list .legacy-comment-item {
+    color: rgba(255, 255, 255, .88) !important;
+}
+
+#favorites-list .commenter-name {
+    color: #7cd8ff !important;
+}
+
+#favorites-list .fav-delete-btn {
+    background: rgba(255, 255, 255, .12) !important;
+    color: rgba(255, 255, 255, .70) !important;
+}
+
+#favorites-list .fav-delete-btn:hover {
+    background: rgba(255, 59, 48, .80) !important;
+    color: #fff !important;
+}
+
+#favorites-action-bar {
+    background-color: rgba(10, 12, 22, .72) !important;
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    border-top: 1px solid rgba(255, 255, 255, .12) !important;
+}
+
+/* 多选模式下卡片整体右移 35px 露出左边的勾选圈,
+   不给右边留位置的话, 卡片右侧的内容会被容器裁掉 */
+#favorites-view.selection-mode #favorites-list {
+    padding-right: 50px !important;
+}
+
+/* ---- 回忆 ---- */
+#memories-list {
+    padding: 15px !important;
+}
+
+#memories-list .memory-card {
+    background-color: rgba(16, 19, 32, .60) !important;
+    border: 1px solid rgba(255, 255, 255, .13) !important;
+    /* 原来左边条是深棕配米黄底，这里留成半透明暖橙，保留"回忆"的调性 */
+    border-left: 4px solid rgba(255, 183, 77, .70) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .30) !important;
+}
+
+/* 卡片自己的标题条要收进卡里（原来靠 margin 负值顶到卡外，玻璃卡上会溢出边框） */
+#memories-list .memory-card .header {
+    background-color: transparent !important;
+    margin: 0 0 8px !important;
+    padding: 0 0 8px !important;
+    border-radius: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, .12) !important;
+}
+
+#memories-list .memory-card .header .date {
+    color: rgba(255, 255, 255, .55) !important;
+}
+
+#memories-list .memory-card .header .author {
+    color: #ffd79a !important;
+}
+
+#memories-list .memory-card .content {
+    color: rgba(255, 255, 255, .90) !important;
+}
+
+/* 倒计时卡保留紫蓝渐变（它本身就是特色），只统一圆角/阴影/描边 */
+#memories-list .countdown-card {
+    border: 1px solid rgba(255, 255, 255, .16) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .35) !important;
+}
+
+/* ---- NPC ---- */
+#npc-list {
+    padding: 12px !important;
+}
+
+#npc-list .chat-list-item {
+    background-color: rgba(16, 19, 32, .55) !important;
+    border: 1px solid rgba(255, 255, 255, .13) !important;
+    border-radius: 16px !important;
+    margin: 6px 0 !important;
+    padding: 12px 14px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .30) !important;
+}
+
+#npc-list .chat-list-item:hover {
+    background-color: rgba(30, 35, 54, .66) !important;
+}
+
+#npc-list .chat-list-item .name {
+    color: #fff !important;
+}
+
+#npc-list .chat-list-item .last-msg {
+    color: rgba(255, 255, 255, .60) !important;
 }
 
 /* ------------------------------------------------------------

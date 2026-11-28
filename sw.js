@@ -1861,7 +1861,18 @@
 //   · 回忆/收藏/NPC 三个 tab 保持原样 (显式给不透明底色, 别透出壁纸)。
 //   index.html 的 ?v=: chat-list 0.0.37→0.0.38、settings-presets 0.0.94→0.0.95。
 //   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
-const CACHE_VERSION = 'v0.2.143.11';
+// v0.2.143.12 (2026-11-28): 回忆 / 收藏 / NPC 三个 tab 也统一成玻璃质感。
+//   用户要求"消息列表下面还有回忆、收藏、NPC，都按朋友圈那个格局来"。
+//   · 三个 tab 的背景从白底/浅灰改成透明，露出主屏壁纸
+//     (收藏页那个写死的 #f9f9f9 改成 transparent, 跟朋友圈一样)。
+//   · 三个 tab 各自整页 ::before 做壁纸模糊 + 暗化 (跟朋友圈同一层做法),
+//     顶栏是毛玻璃条, 卡片是深色玻璃圆角卡。
+//   · 收藏卡复用朋友圈的 .post-* 类名, 正文/点赞条的颜色单独再改一遍。
+//   · 顺手修了收藏页顶栏「编辑」按钮竖排的老毛病: base.css 把
+//     .header .action-btn 写死成 width:30px, 两个字被挤成两行。
+//   index.html 的 ?v=: chat-list 0.0.38→0.0.39、wallpaper-surfaces 0.0.1→0.0.2。
+//   ⚠️ index.html 自己不带 ?v=，SW 对它是 cache-first → 必须 bump CACHE_VERSION。
+const CACHE_VERSION = 'v0.2.143.12';
 const CACHE_NAME = `ephone-cache-${CACHE_VERSION}`;
 
 const URLS_TO_CACHE = [

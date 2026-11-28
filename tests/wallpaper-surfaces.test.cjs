@@ -183,9 +183,13 @@ function staticCheck() {
   check('朋友圈卡片本身用 backdrop-filter 会跟删除按钮打架 —— 规则里不许出现',
     !/\.qzone-post-item\s*\{[^}]*backdrop-filter/.test(compact));
 
-  // 没改的三个 tab 要给不透明底色
-  check('#memories-view / #npc-list-view 有不透明底色 (别透出壁纸)',
-    /#memories-view\s*,\s*#npc-list-view\s*\{[^}]*background-color:\s*var\(--secondary-bg\)/.test(compact));
+  // 三个 tab 现在也一起玻璃化了 —— 背景要透明, 让壁纸透上来
+  check('回忆/收藏/NPC 三个 tab 也改玻璃了 —— 背景要透明',
+    /#memories-view,\s*#favorites-view,\s*#npc-list-view\s*\{[^}]*background-color:\s*transparent\s*!important/.test(compact));
+
+  // 三个 tab 的顶栏也要玻璃条
+  check('回忆/收藏/NPC 的顶栏也是玻璃条',
+    /#memories-view>\.header,\s*#favorites-view>\.header,\s*#npc-list-view>\.header\s*\{[^}]*backdrop-filter/.test(compact));
 
   // 角色列表第一张卡要整个露在顶栏下面 (顶栏实测 98px)
   check('#chat-list 的 padding-top 被顶开了 (>=100px)',
@@ -365,23 +369,85 @@ async function browserCheck() {
       swiped.overflowRight !== undefined && swiped.overflowRight <= 4,
       '超出右边缘 ' + swiped.overflowRight + 'px, transform=' + swiped.transform);
 
-    // ---- ⑤ 没改的三个 tab 别透壁纸 ----
+    // ---- ⑤ 回忆/收藏/NPC 三个 tab 也要是玻璃的 ----
     const tabs = await page.evaluate(async () => {
       const out = {};
-      for (const v of ['memories-view', 'favorites-view', 'npc-list-view']) {
-        try { window.switchToChatListView(v); } catch (e) {}
-        await new Promise((r) => setTimeout(r, 300));
-        const el = document.getElementById(v);
-        out[v] = el ? getComputedStyle(el).backgroundColor : null;
+      const seed = async () => {
+        const now = Date.now();
+        try {
+          await window.db.favorites.clear();
+          await window.db.favorites.add({
+            id: 'wp-fav-1', type: 'qzone_post', timestamp: now - 60000, originalTimestamp: now - 60000,
+            content: { authorId: 'user', type: 'shuoshuo', content: '测试收藏', likes: ['景澜'], comments: [] },
+          });
+          await window.db.memories.clear();
+          await window.db.memories.add({
+            id: 'wp-mem-1', chatId: 'c1', timestamp: now - 86400000, type: 'normal',
+            authorId: 'c1', authorName: '沈清越', description: '测试回忆',
+          });
+          await window.db.npcs.clear();
+          await window.db.npcs.add({ name: '测试NPC', persona: '测试设定', avatar: '' });
+        } catch (e) {}
+      };
+      await seed();
+      const clickTab = async (v) => {
+        try { window.showScreen('chat-list-screen'); } catch (e) {}
+        try { window.switchToChatListView('messages-view'); } catch (e) {}
+        await new Promise((r) => setTimeout(r, 150));
+        const nav = document.querySelector('#chat-list-bottom-nav .nav-item[data-view="' + v + '"]');
+        if (nav) nav.click();
+        await new Promise((r) => setTimeout(r, 1200));
+      };
+      const g = (s) => {
+        const e = document.querySelector(s);
+        if (!e) return { missing: 1 };
+        const c = getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        return { bg: c.backgroundColor, blur: c.backdropFilter, w: Math.round(r.width), h: Math.round(r.height) };
+      };
+
+      for (const [v, cardSel] of [
+        ['memories-view', '#memories-list .memory-card'],
+        ['favorites-view', '#favorites-list .favorite-item-card'],
+        ['npc-list-view', '#npc-list .chat-list-item'],
+      ]) {
+        await clickTab(v);
+        const view = document.getElementById(v);
+        out[v] = {
+          viewBg: view ? getComputedStyle(view).backgroundColor : null,
+          header: g('#' + v + '>.header'),
+          card: g(cardSel),
+        };
+      }
+
+      // 收藏页顶栏的「编辑」不能被挤成竖排 (base.css 写死 width:30px)
+      await clickTab('favorites-view');
+      const editBtn = document.getElementById('favorites-edit-btn');
+      if (editBtn) {
+        const r = editBtn.getBoundingClientRect();
+        out.editBtn = { w: Math.round(r.width), h: Math.round(r.height), ws: getComputedStyle(editBtn).whiteSpace };
       }
       return out;
     });
-    check('回忆 tab 保持不透明白底',
-      tabs['memories-view'] === 'rgb(255, 255, 255)', tabs['memories-view']);
-    check('收藏 tab 保持原来的浅灰底',
-      tabs['favorites-view'] === 'rgb(249, 249, 249)', tabs['favorites-view']);
-    check('NPC tab 保持不透明白底',
-      tabs['npc-list-view'] === 'rgb(255, 255, 255)', tabs['npc-list-view']);
+
+    check('回忆 tab 背景透明 (透出壁纸)',
+      tabs['memories-view'].viewBg === 'rgba(0, 0, 0, 0)', tabs['memories-view'].viewBg);
+    check('收藏 tab 背景透明 (透出壁纸)',
+      tabs['favorites-view'].viewBg === 'rgba(0, 0, 0, 0)', tabs['favorites-view'].viewBg);
+    check('NPC tab 背景透明 (透出壁纸)',
+      tabs['npc-list-view'].viewBg === 'rgba(0, 0, 0, 0)', tabs['npc-list-view'].viewBg);
+    check('三个 tab 的顶栏都是毛玻璃条',
+      ['memories-view', 'favorites-view', 'npc-list-view'].every((k) => /blur/.test(tabs[k].header.blur || '')),
+      JSON.stringify({ m: tabs['memories-view'].header.blur, f: tabs['favorites-view'].header.blur, n: tabs['npc-list-view'].header.blur }));
+    check('回忆卡是半透明玻璃',
+      /rgba\(/.test(tabs['memories-view'].card.bg || ''), tabs['memories-view'].card.bg);
+    check('收藏卡是半透明玻璃',
+      /rgba\(/.test(tabs['favorites-view'].card.bg || ''), tabs['favorites-view'].card.bg);
+    check('NPC 项是半透明玻璃',
+      /rgba\(/.test(tabs['npc-list-view'].card.bg || ''), tabs['npc-list-view'].card.bg);
+    check('收藏页「编辑」按钮不再竖排',
+      !!tabs.editBtn && tabs.editBtn.ws === 'nowrap' && tabs.editBtn.w > tabs.editBtn.h,
+      JSON.stringify(tabs.editBtn));
   } finally {
     await browser.close();
     server.close();

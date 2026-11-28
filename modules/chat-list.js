@@ -167,7 +167,8 @@
         renderQzonePosts();
         break;
       case 'favorites-view':
-        views['favorites-view'].style.backgroundColor = '#f9f9f9';
+        // 收藏页背景改成透明，露出主屏壁纸（样式见 css/wallpaper-surfaces.css）
+        views['favorites-view'].style.backgroundColor = 'transparent';
         renderFavoritesScreen();
         break;
       case 'messages-view':
