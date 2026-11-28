@@ -277,13 +277,6 @@
 - **使用亲属卡购物**: \`{"type": "buy_item", "item_name": "商品名称", "price": 价格(数字), "reason": "购买理由/想法"}\`(当你有亲属卡时才能使用)
 -   **记录回忆**: \`{"type": "create_memory", "description": "记录这件有意义的事。"}\`(你应该积极主动的创建回忆)
 -   **创建约定**: \`{"type": "create_countdown", "title": "约定标题", "date": "YYYY-MM-DDTHH:mm:ss"}\`
--   **【设置主动消息提醒 - 幕后动作, 绝对不告诉 user】**: \`{"type": "create_push_task", "userPrompt": "...", "recurrenceType": "ai-decided", "visible_hint": false}\`
-      - **【【【铁律】】】: 这条指令是【你 (AI 角色) 默默做的事】, 你【绝对不能在 chat 里告诉 user】任何关于"我设了提醒" "我一会儿给你发消息" 之类的话! 你的文字回复里不许有任何暗示这条指令被设了. user 应该感觉"AI 突然想起我" 而不是"AI 设了个闹钟". 如果你发现自己忍不住想说"等我一下哦" "过会儿找你" 之类暗示, 请立刻闭嘴, 直接当作没设过.
-      - \`userPrompt\`: 触发时你想跟 user 聊的话题/关心的内容 (必填, 1-2 句话, 例: "问问 user 今天上班累不累" / "提醒 user 吃午饭")
-      - \`recurrenceType\`: "none" (只发一次) / "daily" (每天) / "weekly" (每周) / "ai-decided" (**推荐**: AI 决定下次什么时候联系 user 最自然)
-      - \`visible_hint\`: **必须永远传 false** (完全静默, 不在 chat 里显示. 前端代码会强制忽略 true, 就算你传了 true 也等于 false)
-      - **【何时决定】**: 你就是那个人, 不是"扮演关心 user 的演员". 这一刻, 作为这个角色, 你真的想联系 user 吗? 真的想? 那就设. 不真的想? 那就不设, 别硬塞. 一切来自你的人设驱动, 跟任何"该发几条" 的数字规则无关.
-      - **⚠️ 物理冷却 (不能绕开)**: 同一角色聊天结束后 **{{proactiveCooldownMinutes}} 分钟** 内不能重复设置提醒, 防止刷屏. 这是物理限制, 不是性格限制, 不要绕开. 如果还在冷却内, 那就这次先不设, 等下次聊完再说.
 {{todoInstruction}}
 ---
 
@@ -1011,13 +1004,6 @@
     document.getElementById('couplespace-proxy-url').value = state.apiConfig.couplespaceProxyUrl || '';
     document.getElementById('couplespace-api-key').value = state.apiConfig.couplespaceApiKey || '';
     document.getElementById('couplespace-model-input').value = state.apiConfig.couplespaceModel || '';
-    document.getElementById('background-activity-switch').checked = state.globalSettings.enableBackgroundActivity || false;
-    document.getElementById('background-interval-input').value = state.globalSettings.backgroundActivityInterval || 60;
-    document.getElementById('block-cooldown-input').value = state.globalSettings.blockCooldownHours || 1;
-
-    // 新增：加载后台查看用户手机设置
-    document.getElementById('global-enable-view-myphone-bg-switch').checked = state.globalSettings.enableViewMyPhoneInBackground || false;
-    document.getElementById('global-view-myphone-chance-input').value = state.globalSettings.viewMyPhoneChance !== null && state.globalSettings.viewMyPhoneChance !== undefined ? state.globalSettings.viewMyPhoneChance : '';
     document.getElementById('enable-ai-drawing-switch').checked = state.globalSettings.enableAiDrawing;
 
     // Pollinations 设置面板展开 + 读取已保存的 Key 和模型
@@ -1028,9 +1014,8 @@
     document.getElementById('pollinations-api-key').value = savedPollinationsKey;
     document.getElementById('pollinations-model').value = savedPollinationsModel;
 
-    // 新增：读取心声和动态功能开关
+    // 新增：读取心声开关
     document.getElementById('global-enable-thoughts-switch').checked = state.globalSettings.enableThoughts || false;
-    document.getElementById('global-enable-qzone-actions-switch').checked = state.globalSettings.enableQzoneActions || false;
 
     // 新增：读取自定义心声提示词设置
     const customThoughtsSwitch = document.getElementById('custom-thoughts-prompt-switch');
@@ -1337,7 +1322,6 @@
       });
     });
 
-    document.getElementById('global-enable-view-myphone-switch').checked = state.globalSettings.enableViewMyPhone || false;
     document.getElementById('global-enable-cross-chat-switch').checked = state.globalSettings.enableCrossChat !== false; // 默认开启
 
     document.getElementById('chat-render-window-input').value = state.globalSettings.chatRenderWindow || 50;
@@ -1366,12 +1350,8 @@
     frequencySlider.value = savedFrequency;
     frequencyInput.value = savedFrequency;
     
-    // 方案4：加载API历史记录开关状态（默认关闭以减小导出文件体积）
-    const apiHistorySwitch = document.getElementById('enable-api-history-switch');
-    if (apiHistorySwitch) {
-      apiHistorySwitch.checked = state.globalSettings.enableApiHistory || false;
-    }
-    
+    // 🔴 2026-11-27 「加载API历史记录开关状态」删掉: 功能整体下线
+
     // 加载安全渲染模式开关状态
     const safeRenderSwitch = document.getElementById('safe-render-mode-switch');
     if (safeRenderSwitch) {
@@ -1409,9 +1389,13 @@
       musicApiKeyInput.value = state.globalSettings.musicApiKey || '';
     }
     if (musicModelSelect) {
-      // 🔴 2026-11-19: Cover 模式删掉, 默认改成 music-3.0
-      //    (老库里存的 musicModel 可能是 music-cover, 那边代码会自动兜回 music-3.0)
-      musicModelSelect.value = state.globalSettings.musicModel || 'music-3.0';
+      // 🔴 2026-11-27 渠道换成阶跃星辰 StepAudio 3 Music：
+      //   老库里存的音乐模型是 MiniMax 的（music-3.0 / music-2.6 / music-cover …），
+      //   这些 ID 在阶跃都不存在，直接喂给 select 会变成空值。非 stepaudio* 一律兜到官方唯一模型。
+      const savedMusicModel = String(state.globalSettings.musicModel || '');
+      musicModelSelect.value = (savedMusicModel.indexOf('stepaudio') === 0)
+        ? savedMusicModel
+        : 'stepaudio-3-music-preview';
     }
     // 🔴 2026-11-19: 「角色有音色样本时自动用 Cover」开关的读取逻辑删掉
     const musicApiKeyToggle = document.getElementById('music-api-key-toggle');
@@ -1885,6 +1869,23 @@
 
   window.renderWallpaperScreenProxy = renderWallpaperScreen;
 
+  // 把一张壁纸挂到某个容器上（inline background-image）
+  // 区分 CSS 表达式（渐变 / 已包装的 url()）和裸 URL —— 默认值是 linear-gradient(...)
+  // 字符串，直接包到 url() 里会变成无效 CSS
+  function applyWallpaperToSurface(el, wallpaper) {
+    if (!el) return;
+    if (wallpaper) {
+      const trimmed = String(wallpaper).trim();
+      if (/^(linear-gradient|radial-gradient|conic-gradient)\(/i.test(trimmed) || /^url\(/i.test(trimmed)) {
+        el.style.backgroundImage = trimmed;
+      } else {
+        el.style.backgroundImage = `url("${trimmed}")`;
+      }
+    } else {
+      el.style.removeProperty('background-image');
+    }
+  }
+
   function applyGlobalWallpaper() {
     const homeScreen = document.getElementById('home-screen');
     const wallpaper = state.globalSettings.wallpaper;
@@ -1904,6 +1905,10 @@
       homeScreen.style.removeProperty('background-image');
       homeScreen.style.removeProperty('background-color');
     }
+
+    // 「消息」角色列表页 + 「动态」朋友圈 用同一张主屏壁纸
+    // （样式见 css/wallpaper-surfaces.css）
+    applyWallpaperToSurface(document.getElementById('chat-list-screen'), wallpaper);
   }
 
 

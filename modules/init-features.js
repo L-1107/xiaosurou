@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // init-features.js
 // 功能模块：init() 函数后半段
 // 从 init-and-state.js 约 10164~17200 行拆分
@@ -1458,56 +1458,7 @@ window.initFeatures = function(state, db) {
       });
     });
 
-    // 清空所有API历史记录
-    document.getElementById('clear-api-history-btn').addEventListener('click', async () => {
-      const confirmed = await showCustomConfirm(
-        '清空所有API历史记录',
-        '此操作将清空所有角色的API调用历史记录。<br><br>这不会影响聊天记录，只是清理调试数据。<br><br><strong>此操作不可撤销，确定继续吗？</strong>',
-        {
-          confirmButtonClass: 'btn-danger',
-          confirmText: '确认清空'
-        }
-      );
-      
-      if (!confirmed) return;
-      
-      try {
-        let clearedCount = 0;
-        let totalSize = 0;
-        
-        // 遍历所有聊天，清空apiHistory
-        const allChats = await db.chats.toArray();
-        for (const chat of allChats) {
-          if (chat.apiHistory && chat.apiHistory.length > 0) {
-            // 计算清理的数据大小（估算）
-            const historySize = JSON.stringify(chat.apiHistory).length;
-            totalSize += historySize;
-            
-            // 删除apiHistory字段
-            delete chat.apiHistory;
-            
-            // 更新数据库
-            await db.chats.put(chat);
-            clearedCount++;
-            
-            // 更新内存中的数据
-            if (state.chats[chat.id]) {
-              delete state.chats[chat.id].apiHistory;
-            }
-          }
-        }
-        
-        const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
-        await showCustomAlert(
-          '清空成功',
-          `已清空 ${clearedCount} 个角色的API历史记录。<br>预计释放约 ${sizeMB} MB 空间。`
-        );
-        
-      } catch (error) {
-        console.error('清空API历史记录失败:', error);
-        await showCustomAlert('清空失败', `发生错误: ${error.message}`);
-      }
-    });
+    // 🔴 2026-11-27 「清空所有API历史记录」按钮 + handler 删掉 (功能整体下线，老数据在启动时一次性清理)
 
     document.getElementById('clear-chat-images-modal').addEventListener('click', (e) => {
       const item = e.target.closest('.clear-posts-item');

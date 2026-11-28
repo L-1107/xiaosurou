@@ -545,7 +545,7 @@
 /* ---------- 26. 天气设置（weather-input-group） ----------
    🔴 2026-11-19: 「实时天气同步」删掉, 这段样式跟着删 (下面 27 号是记忆库/API历史那批) */
 
-/* ---------- 27. 表单按钮（form-button：记忆库/API历史/消息导航区域用） ---------- */
+/* ---------- 27. 表单按钮（form-button） ----------
 #chat-settings-screen .form-button {
     background-color: #5DADE2 !important;
     border: 1px solid #5DADE2 !important;
@@ -603,7 +603,5 @@
     line-height: 1.6 !important;
 }
 
-/* ---------- 34. 存档卡片容器（memory-archive-list） ---------- */
-#chat-settings-screen #memory-archive-list {
-    margin-top: 10px !important;
-}
+/* ---------- 34. 存档卡片容器 ----------
+   🔴 2026-11-27 「记忆库」(存档/读档) 功能删除, #memory-archive-list 的样式跟着删 */

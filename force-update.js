@@ -7,7 +7,7 @@ const ForceUpdater = (() => {
   const FILES_TO_UPDATE = [
     'index.html',
     'online-app.css',
-    'script.js',
+    // 🔴 2026-11-27: 'script.js' 删掉了 —— 3.1MB 混淆旧包, 没有任何 HTML 加载它 (死文件)
     'sw.js',
     'manifest.json',
     'prompt-manager.js',

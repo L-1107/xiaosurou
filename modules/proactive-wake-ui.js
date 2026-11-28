@@ -920,7 +920,7 @@
   // v0.2.28: 重写 — UI 删频率 radio + 加 datetime-local, 改 type=fixed/ai-msg
   //   之前有 4 种模式 (fixed / guided / auto / ai-decided), UI 混乱
   //   现在简化: user 必选时间 + 选 fixed (自己写消息) 或 ai-msg (AI 写消息)
-  //   取代 v0.2.20 round 4 改 noop 的 /api/schedule-ai-task (那条路 user 没法定时间, 永远掉 noop)
+  //   (旧的 "AI 自己建任务" 那条路 v0.2.20 起就是 noop, 已于 2026-11-27 整条删掉)
   async function handleCreateTask() {
     const chatId = document.getElementById('pw-form-chat').value;
     const type = document.getElementById('pw-form-type').value;
@@ -960,7 +960,7 @@
           return;
         }
         // v0.2.28: ai-msg 模式 — user 选时间 + 填 prompt, server 端 LLM 生成具体消息
-        //   取代 v0.2.20 round 4 改 noop 的 /api/schedule-ai-task (那条路 user 没法定时间, 永远掉 noop)
+        //   取代旧的 "AI 自己建任务" 那条路 (v0.2.20 起就是 noop, 已于 2026-11-27 整条删掉)
         await window.ProactiveWake.createFixedTask({
           userMessage: null,
           userPrompt: prompt,

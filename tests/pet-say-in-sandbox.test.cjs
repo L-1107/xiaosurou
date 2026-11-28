@@ -301,7 +301,23 @@ function makeSandbox(cfg) {
     check('读书屋沙盒页的 reading-sandbox.css 对齐 0.1.7', /reading-sandbox\.css\?v=0\.1\.7/.test(sandboxReading));
 
     check('SW 里有这次的变更记录', /v0\.2\.137\.0/.test(sw) && /宠物说的话也要刷进影院/.test(sw));
-    check('SW 的 CACHE_VERSION 已 bump 到 v0.2.142.0', /const CACHE_VERSION = 'v0\.2\.142\.0'/.test(sw));
+    // ⚠️ 这里原来写死 'v0.2.142.0' —— CACHE_VERSION 每 bump 一次就误报一次
+    //   (2026-11-27 实测: 池卡片改版把版本 bump 到 v0.2.143.0, 这个断言就红了,
+    //    跟"宠物说的话刷进影院"没关系, 是【测试自己过期了】)。
+    //   → 改成"不低于 v0.2.143.0": 守住"必须 bump 过"这件事, 又不被后面的 bump 打脸。
+    const cv = (sw.match(/const CACHE_VERSION = '([^']+)'/) || [])[1];
+    const cvParts = String(cv || '').replace(/^v/, '').split('.').map(Number);
+    const cvAtLeast = (v, min) => {
+      if (!v.length || !Number.isFinite(v[0])) return false;
+      for (let i = 0; i < min.length; i++) {
+        if (!Number.isFinite(v[i])) return false;
+        if (v[i] > min[i]) return true;
+        if (v[i] < min[i]) return false;
+      }
+      return true;
+    };
+    check('SW 的 CACHE_VERSION 已 bump（不低于 v0.2.143.0）',
+      cvAtLeast(cvParts, [0, 2, 143, 0]), String(cv));
   }
 
   // ============================================================

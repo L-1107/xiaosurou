@@ -11,13 +11,13 @@
   <link rel="stylesheet" href="css/base.css?v=0.0.42">
   <link rel="stylesheet" href="css/chat-ui.css?v=0.0.38">
   <link rel="stylesheet" href="css/image-nai.css?v=0.0.36">
-  <link rel="stylesheet" href="css/memory.css?v=0.0.36">
+  <link rel="stylesheet" href="css/memory.css?v=0.0.37">
   <link rel="stylesheet" href="css/music-player.css?v=0.0.37">
   <link rel="stylesheet" href="css/video-voice-call.css?v=0.0.54">
   <link rel="stylesheet" href="css/settings-font.css?v=0.0.36">
   <link rel="stylesheet" href="css/main-ui.css?v=0.0.69">
   <link rel="stylesheet" href="css/voice-recording.css?v=0.0.37">
-  <link rel="stylesheet" href="css/features-1.css?v=0.0.43">
+  <link rel="stylesheet" href="css/features-1.css?v=0.0.45">
   <link rel="stylesheet" href="css/features-2.css?v=0.0.36">
   <link rel="stylesheet" href="css/features-3.css?v=0.0.37">
   <link rel="stylesheet" href="css/features-4.css?v=0.0.36">
@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="extra.css?v=0.0.82">
   <link rel="stylesheet" href="css/api-settings-skyblue.css?v=0.0.36">
   <link rel="stylesheet" href="css/wallpaper-screen-skyblue.css?v=0.0.36">
-  <link rel="stylesheet" href="css/chat-settings-skyblue.css?v=0.0.37">
+  <link rel="stylesheet" href="css/chat-settings-skyblue.css?v=0.0.38">
   <link rel="stylesheet" href="css/online-app-skyblue.css?v=0.0.98">
   <!-- chat-list-skyblue.css 暂留空，引入被注释避免重复加载空文件 -->
   <link rel="stylesheet" href="css/long-term-memory-skyblue.css?v=0.0.36">
@@ -139,6 +139,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 拆分后的模块（按依赖顺序加载） -->
   <!-- 第一层：全局工具函数（DOMContentLoaded 之前） -->
   <script src="modules/utils.js?v=0.0.83" defer></script>
+  <!-- 🔴 2026-11-27 新增: AI 后台活动统一配置层 (所有后台活动开关收拢到角色设置里) -->
+  <script src="modules/bg-activity-config.js?v=0.1.0" defer></script>
   <script src="modules/vision-image-service.js?v=0.0.37" defer></script>
   <script src="modules/asr-transcription.js?v=0.0.36" defer></script>
   <script src="modules/translations.js?v=0.0.37" defer></script>
@@ -148,22 +150,22 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- 第二层半：消息数据访问层（需先于聊天核心模块加载） -->
   <script src="modules/message-store.js?v=0.0.38" defer></script>
   <!-- 第三层：核心聊天功能 -->
-  <script src="modules/chat-list.js?v=0.0.37" defer></script>
-  <script src="modules/chat-interface.js?v=0.0.38" defer></script>
+  <script src="modules/chat-list.js?v=0.0.39" defer></script>
+  <script src="modules/chat-interface.js?v=0.0.39" defer></script>
   <script src="modules/chat-input.js?v=0.0.36" defer></script>
   <!-- 第四层：AI 核心 -->
-  <script src="modules/ai-response.js?v=0.0.59" defer></script>
-  <script src="modules/ai-group.js?v=0.0.42" defer></script>
+  <script src="modules/ai-response.js?v=0.0.65" defer></script>
+  <script src="modules/ai-group.js?v=0.0.47" defer></script>
   <!-- 第五层：功能模块 -->
   <script src="modules/music-player.js?v=0.0.46" defer></script>
-  <script src="modules/ai-music.js?v=0.0.81" defer></script>
+  <script src="modules/ai-music.js?v=0.0.83" defer></script>
   <script src="js/ai-songs-store.js?v=0.0.80" defer></script>
   <script src="js/netease-music.js?v=0.0.41" defer></script>
   <script src="js/netease-music-app.js?v=0.0.44" defer></script>
   <!-- 【新增 0.0.43】「今日私选」AI 每日荐歌引擎（画像→候选→验可播→LLM策展→缓存→反馈） -->
   <script src="js/music-daily-discovery.js?v=0.0.5" defer></script>
   <script src="js/custom-music-cover.js?v=0.0.37" defer></script>
-  <script src="modules/qzone.js?v=0.0.37" defer></script>
+  <script src="modules/qzone.js?v=0.0.38" defer></script>
   <script src="modules/sticker-manager.js?v=0.0.36" defer></script>
   <script src="modules/memory-summary.js?v=0.0.44" defer></script>
   <script src="modules/live2d-loader.js?v=0.4.0" defer></script>
@@ -171,11 +173,13 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/call-lip-sync.js?v=0.0.2" defer></script>
   <script src="modules/video-voice-call.js?v=0.0.91" defer></script>
   <script src="modules/message-actions.js?v=0.0.37" defer></script>
-  <script src="modules/nai-imagen.js?v=0.0.36" defer></script>
+  <script src="modules/nai-imagen.js?v=0.0.37" defer></script>
   <script src="modules/backup-import-export.js?v=0.0.40" defer></script>
-  <script src="modules/settings-presets.js?v=0.0.91" defer></script>
-  <script src="modules/chat-settings-presets.js?v=0.0.36" defer></script>
-  <script src="modules/shopping.js?v=0.0.36" defer></script>
+  <script src="modules/settings-presets.js?v=0.0.95" defer></script>
+  <script src="modules/chat-settings-presets.js?v=0.0.37" defer></script>
+  <!-- 🔴 2026-11-27 新增: 角色设置页「AI 后台活动」面板 UI -->
+  <script src="modules/bg-activity-panel.js?v=0.1.0" defer></script>
+  <script src="modules/shopping.js?v=0.0.37" defer></script>
   <script src="modules/rendering-rules.js?v=0.0.36" defer></script>
   <script src="modules/red-packet-poll.js?v=0.0.36" defer></script>
   <script src="modules/persona-library.js?v=0.0.36" defer></script>
@@ -213,16 +217,16 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- Gemini 3.8 Live 纯协议层 (无 DOM)。Cinema Room 与已删除的旧观影共用这一份。必须在 init-features.js 之前加载。 -->
   <script src="modules/live-client.js?v=0.6.0" defer></script>
   <script src="modules/notification-battery.js?v=0.0.49" defer></script>
-  <script src="modules/background-activity.js?v=0.0.51" defer></script>
-  <script src="modules/proactive-wake.js?v=0.2.16" defer></script>      
+  <script src="modules/background-activity.js?v=0.0.54" defer></script>
+  <script src="modules/proactive-wake.js?v=0.2.17" defer></script>      
   <script src="modules/in-app-proactive-patrol.js?v=0.2.18" defer></script>
-  <script src="modules/proactive-wake-ui.js?v=0.2.28" defer></script>
+  <script src="modules/proactive-wake-ui.js?v=0.2.29" defer></script>
   <!-- ?v= 跟 v0.2.20 一致 (CACHE_VERSION bump 时再加 ?v bump) -->
   <link rel="stylesheet" href="css/proactive-wake.css?v=0.2.01">
   <script src="modules/card-import.js?v=0.0.36" defer></script>
   <script src="modules/character-export.js?v=0.0.36" defer></script>
   <script src="modules/data-management.js?v=0.0.39" defer></script>
-  <script src="modules/misc-features.js?v=0.0.45" defer></script>
+  <script src="modules/misc-features.js?v=0.0.46" defer></script>
   <script src="modules/system-settings-home.js?v=0.0.37" defer></script>
   <!-- 第八层：初始化（必须在所有模块之后） -->
   <!-- 数据定义（无依赖） -->
@@ -249,9 +253,9 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <!-- PIN/城市（依赖 DOM） -->
   <script src="modules/init-pin-city.js?v=0.0.37" defer></script>
   <!-- 事件绑定和功能（依赖 state, db） -->
-  <script src="modules/init-event-bindingsA.js?v=0.0.51" defer></script>
-  <script src="modules/init-event-bindingsB.js?v=0.0.43" defer></script>
-  <script src="modules/init-features.js?v=0.0.47" defer></script>
+  <script src="modules/init-event-bindingsA.js?v=0.0.55" defer></script>
+  <script src="modules/init-event-bindingsB.js?v=0.0.46" defer></script>
+  <script src="modules/init-features.js?v=0.0.48" defer></script>
   <!-- Cinema Room (v0.1.0, 2026-10-04 第一阶段): 家庭影院模块。
        旧「一起看电影」已于 2026-10-07 整体删除(代码+入口), 只保留本模块。
        Gemini 协议层仍是 live-client.js (与旧观影共用过, 现为影院独占)。
@@ -392,7 +396,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="modules/pet-speech.js?v=0.0.6" defer></script>
   <link rel="stylesheet" href="css/pet-nest.css?v=0.0.20">
   <!-- 主入口（最后加载，调用 init） -->
-  <script src="modules/init-and-state.js?v=0.0.85" defer></script>
+  <script src="modules/init-and-state.js?v=0.0.87" defer></script>
   <!-- 第九层：DOMContentLoaded 外部的独立模块 -->
   <script src="modules/video-optimization.js?v=0.0.36" defer></script>
   <script src="modules/voice-recording.js?v=0.0.36" defer></script>
@@ -400,7 +404,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <script src="period-tracker.js?v=0.0.36" defer></script>
   <script src="focus-timer.js?v=0.0.37" defer></script>
   <!-- 情侣空间（从内联 script 拆分） -->
-  <script src="couple-space.js?v=0.0.39"></script>
+  <script src="couple-space.js?v=0.0.41"></script>
   <script src="force-update.js?v=0.0.36" defer></script>
   <script src="modules/floating-ball.js?v=0.0.42" defer></script>
   
@@ -420,6 +424,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
   <link rel="stylesheet" href="css/live2d-manager.css?v=0.0.2">
   <!-- v0.5.0 P11: 通话舞台背景管理页 CSS -->
   <link rel="stylesheet" href="css/live2d-bg-manager.css?v=0.0.1">
+  <!-- v0.2.143.11 「消息」角色列表页 + 「动态」朋友圈 壁纸玻璃化 (排最后, 要压住前面的基础样式) -->
+  <link rel="stylesheet" href="css/wallpaper-surfaces.css?v=0.0.2">
 </head>
 <body>
   <div id="phone-screen">
@@ -2154,18 +2160,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     <input type="number" id="gemini-pool-cooldown" class="settings-num-input" min="5" max="3600" step="5">
                 </div>
             </div>
-            <div class="settings-item">
+            <div class="settings-item gemini-pool-stacked-item">
                 <label>Key 状态</label>
-                <div class="settings-right" style="width: 100%;">
-                    <div id="gemini-pool-status-list" class="settings-description" style="width: 100%;"></div>
-                </div>
+                <div id="gemini-pool-status-list" class="settings-description gemini-pool-status"></div>
             </div>
-            <div class="settings-item">
+            <div class="settings-item gemini-pool-stacked-item">
                 <label>最近错误</label>
-                <div class="settings-right" style="width: 100%;">
-                    <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn">展开 / 收起</button>
-                    <div id="gemini-pool-error-log" class="settings-description" style="display: none; width: 100%; max-height: 220px; overflow: auto;"></div>
-                </div>
+                <button type="button" id="gemini-pool-error-toggle" class="settings-mini-btn gemini-pool-error-toggle">展开 / 收起</button>
+                <div id="gemini-pool-error-log" class="settings-description gemini-pool-error-log" style="display: none;"></div>
             </div>
         </div>
 
@@ -2396,47 +2398,6 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             </div>
         </div>
 
-        <!-- 后台与自动化 -->
-        <div class="settings-header" data-lang-key="apiBgActivitySettings">后台活动</div>
-        <div class="settings-section" data-section="sec-bg-activity">
-            <div class="settings-item">
-                <label>启用后台角色活动</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="background-activity-switch">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div class="settings-item">
-                <label>检测间隔 (秒)</label>
-                <div class="settings-right">
-                    <input type="number" id="background-interval-input" min="30" value="60" class="settings-num-input">
-                </div>
-            </div>
-            <div class="settings-item">
-                <label>拉黑冷静期 (小时)</label>
-                <div class="settings-right">
-                    <input type="number" id="block-cooldown-input" min="0.1" step="0.1" value="1" class="settings-num-input">
-                </div>
-            </div>
-        </div>
-
-        <div class="settings-section" data-section="sec-bg-activity-2">
-            <div class="settings-item">
-                <label>后台查看用户手机</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="global-enable-view-myphone-bg-switch">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div class="settings-item">
-                <label>查看概率 (%)</label>
-                <div class="settings-right">
-                    <input type="number" id="global-view-myphone-chance-input" min="0" max="100" placeholder="留空=AI自主决定" class="settings-num-input">
-                </div>
-            </div>
-        </div>
-        <div class="settings-desc">开启后台活动会增加 API 费用。后台查看手机：留空概率时AI自主决定，填写0-100则按概率触发。</div>
-
         <!-- 语音设置 -->
         <div class="settings-header" data-lang-key="apiTtsSettings">语音播报</div>
         <div class="settings-section" data-section="sec-voice-msg">
@@ -2463,11 +2424,12 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             </div>
         </div>
 
-        <!-- 音乐生成设置 -->
+        <!-- 音乐生成设置 (2026-11-27 渠道换阶跃星辰: MiniMax 已停用) -->
         <div class="settings-header" data-lang-key="apiMusicGenSettings">音乐生成</div>
         <div class="settings-section" data-section="sec-music-gen">
             <div class="settings-item" style="font-size:11px; color:#888; padding: 8px 15px;">
-                音乐生成使用 MiniMax 官方音乐生成平台（api.minimaxi.com）
+                音乐生成使用阶跃星辰 StepAudio 3 Music（api.stepfun.com）<br>
+                Key 需在 <b>platform.stepfun.com</b> 自己申请，填在下面；没有免费额度，按生成音频时长计费（16 元/输出小时，约 0.8 元一首 3 分钟）
             </div>
             <div class="settings-item">
                 <label>启用 AI 唱歌</label>
@@ -2481,7 +2443,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     <label>API Key</label>
                     <div class="settings-right">
                         <div style="position:relative; width:100%;">
-                            <input type="password" id="music-api-key" placeholder="留空则使用 MiniMax 主 API key">
+                            <input type="password" id="music-api-key" placeholder="填阶跃星辰的 API Key（不是聊天用的那个）">
                             <span id="music-api-key-toggle" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); cursor: pointer;">🧐</span>
                         </div>
                     </div>
@@ -2489,19 +2451,14 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <div class="settings-item">
                     <label>音乐模型</label>
                     <div class="settings-right">
-                        <!-- 🔴 2026-11-19: Cover 那组删掉 (专属音色样本 + Cover 模式一起下线了) -->
+                        <!-- 🔴 2026-11-27: 换成阶跃星辰。官方目前只有这一个音乐模型, 必须带 -preview 后缀 -->
                         <select id="music-model-select" class="settings-select">
-                            <optgroup label="普通生成">
-                                <option value="music-3.0" selected>music-3.0</option>
-                                <option value="music-2.6">music-2.6</option>
-                                <option value="music-2.6-free">music-2.6-free</option>
-                                <option value="music-2.5+">music-2.5+</option>
-                                <option value="music-2.5">music-2.5</option>
+                            <optgroup label="阶跃星辰 StepAudio 3">
+                                <option value="stepaudio-3-music-preview" selected>stepaudio-3-music-preview</option>
                             </optgroup>
                         </select>
                     </div>
                 </div>
-                <!-- 🔴 2026-11-19: 「角色有音色样本时自动用 Cover」开关删掉 -->
             </div>
         </div>
 
@@ -2873,16 +2830,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     <input type="number" id="chat-render-window-input" class="settings-num-input">
                 </div>
             </div>
-            <div class="settings-item">
-                <div>
-                    <div style="font-weight: 500;">启用API历史记录</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">用于调试API请求，关闭可减小数据库体积（推荐关闭）</div>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="enable-api-history-switch">
-                    <span class="slider"></span>
-                </label>
-            </div>
+            <!-- 🔴 2026-11-27 「启用API历史记录」开关删掉: 功能整体下线, 不再采集 -->
         </div>
 
         <!-- AI行为控制 (全局默认) -->
@@ -3030,28 +2978,6 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                         <input type="file" id="import-chat-prompt-file" accept=".json" style="display:none;">
                     </div>
                 </div>
-            </div>
-            
-            <div class="settings-item">
-                <div>
-                    <div style="font-weight: 500;">启用动态功能</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">AI可以主动发动态、评论、点赞</div>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="global-enable-qzone-actions-switch">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            
-            <div class="settings-item">
-                <div>
-                    <div style="font-weight: 500;">查看User手机</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">AI可以主动查看你的手机APP（QQ、相册、淘宝、高德等），并给出感想</div>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="global-enable-view-myphone-switch">
-                    <span class="slider"></span>
-                </label>
             </div>
             
             <div class="settings-item">
@@ -3452,7 +3378,6 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             <!-- 列表按钮：黑色左对齐 -->
             <button class="settings-full-btn" id="clear-chat-images-btn">清空聊天的本地图片</button>
             <button class="settings-full-btn" id="clear-chat-html-btn">清空聊天的HTML内容</button>
-            <button class="settings-full-btn" id="clear-api-history-btn">清空所有API历史记录</button>
             <button class="settings-full-btn" id="clear-stickers-btn">一键清空表情包</button>
             <button class="settings-full-btn" id="view-data-distribution-btn" data-lang-key="apiViewDataDistributionBtn">查看数据分布</button>
             <button class="settings-full-btn" id="export-data-btn" data-lang-key="apiExportDataBtn">导出所有数据</button>
@@ -3734,8 +3659,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             </p>
           </div>
           <hr style="opacity: 0.2;">
-          <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;"> <label for="npc-background-activity-switch" style="margin-bottom: 0;"> 启用独立后台活动 <p style="font-size: 12px; font-weight: normal; color: #999; margin-top: 5px;">
-                允许该NPC在后台独立发表动态评论。需同时开启API设置中的总开关。 </p> </label> <label class="toggle-switch"> <input type="checkbox" id="npc-background-activity-switch"> <span class="slider"></span> </label> </div>
+          <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;"> <label for="npc-post-switch" style="margin-bottom: 0;"> 发动态 <p style="font-size: 12px; font-weight: normal; color: #999; margin-top: 5px;">
+                允许该 NPC 在后台自己发说说、发文字图。 </p> </label> <label class="toggle-switch"> <input type="checkbox" id="npc-post-switch"> <span class="slider"></span> </label> </div>
+          <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;"> <label for="npc-comment-switch" style="margin-bottom: 0;"> 评论动态 <p style="font-size: 12px; font-weight: normal; color: #999; margin-top: 5px;">
+                允许该 NPC 在后台评论、回复、点赞别人的动态。 </p> </label> <label class="toggle-switch"> <input type="checkbox" id="npc-comment-switch"> <span class="slider"></span> </label> </div>
           <div class="form-group"> <label for="npc-action-cooldown-input"> 独立行动冷却 (分钟) <p style="font-size: 12px; font-weight: normal; color: #999; margin-top: 5px;"> 该NPC在后台主动行动的最小间隔。 </p> </label> <input type="number" id="npc-action-cooldown-input" min="1" value="15"
               style="width: 80px; text-align: center;"> </div>
           <div class="form-group"> <label>关联的角色 (NPC会去评论这些角色的动态)</label>
@@ -5290,16 +5217,99 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                     </label>
                 </div>
                 
-                <!-- 启用独立后台活动 -->
+                <!-- 🔴 2026-11-27: AI 后台活动 —— 所有后台活动开关收拢到这一块 (一个角色一套) -->
                 <div class="settings-item" style="display: flex !important; justify-content: space-between !important; align-items: center !important; flex-direction: row !important;">
                      <div style="flex: 1; padding-right: 10px; display: flex; flex-direction: column; align-items: flex-start;">
-                        <label style="margin-bottom: 2px;">启用独立后台活动</label>
-                        <div class="settings-desc">允许角色在后台主动发消息</div>
+                        <label style="margin-bottom: 2px;">AI 后台活动</label>
+                        <div class="settings-desc">这个角色在你没聊天时自己会做的事</div>
                     </div>
                     <label class="toggle-switch" style="margin: 0;">
-                        <input type="checkbox" id="char-background-activity-switch">
+                        <input type="checkbox" id="char-bg-activity-switch">
                         <span class="slider"></span>
                     </label>
+                </div>
+
+                <div id="char-bg-activity-panel" style="display:none;">
+                    <!-- 活动项清单 (JS 按 BgActivityConfig.BG_ACTS 动态生成)
+                         ★ 2026-11-27: 10 项太多, 铺开一眼看过去全是开关 →
+                           收进「会做什么 (已开 N / 10)」折叠下拉, 默认收起, 列表自己可滚 -->
+                    <div class="char-bg-couple">
+                        <button type="button" class="char-bg-couple-trigger" id="char-bg-acts-toggle" aria-expanded="false">
+                            <span>会做什么（已开 <span id="char-bg-acts-count">0</span> / <span id="char-bg-acts-total">10</span>）</span>
+                            <span class="char-bg-couple-arrow" id="char-bg-acts-arrow">▾</span>
+                        </button>
+                        <div class="char-bg-couple-list" id="char-bg-activity-acts"></div>
+                    </div>
+
+                    <!-- 冷却 -->
+                    <div class="settings-item">
+                        <label>独立行动冷却 (分钟)</label>
+                        <div class="settings-right">
+                            <input type="number" id="char-bg-activity-cooldown" min="1" value="15" class="settings-num-input">
+                        </div>
+                    </div>
+
+                    <!-- 拉黑冷静期 -->
+                    <div class="settings-item">
+                        <label>拉黑冷静期 (小时)</label>
+                        <div class="settings-right">
+                            <input type="number" id="char-bg-block-cooldown" min="0.1" step="0.1" value="1" class="settings-num-input">
+                        </div>
+                    </div>
+
+                    <!-- 偷看手机概率 (只在偷看开关开着时显示) -->
+                    <div class="settings-item" id="char-bg-peek-chance-row" style="display:none;">
+                        <label>偷看手机概率 (%)</label>
+                        <div class="settings-right">
+                            <input type="number" id="char-bg-peek-chance" min="0" max="100" placeholder="留空=AI自主决定" class="settings-num-input">
+                        </div>
+                    </div>
+
+                    <!-- 情侣空间 -->
+                    <div class="settings-item" style="border-top: 1px dashed rgba(255, 182, 193, 0.4); padding-top: 10px; margin-top: 6px;">
+                        <div style="flex: 1; padding-right: 10px; display: flex; flex-direction: column; align-items: flex-start;">
+                            <label style="margin-bottom: 2px;">情侣空间</label>
+                            <div class="settings-desc">角色自己写日记 / 发照片 / 留言…</div>
+                        </div>
+                        <label class="toggle-switch" style="margin: 0;">
+                            <input type="checkbox" id="char-couple-space-switch">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div id="char-couple-space-panel" style="display:none;">
+                        <div class="settings-item">
+                            <label>触发方式</label>
+                            <div class="settings-right">
+                                <select id="char-couple-space-mode" class="settings-select">
+                                    <option value="off">关闭</option>
+                                    <option value="scheduled">定时</option>
+                                    <option value="ai">AI 自主决定</option>
+                                    <option value="both">都要</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="settings-item" id="char-couple-space-time-row">
+                            <label>每天几点</label>
+                            <div class="settings-right">
+                                <input type="time" id="char-couple-space-time" class="settings-num-input">
+                            </div>
+                        </div>
+                        <div class="settings-item" id="char-couple-space-prob-row">
+                            <label>触发概率 (%)</label>
+                            <div class="settings-right">
+                                <input type="number" id="char-couple-space-prob" min="0" max="100" class="settings-num-input">
+                            </div>
+                        </div>
+                        <!-- 13 项子功能: 折叠下拉 + 可滚动 (不能铺开, 也不能选不到下面) -->
+                        <div class="char-bg-couple">
+                            <button type="button" class="char-bg-couple-trigger" id="char-couple-space-feats-toggle" aria-expanded="false">
+                                <span>写什么（已开 <span id="char-couple-space-feats-count">0</span> / 11）</span>
+                                <span class="char-bg-couple-arrow" id="char-couple-space-feats-arrow">▾</span>
+                            </button>
+                            <div class="char-bg-couple-list" id="char-couple-space-feats-list"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 启用主动消息 (2026-07-18 加) -->
@@ -5316,36 +5326,6 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <!-- v0.1.90 新增 / v0.1.91 改: 投递模式提示 (永远显示当前投递方式, 不再说"开关无效") -->
                 <div id="char-proactive-mode-hint" class="settings-desc" style="display:none; color:#E56B82; font-weight:600; margin-top:4px;"></div>
 
-                <!-- 允许角色清空购物车 -->
-                <div class="settings-item" style="display: flex !important; justify-content: space-between !important; align-items: center !important; flex-direction: row !important;">
-                     <div style="flex: 1; padding-right: 10px; display: flex; flex-direction: column; align-items: flex-start;">
-                        <label style="margin-bottom: 2px;">允许自动清空购物车</label>
-                        <div class="settings-desc">角色可用自己的余额帮你清空购物车</div>
-                    </div>
-                    <label class="toggle-switch" style="margin: 0;"> 
-                        <input type="checkbox" id="char-auto-cart-clear-switch"> 
-                        <span class="slider"></span> 
-                    </label>
-                </div>
-                
-                <!-- 后台查看用户手机 -->
-                <div class="settings-item" style="display: flex !important; justify-content: space-between !important; align-items: center !important; flex-direction: row !important;">
-                    <label>后台查看用户手机</label>
-                    <select id="char-view-myphone-bg-select" style="width: auto; min-width: 100px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--secondary-bg); color: var(--text-color);">
-                        <option value="null">跟随全局</option>
-                        <option value="true">开启</option>
-                        <option value="false">关闭</option>
-                    </select>
-                </div>
-                
-                <!-- 查看概率 -->
-                <div class="settings-item">
-                    <label>查看概率 (%)</label>
-                    <div class="settings-right">
-                        <input type="number" id="char-view-myphone-chance-input" min="0" max="100" placeholder="留空=使用全局" class="settings-num-input">
-                    </div>
-                </div>
-
             </div>
 
             <!-- 群聊后台 -->
@@ -5357,13 +5337,8 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 <label class="toggle-switch"> <input type="checkbox" id="group-background-activity-switch"> <span class="slider"></span> </label>
             </div>
 
-            <!-- 冷却时间 -->
-            <div class="settings-item" id="ai-cooldown-group">
-                <label>独立行动冷却 (分钟)</label>
-                <div class="settings-right">
-                     <input type="number" id="ai-action-cooldown-input" class="settings-num-input">
-                </div>
-            </div>
+            <!-- 🔴 2026-11-27 「独立行动冷却」搬进【角色聊天设置 → AI 后台活动】面板
+                 (原来这里还有一个同名输入框, 写的是旧字段, 跟面板那个并存 → 用户改到哪个都可能白改) -->
             <div class="settings-item" id="group-cooldown-group">
                 <label>群聊行动冷却 (分钟)</label>
                 <div class="settings-right">
@@ -5569,30 +5544,10 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
                 </select>
             </div>
             
-            <div class="settings-item" id="ai-behavior-qzone-item">
-                <div>
-                    <div style="font-weight: 500;">启用动态功能</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">AI可以主动发动态、评论、点赞</div>
-                </div>
-                <select id="chat-enable-qzone-actions-select" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); background-color: var(--secondary-bg);">
-                    <option value="null">使用全局设置</option>
-                    <option value="true">开启</option>
-                    <option value="false">关闭</option>
-                </select>
-            </div>
-            
-            <div class="settings-item" id="ai-behavior-view-myphone-item">
-                <div>
-                    <div style="font-weight: 500;">查看User手机</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">AI可以主动查看你的手机APP，并给出感想</div>
-                </div>
-                <select id="chat-enable-view-myphone-select" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); background-color: var(--secondary-bg);">
-                    <option value="null">使用全局设置</option>
-                    <option value="true">开启</option>
-                    <option value="false">关闭</option>
-                </select>
-            </div>
-            
+            <!-- 🔴 2026-11-27 「启用动态功能」「查看User手机」两个角色级下拉删掉
+                 动态 / 看手机现在由下面那块「AI 后台活动」面板统一管
+                 (发自己的动态 / 互动别人的动态 / 偷看我的手机), 不再有两套开关打架 -->
+
             <div class="settings-item" id="ai-behavior-cross-chat-item">
                 <div>
                     <div style="font-weight: 500;">跨聊天消息</div>
@@ -5607,7 +5562,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
             
             <div class="settings-item" id="ai-behavior-status-item">
                 <div style="font-size: 12px; color: #666; padding: 10px; background: #f5f5f5; border-radius: 6px; width: 100%;">
-                    💡 当前全局设置：心声功能 <span id="global-thoughts-status">关闭</span>，动态功能 <span id="global-qzone-status">关闭</span>，查看手机 <span id="global-view-myphone-status">关闭</span>，跨聊天消息 <span id="global-cross-chat-status">开启</span>
+                    💡 当前全局设置：心声功能 <span id="global-thoughts-status">关闭</span>，跨聊天消息 <span id="global-cross-chat-status">开启</span>
                 </div>
             </div>
         </div>
@@ -5617,64 +5572,12 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
 
         <!-- 视频通话优化设置 (P3-2: 已删除, 功能迁移到 #live2d-call-prep-screen 的"我的画面"卡片) -->
 
-        <!-- 记忆库区域 -->
-        <div class="settings-section" id="memory-archive-section">
-            <div class="settings-item">
-                <label style="font-weight: 600; font-size: 16px;">记忆库</label>
-            </div>
-            
-            <div id="memory-archive-container" style="padding: 0 15px;">
-                <div style="margin-bottom: 15px; color: var(--text-secondary); font-size: 13px;">
-                    保存当前聊天的所有记录和设置（人设、头像、长期记忆、语音、预设等），方便多路线管理
-                </div>
-                
-                <button id="save-memory-archive-btn" class="form-button" style="margin-bottom: 15px;">
-                    保存当前状态
-                </button>
-                
-                <div id="memory-archive-list" style="display: flex; flex-direction: column; gap: 10px;">
-                    <!-- 存档列表将动态生成 -->
-                </div>
-            </div>
-        </div>
-
-        <!-- API调用历史区域 -->
-        <div class="settings-section" id="api-history-section">
-            <div class="settings-item">
-                <label style="font-weight: 600; font-size: 16px;">API调用历史</label>
-            </div>
-            
-            <div style="padding: 0 15px;">
-                <div style="margin-bottom: 15px; color: var(--text-secondary); font-size: 13px;">
-                    查看每次发送给AI的原始提示词、调用信息和返回的原始数据
-                </div>
-                
-                <button id="view-api-history-btn" class="form-button" style="margin-bottom: 15px;">
-                    查看返回的提示词
-                </button>
-            </div>
-        </div>
-
-        <!-- 消息导航区域 -->
-        <div class="settings-section" id="message-navigation-section">
-            <div class="settings-item">
-                <label style="font-weight: 600; font-size: 16px;">消息导航</label>
-            </div>
-            
-            <div style="padding: 0 15px;">
-                <div style="margin-bottom: 15px; color: var(--text-secondary); font-size: 13px;">
-                    快速跳转到聊天记录的开头或结尾。当聊天记录较多时，可能会有轻微延迟。
-                </div>
-                
-                <button id="scroll-to-first-message-btn" class="form-button" style="margin-bottom: 10px;">
-                    回到第一条消息
-                </button>
-                
-                <button id="scroll-to-last-message-btn" class="form-button" style="margin-bottom: 15px;">
-                    回到最后一条消息
-                </button>
-            </div>
-        </div>
+        <!-- 🔴 2026-11-27 删掉三块没人用的垃圾功能 (用户: "没什么用的垃圾功能")
+             ① #memory-archive-section 「记忆库」= 存档/读档 (chat.memoryArchives)
+             ② #api-history-section 「API调用历史」= 调试用的原始请求/响应记录
+             ③ #message-navigation-section 「消息导航」= 回到第一条/最后一条
+             代码见 modules/init-event-bindingsB.js / init-event-bindingsA.js
+             ⚠️ 别跟 vector-memory.js / memory-summary.js 的真·记忆系统搞混, 那个没动 -->
 
         <!-- 第四组：高级功能 (TTS, NAI, 线下模式) -->
         <div class="settings-section">
@@ -8619,39 +8522,7 @@ a.hot-news-title:hover { color:#c1272d; text-decoration:underline; }
       </div>
     </div>
 
-    <!-- API调用历史查看器模态窗口 -->
-    <div id="api-history-modal" class="modal">
-      <div class="modal-content" style="height: 90%; max-width: 900px;">
-        <div class="modal-header">
-          <span>API调用历史 - 提示词和返回数据</span>
-        </div>
-        <div class="modal-body" style="padding: 0; height: calc(100% - 100px); overflow: hidden; display: flex; flex-direction: column;">
-          <div style="padding: 15px; border-bottom: 1px solid var(--border-color); background: var(--bg-secondary);">
-            <div style="color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">
-              记录了每次API调用的完整请求和响应数据，包括发送的提示词、系统提示、历史消息以及AI返回的原始数据
-            </div>
-            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px;">
-                <input type="checkbox" id="api-history-select-all" style="cursor: pointer;">
-                全选
-              </label>
-              <button id="api-history-delete-btn" class="form-button-secondary" style="padding: 8px 15px;">
-                删除选中
-              </button>
-              <button id="api-history-export-btn" class="form-button" style="padding: 8px 15px;">
-                导出为JSON
-              </button>
-            </div>
-          </div>
-          <div id="api-history-list" style="flex: 1; overflow-y: auto; padding: 15px;">
-            <!-- API调用历史列表将动态生成 -->
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="cancel" id="close-api-history-btn">关闭</button>
-        </div>
-      </div>
-    </div>
+    <!-- 🔴 2026-11-27 「API调用历史查看器」整个删掉 (连同上面对应的入口按钮) -->
 
 <!-- ▼▼▼ 你画我猜功能 ▼▼▼ -->
 <div id="draw-guess-screen" class="screen">

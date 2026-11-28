@@ -481,7 +481,11 @@
           case 'blocked_by_user':
             const isSimulationRunning = simulationIntervalId !== null;
             const blockedTimestamp = chat.relationship.blockedTimestamp;
-            const cooldownHours = state.globalSettings.blockCooldownHours || 1;
+            // 2026-11-27: 拉黑冷静期 + 后台活动开关都下沉到【角色级】 (bgActivity)
+            const bgCfg = (window.BgActivityConfig && typeof window.BgActivityConfig.getBgActivityConfig === 'function')
+                ? window.BgActivityConfig.getBgActivityConfig(chat)
+                : { enabled: false, blockCooldownHours: (state.globalSettings.blockCooldownHours || 1) };
+            const cooldownHours = bgCfg.blockCooldownHours || 1;
             const cooldownMilliseconds = cooldownHours * 60 * 60 * 1000;
             const timeSinceBlock = Date.now() - blockedTimestamp;
             const isCooldownOver = timeSinceBlock > cooldownMilliseconds;
@@ -492,12 +496,12 @@
                                 <button id="unblock-btn" class="lock-action-btn">解除拉黑</button>
                                 <div style="margin-top: 20px; padding: 10px; border: 1px dashed #ccc; border-radius: 8px; font-size: 11px; text-align: left; color: #666; background: rgba(0,0,0,0.02);">
                                     <strong style="color: #333;">【开发者诊断面板】</strong><br>
-                                    - 后台活动总开关: ${state.globalSettings.enableBackgroundActivity ? '<span style="color: green;">已开启</span>' : '<span style="color: red;">已关闭</span>'}<br>
+                                    - 该角色后台活动: ${bgCfg.enabled ? '<span style="color: green;">已开启</span>' : '<span style="color: red;">已关闭</span>'}<br>
                                     - 系统心跳计时器: ${isSimulationRunning ? '<span style="color: green;">运行中</span>' : '<span style="color: red;">未运行</span>'}<br>
                                     - 当前角色状态: <strong>${chat.relationship.status}</strong><br>
                                     - 需要冷静(小时): <strong>${cooldownHours}</strong><br>
                                     - 冷静期是否结束: ${isCooldownOver ? '<span style="color: green;">是</span>' : `<span style="color: orange;">否 (还剩约 ${timeRemainingMinutes} 分钟)</span>`}<br>
-                                    - 触发条件: ${isCooldownOver && state.globalSettings.enableBackgroundActivity ? '<span style="color: green;">已满足，等待下次系统心跳</span>' : '<span style="color: red;">未满足</span>'}
+                                    - 触发条件: ${isCooldownOver && bgCfg.enabled ? '<span style="color: green;">已满足，等待下次系统心跳</span>' : '<span style="color: red;">未满足</span>'}
                                 </div>
                                 <button id="force-apply-check-btn" class="lock-action-btn secondary" style="margin-top: 10px;">强制触发一次好友申请检测</button>
                             `;

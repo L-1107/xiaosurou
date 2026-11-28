@@ -546,127 +546,6 @@
     return 0;
   }
 
-  // ===== 暴露 API 供调试 / 手动创建任务 =====
-  // user 在桌面 console 调: await ProactiveWake.createTask({ userPrompt: '跟 user 聊今天吃了啥', recurrenceType: 'ai-decided' })
-  async function createTask(options = {}) {
-    const {
-      userPrompt = '跟 user 聊聊天',
-      recurrenceType = 'ai-decided',
-      contactName = null,
-      chatId = null
-    } = options;
-
-    const state = window.state;
-    if (!state) throw new Error('window.state 不可用');
-
-    // v0.2.07+: 移除 v0.1.91 误加的 mode !== 'push' throw 拦截
-    // 设计: createTask 只服务 push 模式, 但拦截由管理页面 UI 控制 (app 模式时隐藏 [+ 创建任务] 按钮)
-    // 这里不再 hard reject — 防御性检查留给 push-server 端 (subscription 检查)
-    // (角色级总开关 chat.settings.proactiveEnabled 在下面单独检查, 这里只管渠道)
-
-    // 1. 拿当前 chat (优先 activeChatId)
-    const activeChatId = chatId || state.activeChatId;
-    const chat = activeChatId ? state.chats?.[activeChatId] : null;
-    const finalContactName = contactName || chat?.name || 'AI 角色';
-    const finalChatId = chatId || activeChatId;
-
-    if (!finalChatId) throw new Error('没指定 chatId 且当前不在 chat 中');
-    if (!chat && !contactName) throw new Error('没 chat 上下文, 请传 contactName');
-
-    // v0.1.91+ 角色级总开关: 关掉的话两个渠道都不发 (app 和 push 都跳过)
-    // 设计: 角色级开关 = "能不能发" (总开关) + 全局 mode = "用什么发" (渠道), 两个独立维度
-    if (chat && chat.settings?.proactiveEnabled !== true) {
-      throw new Error(`角色 "${chat.name}" 未启用主动消息, 不能创建推送任务. 请在角色设置 → 启用主动消息 打开开关`);
-    }
-
-    // 冷却检查 (v0.1.87+)
-    if (chat && isCooldownActive(chat)) {
-      const remaining = getCooldownRemainingMinutes(chat);
-      throw new Error(`冷却中: 同一角色聊天结束后 ${getCooldownMinutes()} 分钟内不能创建新任务, 还剩 ${remaining} 分钟`);
-    }
-
-    // 2. 拿 user LLM 配置 (push-server 内部 LLM 用)
-    // v0.2.09 修: 之前 v0.2.06 读 globalSettings.apiUrl 是错的, 主 API 实际在 state.apiConfig
-    // (user 截图 "user 没配 LLM" 误报 → 实际 user 在 API 设置配了, 字段读错)
-    // v0.2.12 修: 优先直连 URL, 不传 proxyUrl (push-server 在云端, 不需要 CORS 绕过)
-    const apiConfig = state.apiConfig || {};
-    const settings = state.globalSettings || {};
-    const aiApiUrl = apiConfig.apiUrl || apiConfig.mainApiUrl || apiConfig.proxyUrl || settings.apiUrl || settings.mainApiUrl;
-    const aiApiKey = apiConfig.apiKey || apiConfig.mainApiKey || settings.apiKey || settings.mainApiKey;
-    const aiModel = apiConfig.model || apiConfig.mainModel || settings.model || settings.mainModel || 'MiniMax/M3';
-    if (!aiApiUrl || !aiApiKey) {
-      throw new Error('user 没配 LLM (state.apiConfig.apiUrl/apiKey)');
-    }
-
-    // 3. 拿 push server URL
-    const pushConfig = settings.systemNotification?.pushServer || {};
-    const serverUrl = (pushConfig.serverUrl || '').replace(/\/$/, '');
-    if (!serverUrl) throw new Error('push serverUrl 没配');
-
-    // 4. 拿 push subscription (从 indexedDB 重新查)
-    const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
-    if (!subscription) throw new Error('还没订阅推送, 请先在通知推送栏启用');
-
-    // 5. 拿 userId (v0.2.10+: 每 PWA 唯一 UUID, 防止串台)
-    const userId = getOrCreatePushUserId();
-    if (!userId) throw new Error('userId 找不到');
-
-    // 6. 拿 user 当地当前时间
-    const now = new Date();
-    const localTime = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
-    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-    // 7. 提取最近 20 条聊天历史作为 context (v0.2.05: 让 LLM 决定下次时间时能接上话)
-    let contextSummary = '';
-    if (chat && Array.isArray(chat.history) && chat.history.length > 0) {
-      const recent = chat.history.slice(-20);
-      contextSummary = recent.map(m => {
-        if (!m) return '';
-        const role = m.role === 'user' ? 'user' : (m.role === 'assistant' ? 'AI' : (m.role || '?'));
-        let text = '';
-        if (typeof m.content === 'string') text = m.content;
-        else if (Array.isArray(m.content)) text = m.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('');
-        return text ? `${role}: ${text.substring(0, 200)}` : '';
-      }).filter(Boolean).join('\n');
-    }
-
-    // 8. 调 push-server /api/schedule-ai-task
-    const response = await fetch(`${serverUrl}/api/schedule-ai-task`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        chatId: finalChatId,
-        // v0.2.15: 手动构造 pushSubscription, 砍掉 iOS Safari PWA 模式 toJSON() 返回的非 ASCII 字段
-        // 根因: V8 ByteString 错位 (character at index 7 value 20320/你字), 来自 subscription.toJSON() 的额外字段
-        // v0.2.15.2 改: 强制过滤非 ASCII 字符 (修 iOS Safari PWA 字段值本身污染 ByteString)
-        // v0.2.15.3 改: 绕开 toJSON() 污染源, 改用 subscription.getKey() 拿原始 ArrayBuffer + 手动 base64url 编码
-        //   之前 v0.2.15.2 失败: replace(/[^\x00-\x7F]/g, '') 只能去非 ASCII, 不能恢复原始 base64url 截短, web-push Buffer.from 还是炸
-        pushSubscription: window.buildCleanPushSub(subscription),
-        contactName: finalContactName,
-        contactPersonality: chat?.settings?.characterPersonality || null,
-        userPrompt,
-        contextSummary,  // v0.2.05: 最近 20 条对话上下文
-        recurrenceType,
-        aiApiUrl,
-        aiApiKey,
-        aiModel,
-        currentLocalTime: localTime,
-        userTimezone
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`push-server 失败: ${response.status} ${errText.substring(0, 300)}`);
-    }
-
-    const data = await response.json();
-    console.log('[ProactiveWake.createTask] ✅', data);
-    return data;
-  }
-
   // ===== 查订阅状态 =====
   async function getSubscriptionStatus() {
     try {
@@ -864,7 +743,8 @@
 
   // ===== 创建 fixed/ai-msg 模式任务 =====
   // v0.2.28: 加 firstSendTime 必填 + messageType='ai-msg' 模式 (user 选时间 + 填 prompt, server LLM 写消息)
-  //   取代 v0.2.20 round 4 改 noop 的 /api/schedule-ai-task (那条路 user 没法定时间, 永远掉 noop)
+  //   取代 v0.2.20 round 4 那条 AI 自己建任务的路 —— 那条路 v0.2.20 起就是 noop, 已于 2026-11-27 连同
+  //   前端 createTask() / tryHandleAction() / 后端 /api/schedule-ai-task 端点一起删干净 (从来没能真正建过任务)
   async function createFixedTask(options = {}) {
     const {
       userMessage = null,
@@ -883,7 +763,7 @@
     const state = window.state;
     if (!state) throw new Error('window.state 不可用');
 
-    // v0.2.07+: 移除 v0.1.91 误加的 mode !== 'push' throw 拦截 (同 createTask, 由 UI 控制)
+    // v0.2.07+: 移除 v0.1.91 误加的 mode !== 'push' throw 拦截 (由 UI 控制)
     // (角色级总开关 chat.settings.proactiveEnabled 在下面单独检查, 这里只管渠道)
 
     const activeChatId = chatId || state.activeChatId;
@@ -949,78 +829,9 @@
     return await res.json();
   }
 
-  // ===== AI JSON 指令处理 (function calling 入口) =====
-  // 330 主体 chat AI 在回复里输出 {"type": "create_push_task", ...} 指令 → 调这个
-  // chat 是 window.state.chats[chatId] 或群聊里的某个角色 chat (function calling 自动判断)
-  async function tryHandleAction(msgData, chat) {
-    if (!msgData || msgData.type !== 'create_push_task') return false;
-
-    const logPrefix = '[ProactiveWake.tryHandleAction]';
-    try {
-      const userPrompt = (msgData.userPrompt || '').trim();
-      if (!userPrompt) {
-        console.warn(`${logPrefix} userPrompt 空, 跳过`);
-        return true;  // 已处理, 不让 LLM 重试
-      }
-
-      // 决定 chat 上下文
-      const targetChat = chat || (() => {
-        const activeId = window.state?.activeChatId;
-        return activeId ? window.state.chats?.[activeId] : null;
-      })();
-
-      // v0.2.07+: 应用内模式 (默认) 静默拒绝 — 应用内不需要 AI 设任务, 老 scheduler 会自动跑
-      // 老 scheduler 路径: background-activity.js startProactiveScheduler (按 chat.history 最后一条消息 + interval 自动发)
-      // 要 push 模式 AI 才能创建任务 (走 push-server)
-      const mode = window.state?.globalSettings?.proactiveDeliveryMode || 'app';
-      if (mode === 'app') {
-        console.log(`${logPrefix} 应用内模式不需要 AI 设任务, 老 scheduler 会按 [启用主动消息] 的角色自动发 (要 AI 设任务, 切到 [🔔 系统推送])`);
-        return true;  // 已处理 (拒绝也是处理), 不让 LLM 报错
-      }
-
-      // v0.1.91+ 角色级总开关: 关掉的话两个渠道都不发
-      if (targetChat && targetChat.settings?.proactiveEnabled !== true) {
-        console.log(`${logPrefix} 角色 "${targetChat.name}" 未启用主动消息, AI 不能创建推送任务 (在角色设置里打开 [启用主动消息])`);
-        return true;  // 已处理 (拒绝也是处理), 不让 LLM 报错
-      }
-
-      // 冷却检查 (v0.1.87+) — AI 调工具也限流
-      if (targetChat && isCooldownActive(targetChat)) {
-        const remaining = getCooldownRemainingMinutes(targetChat);
-        console.log(`${logPrefix} ⏸ 冷却中, 还剩 ${remaining} 分钟, AI 调用被忽略`);
-        return true;  // 已处理 (拒绝也是处理), 不让 LLM 报错
-      }
-
-      // 决定 contactName: 优先用 chat, 群聊场景 LLM 输出的 name 字段作为角色
-      const contactName = (msgData.contactName || msgData.name || targetChat?.name || 'AI 角色').trim();
-
-      console.log(`${logPrefix} AI 想设主动消息:`, {
-        contactName,
-        userPrompt: userPrompt.substring(0, 60),
-        recurrenceType: msgData.recurrenceType || 'ai-decided',
-        chatId: targetChat?.id
-      });
-
-      // 调 createTask (走 push-server, AI-decided 模式 LLM 决定时间)
-      const result = await createTask({
-        userPrompt,
-        contactName,
-        chatId: targetChat?.id,
-        recurrenceType: msgData.recurrenceType || 'ai-decided'
-      });
-
-      console.log(`${logPrefix} ✅ 任务已创建:`, result?.task?.id);
-      return true;
-    } catch (e) {
-      console.error(`${logPrefix} 创建任务失败:`, e.message);
-      return true;  // 已处理 (失败也是处理), 不让 LLM 重试
-    }
-  }
-
   // ===== 暴露 API =====
   window.ProactiveWake = {
     handleProactiveWake,
-    createTask,           // AI-decided (调 LLM 决定时间)
     createFixedTask,      // fixed 模式 (user 填消息)
     listTasks,
     deleteTask,
@@ -1028,7 +839,6 @@
     subscribe,
     unsubscribe,
     sendTestPush,
-    tryHandleAction,      // ★ AI JSON 指令入口 (function calling 风格)
     isSleepTime,
     formatTime,
     // 冷却相关
